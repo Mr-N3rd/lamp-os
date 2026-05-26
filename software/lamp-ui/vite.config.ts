@@ -68,6 +68,7 @@ export default defineConfig(({ command }) => ({
       ext: '.gz',
       threshold: 0,
       deleteOriginFile: false,
+      filter: /\.(js|mjs|json|css|html|svg)$/i,
     }),
     // Custom plugin to inline assets
     command === 'build' && inlineAssetsPlugin(),

@@ -10,7 +10,7 @@
     "dev": "vite",
     "dev:server": "node dev-server.js",
     "build": "run-p type-check \"build-only {@}\" --",
-    "build:copyindex": "copyfiles -f -E \"./dist/index.html.gz\" \"../lamp-os/data\"",
+    "build:copyindex": "copyfiles -f -E \"./dist/index.html.gz\" \"./dist/logo.svg.gz\" \"../lamp-os/data\"",
     "build:build-image": "cd ../lamp-os && python -m platformio run --target buildfs --environment upesy_wroom",
     "build:upload-image": "cd ../lamp-os && python -m platformio run --target uploadfs --environment upesy_wroom",
     "build:upload": "run-s build build:copyindex build:build-image build:upload-image",
