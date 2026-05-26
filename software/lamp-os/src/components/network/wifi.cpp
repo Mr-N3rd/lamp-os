@@ -1,6 +1,7 @@
 #include "./wifi.hpp"
 
 #include <Arduino.h>
+#include "./ble_setup.hpp"
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
 #include <AsyncTCP.h>
@@ -251,6 +252,9 @@ void WifiComponent::toApMode() {
       config->lamp.name.substr(0, 12).append("-lamp").c_str(),
       String(config->lamp.password.c_str()),
       WIFI_PREFERRED_CHANNEL);
+  if (config->lamp.homeModeSSID.empty()) {
+    ble_setup::start(config, &prefs);
+  }
 };
 
 bool WifiComponent::isHomeNetworkVisible() {
