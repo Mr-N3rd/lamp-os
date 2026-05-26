@@ -15,6 +15,12 @@ const WEBSOCKET_DEBOUNCE_INTERVAL = 10
 export const MAX_LEDS_BASE = 50
 
 // Types
+export interface LampTarget {
+  baseUrl: string  // e.g. "http://192.168.1.42"
+  wsUrl: string    // e.g. "ws://192.168.1.42/ws"
+  password?: string  // optional, for future use; not yet sent
+}
+
 interface KnockoutPixel {
   p: number
   b: number
@@ -81,6 +87,7 @@ export const useLampStore = defineStore('lamp', () => {
   const loaded = ref(false)
   const saving = ref(false)
   const activeTab = ref('home')
+  const target = ref<LampTarget | null>(null)
 
   // WebSocket state
   const ws = ref<WebSocket | null>(null)
@@ -118,7 +125,11 @@ export const useLampStore = defineStore('lamp', () => {
       ws.value.close()
     }
 
-    ws.value = new WebSocket(`${import.meta.env.VITE_SERVER_WS}`)
+    if (!target.value) {
+      console.error('connectWebSocket called with no target set')
+      return
+    }
+    ws.value = new WebSocket(target.value.wsUrl)
 
     ws.value.onopen = () => {
       wsConnected.value = true
@@ -328,7 +339,8 @@ export const useLampStore = defineStore('lamp', () => {
       ) ?? []
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_SERVER_HTTP}/settings`, {
+      if (!target.value) return
+      const response = await fetch(`${target.value.baseUrl}/settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -354,9 +366,10 @@ export const useLampStore = defineStore('lamp', () => {
   }
 
   // Initialize store
-  const initialize = async () => {
+  const initialize = async (newTarget: LampTarget) => {
+    target.value = newTarget
     try {
-      const response = await fetch(`${import.meta.env.VITE_SERVER_HTTP}/settings`)
+      const response = await fetch(`${newTarget.baseUrl}/settings`)
       const data = await response.json()
       state.value = data
       originalState.value = JSON.stringify(data)
@@ -364,7 +377,7 @@ export const useLampStore = defineStore('lamp', () => {
       connectWebSocket()
     } catch (error) {
       console.error('Error loading settings:', error)
-      loaded.value = true // Still mark as loaded so UI can show error state
+      loaded.value = true
     }
   }
 
@@ -386,6 +399,14 @@ export const useLampStore = defineStore('lamp', () => {
     }
 
     wsConnected.value = false
+  }
+
+  const setTarget = async (newTarget: LampTarget) => {
+    cleanup()
+    state.value = {}
+    originalState.value = ''
+    loaded.value = false
+    await initialize(newTarget)
   }
 
   return {
@@ -434,7 +455,11 @@ export const useLampStore = defineStore('lamp', () => {
     resetState,
     initialize,
     cleanup,
+    setTarget,
     websocketSend,
+
+    // Target (read-only ref)
+    target,
   }
 })
 

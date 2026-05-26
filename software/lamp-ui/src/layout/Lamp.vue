@@ -34,7 +34,10 @@ watch(
 )
 
 onMounted(() => {
-  lampStore.initialize()
+  lampStore.initialize({
+    baseUrl: import.meta.env.VITE_SERVER_HTTP,
+    wsUrl: import.meta.env.VITE_SERVER_WS,
+  })
 })
 
 onUnmounted(() => {
