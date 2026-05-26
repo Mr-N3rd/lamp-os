@@ -246,13 +246,36 @@ async function selectLamp(lamp: NearbyLamp) {
     return
   }
 
-  // Case B — known/configured lamp. Needs an IP to reach via HTTP+WS.
-  if (!lamp.ip) {
-    errorMessage.value = `${lamp.name} is reachable over Bluetooth but not on this WiFi — try again after the lamp joins your network.`
+  // Case B — known/configured lamp.
+  // mDNS browse on Android (capacitor-zeroconf) is unreliable; if we don't have
+  // an IP, fall back to the .local hostname which the phone's OS will resolve
+  // natively via mDNS. Try the lamp's own name first (post-Phase-7 firmware
+  // uses per-lamp hostnames), then "lamp.local" as a legacy fallback.
+  let host = lamp.ip
+  if (!host) {
+    const candidates = [`${lamp.name}.local`, `lamp.local`]
+    for (const candidate of candidates) {
+      try {
+        const probe = await fetch(`http://${candidate}/settings`, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(3000),
+        })
+        if (probe.ok || probe.status === 401) {
+          host = candidate
+          break
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+
+  if (!host) {
+    errorMessage.value = `${lamp.name} is on Bluetooth but not reachable on this WiFi (mDNS lookup failed and no fallback hostname responded). Make sure the lamp has joined the same network as your phone.`
     return
   }
 
-  caseBLamp.value = lamp
+  caseBLamp.value = { ...lamp, ip: host }
   caseBFormValues.value = { caseBPassword: '' }
   caseBBusy.value = false
 }

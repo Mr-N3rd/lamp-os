@@ -85,7 +85,9 @@ void WifiComponent::begin(Config *inConfig) {
   toApMode();
 
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-  MDNS.begin("lamp");
+  // Use the configured lamp name as the mDNS hostname so each lamp resolves to
+  // its own {name}.local without collisions across multiple lamps on a LAN.
+  MDNS.begin(config->lamp.name.c_str());
   MDNS.addService("lamp", "tcp", 80);
 #ifdef LAMP_DEBUG
   wsMonitor();
