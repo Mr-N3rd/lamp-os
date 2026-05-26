@@ -19,21 +19,31 @@ export async function initBle() {
   await BleClient.initialize({ androidNeverForLocation: true })
 }
 
+export interface BleScanDebug {
+  name: string
+  deviceId: string
+  mfgKeys: string[]
+  uuids: string[]
+  rssi?: number
+}
+
 export async function scanForLamps(
   onLamp: (lamp: DiscoveredLamp) => void,
   durationMs = 10_000,
+  onAnyAd?: (debug: BleScanDebug) => void,
 ) {
   await BleClient.requestLEScan({ allowDuplicates: true }, (result) => {
     const name = result.localName ?? result.device.name ?? 'unknown'
 
-    // [ble-scan] DEBUG — remove after debugging this issue
-    console.log('[ble-scan]', {
-      name,
-      deviceId: result.device.deviceId,
-      mfgKeys: result.manufacturerData ? Object.keys(result.manufacturerData) : [],
-      uuids: result.uuids,
-      rssi: result.rssi,
-    })
+    if (onAnyAd) {
+      onAnyAd({
+        name,
+        deviceId: result.device.deviceId,
+        mfgKeys: result.manufacturerData ? Object.keys(result.manufacturerData) : [],
+        uuids: result.uuids ?? [],
+        rssi: result.rssi,
+      })
+    }
 
     // Configured lamp: color-sync beacon (manufacturer data keyed by 42069).
     const colorData = result.manufacturerData?.[LAMP_MANUFACTURER_ID]

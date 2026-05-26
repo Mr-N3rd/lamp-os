@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { startScan } from '@/services/scan'
-import type { NearbyLamp } from '@/services/scan'
+import type { NearbyLamp, ScanDebug } from '@/services/scan'
 import { writeLampSetup } from '@/services/ble'
 import { scanMdnsLamps } from '@/services/mdns'
 import { useLampInventoryStore } from '@/stores/lampInventory'
@@ -18,11 +18,17 @@ const lamps: Ref<NearbyLamp[]> = ref<NearbyLamp[]>([])
 const scanning = ref(true)
 let stopScan: (() => void) | null = null
 
+// Debug observability — refs from the scan service so we can see what
+// the BLE + mDNS plugins are actually returning on the device.
+const debug = ref<ScanDebug | null>(null)
+const showDebug = ref(true)
+
 onMounted(async () => {
   const result = await startScan()
   lamps.value = result.lamps.value
   stopScan = result.stop
   scanning.value = false
+  debug.value = result.debug
 })
 
 onUnmounted(() => {
@@ -389,6 +395,36 @@ async function selectLamp(lamp: NearbyLamp) {
               </li>
             </ul>
           </template>
+
+          <!-- ── DEBUG PANEL (remove when scan is confirmed working) ────────── -->
+          <details v-if="showDebug && debug" class="debug-panel" open>
+            <summary>Debug scan ({{ debug.rawBleResults.length }} BLE · {{ debug.rawMdnsResults.length }} mDNS)</summary>
+
+            <div v-if="debug.bleError" class="debug-error">
+              <strong>BLE error:</strong> {{ debug.bleError }}
+            </div>
+            <div v-if="debug.mdnsError" class="debug-error">
+              <strong>mDNS error:</strong> {{ debug.mdnsError }}
+            </div>
+
+            <h4>Raw BLE results ({{ debug.rawBleResults.length }})</h4>
+            <p v-if="!debug.rawBleResults.length" class="debug-empty">No BLE advertisements seen yet.</p>
+            <ul v-else class="debug-list">
+              <li v-for="r in debug.rawBleResults" :key="r.deviceId">
+                <div><strong>{{ r.name }}</strong> ({{ r.deviceId }}) rssi={{ r.rssi }}</div>
+                <div>mfgKeys: <code>[{{ r.mfgKeys.join(', ') || '(none)' }}]</code></div>
+                <div v-if="r.uuids.length">uuids: <code>{{ r.uuids.join(', ') }}</code></div>
+              </li>
+            </ul>
+
+            <h4>Raw mDNS results ({{ debug.rawMdnsResults.length }})</h4>
+            <p v-if="!debug.rawMdnsResults.length" class="debug-empty">No mDNS services resolved yet.</p>
+            <ul v-else class="debug-list">
+              <li v-for="r in debug.rawMdnsResults" :key="r.name + r.ip">
+                <strong>{{ r.name }}</strong> @ {{ r.ip }}:{{ r.port }}
+              </li>
+            </ul>
+          </details>
         </template>
 
       </div>
@@ -687,5 +723,55 @@ async function selectLamp(lamp: NearbyLamp) {
   .gradient-btn {
     width: 100%;
   }
+}
+/* ── Debug panel ───────────────────────────────────────────────────────────── */
+.debug-panel {
+  margin-top: 24px;
+  padding: 12px 16px;
+  background: var(--color-background-mute);
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.debug-panel summary {
+  cursor: pointer;
+  color: var(--brand-lamp-white);
+  font-weight: 600;
+  font-family: inherit;
+}
+.debug-panel h4 {
+  margin: 12px 0 6px;
+  color: var(--brand-lamp-white);
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.debug-panel .debug-error {
+  margin: 8px 0;
+  padding: 8px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid var(--color-error);
+  border-radius: 6px;
+  color: var(--color-error);
+}
+.debug-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.debug-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.debug-list li:last-child { border-bottom: none; }
+.debug-list code {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.debug-empty {
+  color: var(--brand-slate-grey);
+  font-style: italic;
 }
 </style>
