@@ -74,10 +74,10 @@ export interface LampState {
 
 // Tab configuration
 export const tabs = [
-  { id: 'home', label: 'Home', path: '/' },
-  { id: 'expressions', label: 'Expressions', path: '/expressions' },
-  { id: 'lamp-setup', label: 'Setup', path: '/setup' },
-  { id: 'info', label: 'Info', path: '/info' },
+  { id: 'home', label: 'Home' },
+  { id: 'expressions', label: 'Expressions' },
+  { id: 'lamp-setup', label: 'Setup' },
+  { id: 'info', label: 'Info' },
 ]
 
 export const useLampStore = defineStore('lamp', () => {

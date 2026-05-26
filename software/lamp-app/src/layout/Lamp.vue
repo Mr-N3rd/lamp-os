@@ -3,49 +3,70 @@ import { onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TopNavigation from '@/components/TopNavigation.vue'
 import { useLampStore, tabs } from '@/stores/lamp'
+import { useLampInventoryStore } from '@/stores/lampInventory'
 
 const route = useRoute()
 const router = useRouter()
-
 const lampStore = useLampStore()
+const inventory = useLampInventoryStore()
 
-// Map route to tab ID
-const getTabIdFromRoute = (path: string): string => {
-  const tab = tabs.find((t) => t.path === path)
-  return tab?.id || 'home'
-}
-
-// Handle tab change via navigation
-const handleTabChange = (tabId: string) => {
-  const tab = tabs.find((t) => t.id === tabId)
-  if (tab) {
-    router.push(tab.path)
+const targetForLamp = (id: string) => {
+  const lamp = inventory.findById(id)
+  if (!lamp) return null
+  return {
+    baseUrl: `http://${lamp.lastIp}`,
+    wsUrl: `ws://${lamp.lastIp}/ws`,
+    password: lamp.password,
   }
 }
 
-// Sync route changes to active tab
-watch(
-  () => route.path,
-  (newPath) => {
-    const tabId = getTabIdFromRoute(newPath)
-    lampStore.setActiveTab(tabId)
-  },
-  { immediate: true },
-)
-
-onMounted(() => {
-  const baseUrl = import.meta.env.VITE_SERVER_HTTP
-  const wsUrl = import.meta.env.VITE_SERVER_WS
-  if (!baseUrl || !wsUrl) {
-    console.error('VITE_SERVER_HTTP / VITE_SERVER_WS are not set — cannot initialize lamp store')
+onMounted(async () => {
+  if (!inventory.loaded) await inventory.load()
+  const id = String(route.params.id)
+  const target = targetForLamp(id)
+  if (!target) {
+    router.replace({ name: 'lamps' })
     return
   }
-  lampStore.initialize({ baseUrl, wsUrl })
+  await lampStore.initialize(target)
 })
+
+watch(
+  () => route.params.id,
+  async (newId, oldId) => {
+    if (newId === oldId) return
+    const target = targetForLamp(String(newId))
+    if (!target) {
+      router.replace({ name: 'lamps' })
+      return
+    }
+    await lampStore.setTarget(target)
+  },
+)
 
 onUnmounted(() => {
   lampStore.cleanup()
 })
+
+const handleTabChange = (tabId: string) => {
+  router.push({ name: `lamp-${tabId}`, params: { id: route.params.id } })
+}
+
+// Map route name to tab ID
+const getTabIdFromRoute = (routeName: string | undefined): string => {
+  if (!routeName) return 'home'
+  if (routeName.startsWith('lamp-')) return routeName.slice('lamp-'.length)
+  return 'home'
+}
+
+// Sync route changes to active tab
+watch(
+  () => route.name,
+  (newName) => {
+    lampStore.setActiveTab(getTabIdFromRoute(newName as string | undefined))
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
