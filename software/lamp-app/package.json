@@ -20,6 +20,7 @@
     "@capacitor/core": "8.3.4",
     "@capacitor/ios": "8.3.4",
     "@capacitor/preferences": "8.0.1",
+    "capacitor-zeroconf": "4.0.0",
     "pinia": "3.0.4",
     "vue": "3.5.18",
     "vue-router": "4.5.0"
