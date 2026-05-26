@@ -67,7 +67,7 @@ class CaptiveRequestHandler : public AsyncWebHandler {
   };
 
   void handleRequest(AsyncWebServerRequest *request) {
-    request->redirect("http://192.168.4.1/welcome");
+    request->redirect("http://192.168.4.1/");
   };
 };
 
@@ -121,12 +121,7 @@ void WifiComponent::begin(Config *inConfig) {
     lastWebSocketUpdateTimeMs = millis();
   });
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/index.html.gz", "text/html");
-    response->addHeader("Content-Encoding", "gzip");
-    request->send(response);
-  });
-  server.on("/welcome", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(SPIFFS, "/welcome.html", "text/html");
+    request->send(SPIFFS, "/index.html", "text/html");
   });
   server.on("/logo.svg", HTTP_GET, [](AsyncWebServerRequest *request) {
     AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/logo.svg.gz", "image/svg+xml");
