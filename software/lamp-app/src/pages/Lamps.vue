@@ -1,13 +1,52 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useLampInventoryStore } from '@/stores/lampInventory'
+import { initBle, scanForLamps } from '@/services/ble'
+import { scanMdnsLamps } from '@/services/mdns'
+import { BleClient } from '@capacitor-community/bluetooth-le'
 
 const router = useRouter()
 const inventory = useLampInventoryStore()
 
-onMounted(() => {
-  void inventory.load()
+let pollTimer: number | undefined
+
+async function pollOnce() {
+  const knownNamesLowered = new Map(
+    inventory.lamps.map((l) => [l.name.toLowerCase(), l.id]),
+  )
+  const knownIds = new Set(inventory.lamps.map((l) => l.id))
+
+  try {
+    await initBle()
+    void scanForLamps((discovered) => {
+      if (knownIds.has(discovered.id)) {
+        inventory.updateSeen(discovered.id)
+      }
+    }, 8_000)
+  } catch (err) {
+    console.warn('BLE scan failed:', err)
+  }
+
+  try {
+    void scanMdnsLamps((discovered) => {
+      const id = knownNamesLowered.get(discovered.name.toLowerCase())
+      if (id) inventory.updateSeen(id, discovered.ip)
+    }, 5_000)
+  } catch (err) {
+    console.warn('mDNS scan failed:', err)
+  }
+}
+
+onMounted(async () => {
+  await inventory.load()
+  await pollOnce()
+  pollTimer = window.setInterval(() => { void pollOnce() }, 30_000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  try { void BleClient.stopLEScan() } catch { /* not running or unavailable */ }
 })
 
 const openLamp = (id: string) => {
