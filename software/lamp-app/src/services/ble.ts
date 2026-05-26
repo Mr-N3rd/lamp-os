@@ -26,6 +26,15 @@ export async function scanForLamps(
   await BleClient.requestLEScan({ allowDuplicates: true }, (result) => {
     const name = result.localName ?? result.device.name ?? 'unknown'
 
+    // [ble-scan] DEBUG — remove after debugging this issue
+    console.log('[ble-scan]', {
+      name,
+      deviceId: result.device.deviceId,
+      mfgKeys: result.manufacturerData ? Object.keys(result.manufacturerData) : [],
+      uuids: result.uuids,
+      rssi: result.rssi,
+    })
+
     // Configured lamp: color-sync beacon (manufacturer data keyed by 42069).
     const colorData = result.manufacturerData?.[LAMP_MANUFACTURER_ID]
     if (colorData && colorData.byteLength >= 6) {
