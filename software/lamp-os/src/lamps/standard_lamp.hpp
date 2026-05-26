@@ -2,6 +2,8 @@
 #ifndef STANDARD_LAMP_H
 #define STANDARD_LAMP_H
 
+#include <ArduinoJson.h>
+
 #define LAMP_SHADE_PIN 12
 #define LAMP_BASE_PIN 14
 #define LAMP_MAX_BRIGHTNESS 180
@@ -31,4 +33,18 @@ void handleStageMode();
  * Whole lamp changes from the configuration tool
  */
 void handleWebSocket();
+
+/**
+ * @brief Dispatch a lamp action JSON document to the appropriate handler.
+ *
+ * Routes the same action set used by the WebSocket protocol (bright, shade,
+ * base, knockout, test_expression, test_expression_complete) to the internal
+ * lamp state. Callable from any transport — WS, BLE GATT, etc.
+ *
+ * @param doc  ArduinoJson document with at minimum an "a" (action) key.
+ * @param updateTimeMs  millis() value to record as the last-update timestamp
+ *                      for the configurator behaviors (use millis()).
+ */
+void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs);
+
 #endif

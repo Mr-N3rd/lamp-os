@@ -198,37 +198,64 @@ lamp::ExpressionConfig parseExpressionConfig(JsonObject node) {
   return expr;
 }
 
-void handleWebSocket() {
-  if (wifi.hasWebSocketData()) {
-    JsonDocument doc = wifi.getWebSocketData();
-    shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = wifi.getLastWebSocketUpdateTimeMs();
-    baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = wifi.getLastWebSocketUpdateTimeMs();
+void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
+  shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = updateTimeMs;
+  baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = updateTimeMs;
 
-    // parse the ws action id (a) into a String
-    String action = String(doc["a"]);
-    if (action == "bright") {
-      int level = doc["v"] | 100;
-      // Apply immediately for real-time control
-      shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-      baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-    } else if (action == "knockout") {
-      int pixelIndex = doc["p"];
-      int percentage = doc["b"];
-      if (pixelIndex >= 0 && pixelIndex < 50 && percentage >= 0 && percentage <= 100) {
-        baseKnockoutBehavior.knockoutPixels[pixelIndex] = percentage;
-        config.base.knockoutPixels[pixelIndex] = percentage;
+  // parse the action id (a) into a String
+  String action = String(doc["a"]);
+  if (action == "bright") {
+    int level = doc["v"] | 100;
+    // Apply immediately for real-time control
+    shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+  } else if (action == "knockout") {
+    int pixelIndex = doc["p"];
+    int percentage = doc["b"];
+    if (pixelIndex >= 0 && pixelIndex < 50 && percentage >= 0 && percentage <= 100) {
+      baseKnockoutBehavior.knockoutPixels[pixelIndex] = percentage;
+      config.base.knockoutPixels[pixelIndex] = percentage;
+    }
+  } else if (action == "base") {
+    JsonArray baseColors = doc["c"];
+    if (baseColors.size()) {
+      std::vector<lamp::Color> updatedColors;
+      for (JsonVariant baseColor : baseColors) {
+        updatedColors.push_back(lamp::hexStringToColor(baseColor));
       }
-    } else if (action == "base") {
-      JsonArray baseColors = doc["c"];
-      if (baseColors.size()) {
-        std::vector<lamp::Color> updatedColors;
-        for (JsonVariant baseColor : baseColors) {
-          updatedColors.push_back(lamp::hexStringToColor(baseColor));
-        }
-        baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, updatedColors);
+      baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, updatedColors);
+    }
+  } else if (action == "shade") {
+    JsonArray shadeColors = doc["c"];
+    if (shadeColors.size()) {
+      std::vector<lamp::Color> updatedColors;
+      for (JsonVariant shadeColor : shadeColors) {
+        updatedColors.push_back(lamp::hexStringToColor(shadeColor));
       }
-    } else if (action == "shade") {
-      JsonArray shadeColors = doc["c"];
+      shadeConfiguratorBehavior.colors = lamp::buildGradientWithStops(shade.pixelCount, updatedColors);
+    }
+  } else if (action == "test_expression") {
+    String type = String(doc["type"]);
+    if (type.length() > 0) {
+#ifdef LAMP_DEBUG
+      Serial.printf("Testing expression: %s\n", type.c_str());
+#endif
+      // Disable configurator during expression test so expression shows against actual base colors
+      shadeConfiguratorBehavior.disabled = true;
+      baseConfiguratorBehavior.disabled = true;
+      expressionManager.triggerExpression(type.c_str());
+    }
+  } else if (action == "test_expression_complete") {
+    // Re-enable configurator after test expression completes
+    shadeConfiguratorBehavior.disabled = false;
+    baseConfiguratorBehavior.disabled = false;
+    // Reset timer to keep preview active
+    shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+    baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+
+    // Restore preview colors
+    if (doc["shadeColors"]) {
+      JsonArray shadeColors = doc["shadeColors"];
       if (shadeColors.size()) {
         std::vector<lamp::Color> updatedColors;
         for (JsonVariant shadeColor : shadeColors) {
@@ -236,47 +263,24 @@ void handleWebSocket() {
         }
         shadeConfiguratorBehavior.colors = lamp::buildGradientWithStops(shade.pixelCount, updatedColors);
       }
-    } else if (action == "test_expression") {
-      String type = String(doc["type"]);
-      if (type.length() > 0) {
-#ifdef LAMP_DEBUG
-        Serial.printf("Testing expression: %s\n", type.c_str());
-#endif
-        // Disable configurator during expression test so expression shows against actual base colors
-        shadeConfiguratorBehavior.disabled = true;
-        baseConfiguratorBehavior.disabled = true;
-        expressionManager.triggerExpression(type.c_str());
-      }
-    } else if (action == "test_expression_complete") {
-      // Re-enable configurator after test expression completes
-      shadeConfiguratorBehavior.disabled = false;
-      baseConfiguratorBehavior.disabled = false;
-      // Reset timer to keep preview active
-      shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-      baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-
-      // Restore preview colors
-      if (doc["shadeColors"]) {
-        JsonArray shadeColors = doc["shadeColors"];
-        if (shadeColors.size()) {
-          std::vector<lamp::Color> updatedColors;
-          for (JsonVariant shadeColor : shadeColors) {
-            updatedColors.push_back(lamp::hexStringToColor(shadeColor));
-          }
-          shadeConfiguratorBehavior.colors = lamp::buildGradientWithStops(shade.pixelCount, updatedColors);
+    }
+    if (doc["baseColors"]) {
+      JsonArray baseColors = doc["baseColors"];
+      if (baseColors.size()) {
+        std::vector<lamp::Color> updatedColors;
+        for (JsonVariant baseColor : baseColors) {
+          updatedColors.push_back(lamp::hexStringToColor(baseColor));
         }
-      }
-      if (doc["baseColors"]) {
-        JsonArray baseColors = doc["baseColors"];
-        if (baseColors.size()) {
-          std::vector<lamp::Color> updatedColors;
-          for (JsonVariant baseColor : baseColors) {
-            updatedColors.push_back(lamp::hexStringToColor(baseColor));
-          }
-          baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, updatedColors);
-        }
+        baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, updatedColors);
       }
     }
+  }
+}
+
+void handleWebSocket() {
+  if (wifi.hasWebSocketData()) {
+    JsonDocument doc = wifi.getWebSocketData();
+    dispatchLampAction(doc, wifi.getLastWebSocketUpdateTimeMs());
   }
 }
 
