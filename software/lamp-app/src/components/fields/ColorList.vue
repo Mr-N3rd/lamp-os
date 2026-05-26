@@ -6,7 +6,7 @@
     </div>
     <div class="color-list">
       <div
-        v-for="(color, index) in localColors.slice().reverse()"
+        v-for="(_color, index) in localColors.slice().reverse()"
         :key="localColors.length - 1 - index"
         class="color-item"
       >

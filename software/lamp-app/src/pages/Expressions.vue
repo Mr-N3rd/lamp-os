@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import ComponentForm from '@/components/Form.vue'
-import type { FieldDefinition, FormValues } from '@/types'
+import type { FormValues } from '@/types'
 import { useLampStore } from '@/stores/lamp'
 import { useExpressionsStore } from '@/stores/expressions'
 
