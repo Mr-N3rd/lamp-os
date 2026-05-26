@@ -6,7 +6,7 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, readonly } from 'vue'
 
 // Configuration constants
 const MAX_RECONNECT_ATTEMPTS = 60
@@ -404,7 +404,7 @@ export const useLampStore = defineStore('lamp', () => {
   const setTarget = async (newTarget: LampTarget) => {
     cleanup()
     state.value = {}
-    originalState.value = ''
+    originalState.value = JSON.stringify({})
     loaded.value = false
     await initialize(newTarget)
   }
@@ -459,7 +459,7 @@ export const useLampStore = defineStore('lamp', () => {
     websocketSend,
 
     // Target (read-only ref)
-    target,
+    target: readonly(target),
   }
 })
 

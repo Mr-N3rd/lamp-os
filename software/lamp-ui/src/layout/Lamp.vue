@@ -34,10 +34,13 @@ watch(
 )
 
 onMounted(() => {
-  lampStore.initialize({
-    baseUrl: import.meta.env.VITE_SERVER_HTTP,
-    wsUrl: import.meta.env.VITE_SERVER_WS,
-  })
+  const baseUrl = import.meta.env.VITE_SERVER_HTTP
+  const wsUrl = import.meta.env.VITE_SERVER_WS
+  if (!baseUrl || !wsUrl) {
+    console.error('VITE_SERVER_HTTP / VITE_SERVER_WS are not set — cannot initialize lamp store')
+    return
+  }
+  lampStore.initialize({ baseUrl, wsUrl })
 })
 
 onUnmounted(() => {
