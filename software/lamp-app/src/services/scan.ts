@@ -10,6 +10,8 @@ export interface NearbyLamp {
   ip?: string
   viaBle: boolean
   viaMdns: boolean
+  /** Lamp is advertising the setup GATT service (brand-new, no WiFi credentials yet) */
+  isUnconfigured: boolean
 }
 
 export async function startScan(): Promise<{ lamps: Ref<NearbyLamp[]>; stop: () => void }> {
@@ -35,6 +37,7 @@ export async function startScan(): Promise<{ lamps: Ref<NearbyLamp[]>; stop: () 
         ip: partial.ip,
         viaBle: partial.viaBle ?? false,
         viaMdns: partial.viaMdns ?? false,
+        isUnconfigured: partial.isUnconfigured ?? false,
       })
     } else {
       const existing = lamps.value[idx]
@@ -44,6 +47,7 @@ export async function startScan(): Promise<{ lamps: Ref<NearbyLamp[]>; stop: () 
         ip: partial.ip ?? existing.ip,
         viaBle: existing.viaBle || (partial.viaBle ?? false),
         viaMdns: existing.viaMdns || (partial.viaMdns ?? false),
+        isUnconfigured: existing.isUnconfigured || (partial.isUnconfigured ?? false),
       }
     }
   }
@@ -54,7 +58,13 @@ export async function startScan(): Promise<{ lamps: Ref<NearbyLamp[]>; stop: () 
     if (!bleStopped) {
       await scanForLamps((lamp) => {
         if (bleStopped) return
-        upsert({ id: lamp.id, name: lamp.name, viaBle: true, viaMdns: false })
+        upsert({
+          id: lamp.id,
+          name: lamp.name,
+          viaBle: true,
+          viaMdns: false,
+          isUnconfigured: lamp.isUnconfigured ?? false,
+        })
       })
     }
   } catch (err) {

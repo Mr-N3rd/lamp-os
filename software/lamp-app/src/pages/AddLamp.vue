@@ -233,13 +233,19 @@ async function connectCaseB() {
 async function selectLamp(lamp: NearbyLamp) {
   errorMessage.value = null
 
-  if (!lamp.ip) {
-    // Case A — BLE-only, not yet on home WiFi
+  // Case A — unconfigured lamp advertising setup GATT (regardless of whether
+  // we coincidentally have a stale mDNS hit for it)
+  if (lamp.isUnconfigured) {
     openSetupWizard(lamp)
     return
   }
 
-  // Case B — already on home WiFi, show inline password panel
+  // Case B — known/configured lamp. Needs an IP to reach via HTTP+WS.
+  if (!lamp.ip) {
+    errorMessage.value = `${lamp.name} is reachable over Bluetooth but not on this WiFi — try again after the lamp joins your network.`
+    return
+  }
+
   caseBLamp.value = lamp
   caseBFormValues.value = { caseBPassword: '' }
   caseBBusy.value = false
@@ -374,8 +380,9 @@ async function selectLamp(lamp: NearbyLamp) {
                 <div class="lamp-info">
                   <span class="lamp-name">{{ lamp.name }}</span>
                   <span class="lamp-hint">
-                    <template v-if="lamp.viaMdns">On your WiFi · {{ lamp.ip }}</template>
-                    <template v-else>Nearby — not set up yet</template>
+                    <template v-if="lamp.isUnconfigured">Nearby — not set up yet</template>
+                    <template v-else-if="lamp.viaMdns">On your WiFi · {{ lamp.ip }}</template>
+                    <template v-else>Nearby</template>
                   </span>
                 </div>
                 <span class="lamp-chevron">›</span>

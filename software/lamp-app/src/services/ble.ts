@@ -1,12 +1,18 @@
 import { BleClient } from '@capacitor-community/bluetooth-le'
 
-const LAMP_MANUFACTURER_MAGIC = 42069  // bytes 0-1 of manufacturer data
+// The firmware sets manufacturer id = 42069 (0xA455). The BLE stack uses bytes 0-1
+// of manufacturer-specific data as the Company ID — they appear as the KEY of
+// result.manufacturerData[], not in the value. So the value is just the 6 color
+// bytes that follow: R G B (base) R G B (shade).
+const LAMP_MANUFACTURER_ID = '42069'
 
 export interface DiscoveredLamp {
   id: string         // BLE MAC / identifier
   name: string       // BLE advertisement name
   baseColor?: [number, number, number]
   shadeColor?: [number, number, number]
+  /** true when the lamp is advertising its unconfigured-setup GATT service */
+  isUnconfigured?: boolean
 }
 
 export async function initBle() {
@@ -17,20 +23,28 @@ export async function scanForLamps(
   onLamp: (lamp: DiscoveredLamp) => void,
   durationMs = 10_000,
 ) {
-  await BleClient.requestLEScan({}, (result) => {
-    const md = result.manufacturerData
-    if (!md) return
-    // Look for our magic number in any manufacturer-data slot
-    for (const [, data] of Object.entries(md)) {
-      const bytes = new Uint8Array((data as DataView).buffer)
-      if (bytes.length < 8) continue
-      const magic = (bytes[0] << 8) | bytes[1]
-      if (magic !== LAMP_MANUFACTURER_MAGIC) continue
+  await BleClient.requestLEScan({ allowDuplicates: true }, (result) => {
+    const name = result.localName ?? result.device.name ?? 'unknown'
+
+    // Configured lamp: color-sync beacon (manufacturer data keyed by 42069).
+    const colorData = result.manufacturerData?.[LAMP_MANUFACTURER_ID]
+    if (colorData && colorData.byteLength >= 6) {
       onLamp({
         id: result.device.deviceId,
-        name: result.device.name ?? 'unknown',
-        baseColor: [bytes[2], bytes[3], bytes[4]],
-        shadeColor: [bytes[5], bytes[6], bytes[7]],
+        name,
+        baseColor: [colorData.getUint8(0), colorData.getUint8(1), colorData.getUint8(2)],
+        shadeColor: [colorData.getUint8(3), colorData.getUint8(4), colorData.getUint8(5)],
+      })
+      return
+    }
+
+    // Unconfigured lamp: advertises the setup GATT service UUID.
+    const uuids = result.uuids?.map((u) => u.toLowerCase()) ?? []
+    if (uuids.includes(SETUP_SERVICE_UUID.toLowerCase())) {
+      onLamp({
+        id: result.device.deviceId,
+        name,
+        isUnconfigured: true,
       })
     }
   })
