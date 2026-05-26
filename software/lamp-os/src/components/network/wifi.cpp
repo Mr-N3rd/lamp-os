@@ -85,6 +85,7 @@ void WifiComponent::begin(Config *inConfig) {
 
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
   MDNS.begin("lamp");
+  MDNS.addService("lamp", "tcp", 80);
 #ifdef LAMP_DEBUG
   wsMonitor();
 #endif
