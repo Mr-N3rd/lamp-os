@@ -14,8 +14,7 @@ const targetForLamp = (id: string) => {
   const lamp = inventory.findById(id)
   if (!lamp) return null
   return {
-    baseUrl: `http://${lamp.lastIp}`,
-    wsUrl: `ws://${lamp.lastIp}/ws`,
+    deviceId: lamp.id,
     password: lamp.password,
   }
 }

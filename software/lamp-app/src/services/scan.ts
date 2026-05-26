@@ -2,24 +2,20 @@ import { ref } from 'vue'
 import type { Ref } from 'vue'
 import { initBle, scanForLamps } from '@/services/ble'
 import type { BleScanDebug } from '@/services/ble'
-import { scanMdnsLamps } from '@/services/mdns'
 import { useLampInventoryStore } from '@/stores/lampInventory'
 
 export interface NearbyLamp {
   id: string
   name: string
-  ip?: string
   viaBle: boolean
-  viaMdns: boolean
-  /** Lamp is advertising the setup GATT service (brand-new, no WiFi credentials yet) */
+  /** Lamp is advertising the control GATT service (lamp-os firmware) */
   isUnconfigured: boolean
+  rssi?: number
 }
 
 export interface ScanDebug {
   rawBleResults: Ref<BleScanDebug[]>
-  rawMdnsResults: Ref<{ name: string; ip: string; port: number }[]>
   bleError: Ref<string | null>
-  mdnsError: Ref<string | null>
 }
 
 export async function startScan(): Promise<{
@@ -31,40 +27,31 @@ export async function startScan(): Promise<{
   const inventory = useLampInventoryStore()
 
   const rawBleResults = ref<BleScanDebug[]>([])
-  const rawMdnsResults = ref<{ name: string; ip: string; port: number }[]>([])
   const bleError = ref<string | null>(null)
-  const mdnsError = ref<string | null>(null)
 
   let bleStopped = false
-  let mdnsStopped = false
 
-  function isKnown(name: string): boolean {
-    return inventory.lamps.some((l) => l.name === name)
+  function isKnown(id: string): boolean {
+    return inventory.lamps.some((l) => l.id === id)
   }
 
-  function upsert(partial: Partial<NearbyLamp> & { name: string }) {
-    const key = partial.name.toLowerCase()
-    const idx = lamps.value.findIndex((l) => l.name.toLowerCase() === key)
-    if (isKnown(partial.name)) return
-
+  function upsert(partial: Partial<NearbyLamp> & { id: string; name: string }) {
+    if (isKnown(partial.id)) return
+    const idx = lamps.value.findIndex((l) => l.id === partial.id)
     if (idx === -1) {
       lamps.value.push({
-        id: partial.id ?? partial.name,
+        id: partial.id,
         name: partial.name,
-        ip: partial.ip,
         viaBle: partial.viaBle ?? false,
-        viaMdns: partial.viaMdns ?? false,
         isUnconfigured: partial.isUnconfigured ?? false,
+        rssi: partial.rssi,
       })
     } else {
       const existing = lamps.value[idx]
       lamps.value[idx] = {
-        id: existing.id !== existing.name ? existing.id : (partial.id ?? existing.id),
-        name: existing.name,
-        ip: partial.ip ?? existing.ip,
-        viaBle: existing.viaBle || (partial.viaBle ?? false),
-        viaMdns: existing.viaMdns || (partial.viaMdns ?? false),
-        isUnconfigured: existing.isUnconfigured || (partial.isUnconfigured ?? false),
+        ...existing,
+        name: partial.name,
+        rssi: partial.rssi ?? existing.rssi,
       }
     }
   }
@@ -80,7 +67,6 @@ export async function startScan(): Promise<{
             id: lamp.id,
             name: lamp.name,
             viaBle: true,
-            viaMdns: false,
             isUnconfigured: lamp.isUnconfigured ?? false,
           })
         },
@@ -98,28 +84,13 @@ export async function startScan(): Promise<{
     console.warn('[scan] BLE scan failed:', err)
   }
 
-  // Start mDNS scan
-  try {
-    if (!mdnsStopped) {
-      await scanMdnsLamps((lamp) => {
-        if (mdnsStopped) return
-        rawMdnsResults.value = [...rawMdnsResults.value, lamp].slice(-30)
-        upsert({ name: lamp.name, ip: lamp.ip, viaBle: false, viaMdns: true })
-      })
-    }
-  } catch (err) {
-    mdnsError.value = err instanceof Error ? err.message : String(err)
-    console.warn('[scan] mDNS scan failed:', err)
-  }
-
   function stop() {
     bleStopped = true
-    mdnsStopped = true
   }
 
   return {
     lamps,
     stop,
-    debug: { rawBleResults, rawMdnsResults, bleError, mdnsError },
+    debug: { rawBleResults, bleError },
   }
 }

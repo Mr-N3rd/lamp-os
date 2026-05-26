@@ -1,24 +1,33 @@
 /**
  * Lamp Store
  *
- * Centralized state management for lamp settings, WebSocket connection,
- * and API communication using Pinia.
+ * Centralized state management for lamp settings, BLE GATT connection,
+ * and control actions using Pinia.
  */
 
 import { defineStore } from 'pinia'
 import { ref, computed, readonly } from 'vue'
+import { BleClient, ConnectionPriority } from '@capacitor-community/bluetooth-le'
+import {
+  authConnection,
+  writeBrightness,
+  writeShadeColors,
+  writeBaseColors,
+  writeBaseKnockout,
+  writeExpressionTest,
+  writeExpressionComplete,
+  readSettingsBlob,
+  writeSettingsBlob,
+  subscribeStateNotify,
+  unsubscribeStateNotify,
+} from '@/services/bleControl'
 
-// Configuration constants
-const MAX_RECONNECT_ATTEMPTS = 60
-const RECONNECT_INTERVAL = 2500
-const WEBSOCKET_DEBOUNCE_INTERVAL = 10
 export const MAX_LEDS_BASE = 50
 
 // Types
 export interface LampTarget {
-  baseUrl: string  // e.g. "http://192.168.1.42"
-  wsUrl: string    // e.g. "ws://192.168.1.42/ws"
-  password?: string  // optional, for future use; not yet sent
+  deviceId: string
+  password?: string
 }
 
 interface KnockoutPixel {
@@ -89,12 +98,8 @@ export const useLampStore = defineStore('lamp', () => {
   const activeTab = ref('home')
   const target = ref<LampTarget | null>(null)
 
-  // WebSocket state
-  const ws = ref<WebSocket | null>(null)
+  // BLE connection state (exported as wsConnected for backward compat with pages)
   const wsConnected = ref(false)
-  const reconnectAttempts = ref(0)
-  let reconnectTimeout: number | null = null
-  let websocketDebounceTimeout: number | null = null
 
   // Computed
   const hasChanges = computed(() => {
@@ -103,79 +108,29 @@ export const useLampStore = defineStore('lamp', () => {
 
   const disabled = computed(() => !wsConnected.value)
 
-  // WebSocket Methods
-  const websocketSend = (action: Record<string, unknown>) => {
-    if (websocketDebounceTimeout) {
-      clearTimeout(websocketDebounceTimeout)
-    }
+  // ── Helpers ───────────────────────────────────────────────────────────────────
 
-    websocketDebounceTimeout = window.setTimeout(() => {
-      ws.value?.send(JSON.stringify(action))
-      websocketDebounceTimeout = null
-    }, WEBSOCKET_DEBOUNCE_INTERVAL)
+  function deviceId(): string {
+    if (!target.value) throw new Error('No target set')
+    return target.value.deviceId
   }
 
-  const connectWebSocket = () => {
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout)
-      reconnectTimeout = null
-    }
-
-    if (ws.value) {
-      ws.value.close()
-    }
-
-    if (!target.value) {
-      console.error('connectWebSocket called with no target set')
-      return
-    }
-    ws.value = new WebSocket(target.value.wsUrl)
-
-    ws.value.onopen = () => {
-      wsConnected.value = true
-      reconnectAttempts.value = 0
-
-      // Send current brightness based on home mode state
-      if (state.value.lamp) {
-        const brightness = state.value.lamp.homeMode
-          ? (state.value.lamp.homeModeBrightness ?? 80)
-          : (state.value.lamp.brightness ?? 100)
-        websocketSend({ a: 'bright', v: brightness })
+  async function refreshState() {
+    try {
+      const json = await readSettingsBlob(deviceId())
+      const data = JSON.parse(json) as LampState
+      state.value = data
+      // Only update originalState if we haven't made local changes since last save
+      if (!hasChanges.value) {
+        originalState.value = JSON.stringify(data)
       }
-
-      // Send current tab state
-      websocketSend({ a: 'tab', v: activeTab.value })
-
-      // Send current colors to establish preview
-      if (state.value.shade?.colors) {
-        websocketSend({ a: 'shade', c: state.value.shade.colors })
-      }
-      if (state.value.base?.colors) {
-        websocketSend({ a: 'base', c: state.value.base.colors })
-      }
+    } catch (err) {
+      console.warn('[lamp] refreshState failed:', err)
     }
-
-    ws.value.onclose = () => {
-      wsConnected.value = false
-      if (reconnectAttempts.value < MAX_RECONNECT_ATTEMPTS) {
-        reconnectAttempts.value++
-        reconnectTimeout = window.setTimeout(() => {
-          connectWebSocket()
-        }, RECONNECT_INTERVAL)
-      } else {
-        console.log('Max reconnection attempts reached. Stopping reconnection attempts.')
-      }
-    }
-
-    ws.value.onerror = (error) => {
-      console.error('WebSocket error:', error)
-      wsConnected.value = false
-    }
-
-    return ws.value
   }
 
-  // State Update Methods - Named clearly for their purpose
+  // ── State Update Methods ──────────────────────────────────────────────────────
+
   const updateLampName = (name: string) => {
     if (!state.value.lamp) state.value.lamp = {}
     state.value.lamp.name = name
@@ -186,30 +141,42 @@ export const useLampStore = defineStore('lamp', () => {
     state.value.lamp.password = password
   }
 
-  const updateBrightness = (brightness: number) => {
+  const updateBrightness = async (brightness: number) => {
     if (!state.value.lamp) state.value.lamp = {}
     state.value.lamp.brightness = brightness
-    if (!state.value.lamp.homeMode) {
-      websocketSend({ a: 'bright', v: brightness })
+    if (!state.value.lamp.homeMode && wsConnected.value) {
+      try {
+        await writeBrightness(deviceId(), brightness)
+      } catch (err) {
+        console.warn('[lamp] writeBrightness failed:', err)
+      }
     }
   }
 
-  const updateHomeMode = (enabled: boolean) => {
+  const updateHomeMode = async (enabled: boolean) => {
     if (!state.value.lamp) state.value.lamp = {}
     state.value.lamp.homeMode = enabled
-
-    if (enabled) {
-      websocketSend({ a: 'bright', v: state.value.lamp.homeModeBrightness ?? 80 })
-    } else {
-      websocketSend({ a: 'bright', v: state.value.lamp.brightness ?? 100 })
+    if (wsConnected.value) {
+      try {
+        const v = enabled
+          ? (state.value.lamp.homeModeBrightness ?? 80)
+          : (state.value.lamp.brightness ?? 100)
+        await writeBrightness(deviceId(), v)
+      } catch (err) {
+        console.warn('[lamp] writeBrightness (homeMode) failed:', err)
+      }
     }
   }
 
-  const updateHomeModeBrightness = (brightness: number) => {
+  const updateHomeModeBrightness = async (brightness: number) => {
     if (!state.value.lamp) state.value.lamp = {}
     state.value.lamp.homeModeBrightness = brightness
-    if (state.value.lamp.homeMode) {
-      websocketSend({ a: 'bright', v: brightness })
+    if (state.value.lamp.homeMode && wsConnected.value) {
+      try {
+        await writeBrightness(deviceId(), brightness)
+      } catch (err) {
+        console.warn('[lamp] writeBrightness (homeModeBrightness) failed:', err)
+      }
     }
   }
 
@@ -218,16 +185,28 @@ export const useLampStore = defineStore('lamp', () => {
     state.value.lamp.homeModeSSID = ssid
   }
 
-  const updateShadeColors = (colors: string[]) => {
+  const updateShadeColors = async (colors: string[]) => {
     if (!state.value.shade) state.value.shade = {}
     state.value.shade.colors = colors
-    websocketSend({ a: 'shade', c: colors })
+    if (wsConnected.value) {
+      try {
+        await writeShadeColors(deviceId(), colors)
+      } catch (err) {
+        console.warn('[lamp] writeShadeColors failed:', err)
+      }
+    }
   }
 
-  const updateBaseColors = (colors: string[]) => {
+  const updateBaseColors = async (colors: string[]) => {
     if (!state.value.base) state.value.base = {}
     state.value.base.colors = colors
-    websocketSend({ a: 'base', c: colors })
+    if (wsConnected.value) {
+      try {
+        await writeBaseColors(deviceId(), colors)
+      } catch (err) {
+        console.warn('[lamp] writeBaseColors failed:', err)
+      }
+    }
   }
 
   const updateBaseActiveColor = (index: number) => {
@@ -255,7 +234,7 @@ export const useLampStore = defineStore('lamp', () => {
     state.value.base.bpp = bpp
   }
 
-  const updateKnockoutPixel = (ledIndex: number, brightness: number) => {
+  const updateKnockoutPixel = async (ledIndex: number, brightness: number) => {
     if (!state.value.base) state.value.base = {}
     if (!state.value.base.knockout) state.value.base.knockout = []
 
@@ -273,7 +252,13 @@ export const useLampStore = defineStore('lamp', () => {
       }
     }
 
-    websocketSend({ a: 'knockout', p: ledIndex, b: brightness })
+    if (wsConnected.value) {
+      try {
+        await writeBaseKnockout(deviceId(), ledIndex, brightness)
+      } catch (err) {
+        console.warn('[lamp] writeBaseKnockout failed:', err)
+      }
+    }
   }
 
   const getKnockoutBrightness = (ledIndex: number): number => {
@@ -287,49 +272,71 @@ export const useLampStore = defineStore('lamp', () => {
   }
 
   // Expression handlers
-  const testExpression = (type: string) => {
-    websocketSend({ a: 'test_expression', type })
-  }
-
-  const testExpressionComplete = () => {
-    websocketSend({
-      a: 'test_expression_complete',
-      shadeColors: state.value.shade?.colors || [],
-      baseColors: state.value.base?.colors || [],
-    })
-  }
-
-  const previewExpressionColor = (color: string, target: number) => {
-    if (target === 1 || target === 3) {
-      websocketSend({ a: 'shade', c: [color] })
-    }
-    if (target === 2 || target === 3) {
-      websocketSend({ a: 'base', c: [color] })
+  const testExpression = async (type: string) => {
+    if (!wsConnected.value) return
+    try {
+      await writeExpressionTest(deviceId(), type)
+    } catch (err) {
+      console.warn('[lamp] writeExpressionTest failed:', err)
     }
   }
 
-  const restoreColorsAfterPreview = () => {
-    if (state.value.shade?.colors) {
-      websocketSend({ a: 'shade', c: state.value.shade.colors })
+  const testExpressionComplete = async () => {
+    if (!wsConnected.value) return
+    try {
+      await writeExpressionComplete(deviceId())
+    } catch (err) {
+      console.warn('[lamp] writeExpressionComplete failed:', err)
     }
-    if (state.value.base?.colors) {
-      websocketSend({ a: 'base', c: state.value.base.colors })
+  }
+
+  const previewExpressionColor = async (color: string, previewTarget: number) => {
+    if (!wsConnected.value) return
+    try {
+      if (previewTarget === 1 || previewTarget === 3) {
+        await writeShadeColors(deviceId(), [color])
+      }
+      if (previewTarget === 2 || previewTarget === 3) {
+        await writeBaseColors(deviceId(), [color])
+      }
+    } catch (err) {
+      console.warn('[lamp] previewExpressionColor failed:', err)
+    }
+  }
+
+  const restoreColorsAfterPreview = async () => {
+    if (!wsConnected.value) return
+    try {
+      if (state.value.shade?.colors) {
+        await writeShadeColors(deviceId(), state.value.shade.colors)
+      }
+      if (state.value.base?.colors) {
+        await writeBaseColors(deviceId(), state.value.base.colors)
+      }
+    } catch (err) {
+      console.warn('[lamp] restoreColorsAfterPreview failed:', err)
     }
   }
 
   // Tab management
   const setActiveTab = (tabId: string) => {
     activeTab.value = tabId
-    if (ws.value?.readyState === WebSocket.OPEN) {
-      websocketSend({ a: 'tab', v: tabId })
-    }
   }
 
-  // Save settings
+  // ── websocketSend: kept for API compat; no-op in BLE mode ────────────────────
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const websocketSend = (_action: Record<string, unknown>) => {
+    // No-op: BLE mode sends directly via GATT helpers. This stub keeps any
+    // residual callers from throwing at runtime.
+  }
+
+  // ── Save settings ─────────────────────────────────────────────────────────────
+
   const saveSettings = async () => {
     if (!hasChanges.value || saving.value) return
 
     saving.value = true
+    wsConnected.value = false  // firmware reboots on write
 
     // Clean up knockout pixels
     if (!state.value.base) state.value.base = {}
@@ -339,21 +346,26 @@ export const useLampStore = defineStore('lamp', () => {
       ) ?? []
 
     try {
-      if (!target.value) return
-      const response = await fetch(`${target.value.baseUrl}/settings`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(state.value),
-      })
+      await writeSettingsBlob(deviceId(), state.value)
+      originalState.value = JSON.stringify(state.value)
+    } catch (err) {
+      // Lamp reboots → GATT connection drops mid-write → throws. Expected.
+      console.log('[lamp] writeSettingsBlob threw (likely reboot-induced disconnect):', err)
+      originalState.value = JSON.stringify(state.value)
+    }
 
-      if (response.ok) {
-        originalState.value = JSON.stringify(state.value)
-      }
-    } catch (error) {
-      console.error('Error saving settings:', error)
-    } finally {
+    // Wait for firmware to reboot then reconnect
+    if (target.value) {
+      const savedTarget = { ...target.value }
+      setTimeout(async () => {
+        try {
+          await initialize(savedTarget)
+        } catch (err) {
+          console.warn('[lamp] post-save reconnect failed:', err)
+          saving.value = false
+        }
+      }, 5_000)
+    } else {
       saving.value = false
     }
   }
@@ -365,44 +377,83 @@ export const useLampStore = defineStore('lamp', () => {
     }
   }
 
-  // Initialize store
+  // ── Initialize (connect + load) ───────────────────────────────────────────────
+
   const initialize = async (newTarget: LampTarget) => {
     target.value = newTarget
+
     try {
-      const response = await fetch(`${newTarget.baseUrl}/settings`)
-      const data = await response.json()
+      await BleClient.connect(newTarget.deviceId, () => {
+        // Disconnect callback — lamp dropped connection
+        wsConnected.value = false
+        console.log('[lamp] BLE disconnected')
+      })
+    } catch (err) {
+      console.warn('[lamp] BleClient.connect failed:', err)
+      loaded.value = true
+      return
+    }
+
+    // Best-effort high-priority connection (Android only — reduces GATT latency)
+    try {
+      await BleClient.requestConnectionPriority(newTarget.deviceId, ConnectionPriority.CONNECTION_PRIORITY_HIGH)
+    } catch {
+      // Not available on all platforms/plugin versions — ignore
+    }
+
+    // Read current settings
+    try {
+      const json = await readSettingsBlob(newTarget.deviceId)
+      const data = JSON.parse(json) as LampState
       state.value = data
       originalState.value = JSON.stringify(data)
-      loaded.value = true
-      connectWebSocket()
-    } catch (error) {
-      console.error('Error loading settings:', error)
-      loaded.value = true
+    } catch (err) {
+      console.warn('[lamp] readSettingsBlob failed:', err)
     }
+
+    // Auth if password provided and lamp has password set
+    if (newTarget.password && state.value.lamp?.password) {
+      try {
+        await authConnection(newTarget.deviceId, newTarget.password)
+      } catch (err) {
+        console.warn('[lamp] authConnection failed:', err)
+      }
+    }
+
+    // Subscribe to state notifications
+    try {
+      await subscribeStateNotify(newTarget.deviceId, () => {
+        void refreshState()
+      })
+    } catch (err) {
+      console.warn('[lamp] subscribeStateNotify failed:', err)
+    }
+
+    wsConnected.value = true
+    loaded.value = true
+    saving.value = false
   }
 
-  // Cleanup
-  const cleanup = () => {
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout)
-      reconnectTimeout = null
-    }
+  // ── Cleanup ───────────────────────────────────────────────────────────────────
 
-    if (websocketDebounceTimeout) {
-      clearTimeout(websocketDebounceTimeout)
-      websocketDebounceTimeout = null
+  const cleanup = async () => {
+    if (!target.value) return
+    const id = target.value.deviceId
+    try {
+      await unsubscribeStateNotify(id)
+    } catch {
+      // ignore
     }
-
-    if (ws.value) {
-      ws.value.close()
-      ws.value = null
+    try {
+      await BleClient.disconnect(id)
+    } catch {
+      // ignore — may already be disconnected
     }
-
     wsConnected.value = false
   }
 
   const setTarget = async (newTarget: LampTarget) => {
-    cleanup()
+    await cleanup()
     state.value = {}
     originalState.value = JSON.stringify({})
     loaded.value = false
@@ -462,4 +513,3 @@ export const useLampStore = defineStore('lamp', () => {
     target: readonly(target),
   }
 })
-

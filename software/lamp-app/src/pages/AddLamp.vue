@@ -1,14 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { startScan } from '@/services/scan'
-import type { NearbyLamp, ScanDebug } from '@/services/scan'
-import { writeLampSetup } from '@/services/ble'
-import { scanMdnsLamps } from '@/services/mdns'
+import type { NearbyLamp } from '@/services/scan'
 import { useLampInventoryStore } from '@/stores/lampInventory'
-import ComponentForm from '@/components/Form.vue'
-import type { FieldDefinition, FormValues } from '@/types'
 
 const router = useRouter()
 const inventory = useLampInventoryStore()
@@ -18,17 +14,11 @@ const lamps: Ref<NearbyLamp[]> = ref<NearbyLamp[]>([])
 const scanning = ref(true)
 let stopScan: (() => void) | null = null
 
-// Debug observability — refs from the scan service so we can see what
-// the BLE + mDNS plugins are actually returning on the device.
-const debug = ref<ScanDebug | null>(null)
-const showDebug = ref(true)
-
 onMounted(async () => {
   const result = await startScan()
   lamps.value = result.lamps.value
   stopScan = result.stop
   scanning.value = false
-  debug.value = result.debug
 })
 
 onUnmounted(() => {
@@ -42,242 +32,41 @@ function clearError() {
   errorMessage.value = null
 }
 
-// ── Case A wizard state ───────────────────────────────────────────────────────
-const wizardLamp = ref<NearbyLamp | null>(null)
-const wizardStatus = ref<string | null>(null)
-const wizardBusy = ref(false)
+// ── Selection state ───────────────────────────────────────────────────────────
+const selectedLamp = ref<NearbyLamp | null>(null)
+const lampPassword = ref('')
+const connecting = ref(false)
 
-// Form values for Case A wizard
-const wizardFormValues = ref<FormValues>({
-  ssid: '',
-  password: '',
-  name: '',
-})
-
-const setupFields = computed<FieldDefinition[]>(() => [
-  { name: 'wifiHeading', type: 'group-heading', label: 'Home WiFi' },
-  {
-    name: 'ssid',
-    type: 'text',
-    label: 'Network name',
-    default: '',
-    props: { placeholder: 'WiFi SSID', maxLength: 32 },
-  },
-  {
-    name: 'password',
-    type: 'password',
-    label: 'Network password',
-    default: '',
-    optional: true,
-    props: { placeholder: 'WiFi password' },
-  },
-  { name: 'lampHeading', type: 'group-heading', label: 'Lamp Name' },
-  {
-    name: 'name',
-    type: 'text',
-    label: 'Lamp name',
-    default: wizardLamp.value?.name ?? '',
-    props: {
-      placeholder: 'Name for this lamp',
-      maxLength: 12,
-      minLength: 3,
-      pattern: '[a-z]+',
-      transform: 'lowercase',
-    },
-  },
-])
-
-function handleWizardFormUpdate(values: FormValues) {
-  wizardFormValues.value = { ...wizardFormValues.value, ...values }
+function selectLamp(lamp: NearbyLamp) {
+  errorMessage.value = null
+  selectedLamp.value = lamp
+  lampPassword.value = ''
 }
 
-function openSetupWizard(lamp: NearbyLamp) {
-  wizardLamp.value = lamp
-  wizardFormValues.value = {
-    ssid: '',
-    password: '',
-    name: lamp.name,
-  }
-  wizardStatus.value = null
-  wizardBusy.value = false
+function cancelSelection() {
+  selectedLamp.value = null
+  lampPassword.value = ''
   errorMessage.value = null
 }
 
-function cancelWizard() {
-  wizardLamp.value = null
-  wizardStatus.value = null
-  wizardBusy.value = false
+async function connectLamp() {
+  const lamp = selectedLamp.value!
+  connecting.value = true
   errorMessage.value = null
-}
-
-async function waitForLampOnNetwork(name: string, timeoutMs = 60_000): Promise<string | null> {
-  const lowered = name.toLowerCase()
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    let foundIp: string | null = null
-    await new Promise<void>((resolve) => {
-      let resolved = false
-      void scanMdnsLamps((lamp) => {
-        if (lamp.name.toLowerCase() === lowered && !foundIp) {
-          foundIp = lamp.ip
-        }
-      }, 5_000)
-      setTimeout(() => { if (!resolved) { resolved = true; resolve() } }, 5_500)
-    })
-    if (foundIp) return foundIp
-  }
-  return null
-}
-
-async function submitSetup() {
-  const lamp = wizardLamp.value!
-  const name = String(wizardFormValues.value.name ?? '').trim()
-  const ssid = String(wizardFormValues.value.ssid ?? '').trim()
-
-  if (!name || !ssid) {
-    errorMessage.value = 'Lamp name and WiFi network name are required.'
-    return
-  }
-
-  errorMessage.value = null
-  wizardBusy.value = true
 
   try {
-    wizardStatus.value = 'Connecting…'
-    await writeLampSetup(lamp.id, {
-      ssid,
-      password: String(wizardFormValues.value.password ?? ''),
-      name,
-    })
-
-    wizardStatus.value = 'Waiting for lamp to appear on home WiFi (up to 60s)…'
-    const ip = await waitForLampOnNetwork(name)
-
-    if (!ip) {
-      wizardStatus.value = null
-      wizardBusy.value = false
-      errorMessage.value = "Lamp didn't appear on the network. Check your WiFi credentials and try again."
-      return
-    }
-
-    inventory.add({
-      id: lamp.id,
-      name,
-      lastIp: ip,
-      password: String(wizardFormValues.value.password ?? '') || undefined,
-      lastSeen: Date.now(),
-    })
-
-    await router.push({ name: 'lamp-home', params: { id: lamp.id } })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    wizardStatus.value = null
-    wizardBusy.value = false
-    errorMessage.value = `Setup failed: ${message}`
-  }
-}
-
-// ── Case B (lamp already on WiFi) ─────────────────────────────────────────────
-const caseBLamp = ref<NearbyLamp | null>(null)
-const caseBBusy = ref(false)
-
-// Form values for Case B password panel
-const caseBFormValues = ref<FormValues>({ caseBPassword: '' })
-
-const caseBFields: FieldDefinition[] = [
-  {
-    name: 'caseBPassword',
-    type: 'password',
-    label: 'Lamp password',
-    default: '',
-    optional: true,
-    props: { placeholder: 'Leave blank if none' },
-  },
-]
-
-function handleCaseBFormUpdate(values: FormValues) {
-  caseBFormValues.value = { ...caseBFormValues.value, ...values }
-}
-
-function cancelCaseB() {
-  caseBLamp.value = null
-  caseBBusy.value = false
-  errorMessage.value = null
-}
-
-async function connectCaseB() {
-  const lamp = caseBLamp.value!
-  const password = String(caseBFormValues.value.caseBPassword ?? '')
-  const baseUrl = `http://${lamp.ip}`
-
-  errorMessage.value = null
-  caseBBusy.value = true
-
-  try {
-    const headers: Record<string, string> = {}
-    if (password) headers['X-Password'] = password
-
-    const res = await fetch(`${baseUrl}/settings`, { headers })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-
     inventory.add({
       id: lamp.id,
       name: lamp.name,
-      lastIp: lamp.ip!,
-      password: password || undefined,
+      password: lampPassword.value || undefined,
       lastSeen: Date.now(),
     })
-
     await router.push({ name: 'lamp-home', params: { id: lamp.id } })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    caseBBusy.value = false
-    errorMessage.value = `Couldn't verify lamp: ${message}`
+    connecting.value = false
+    errorMessage.value = `Failed to add lamp: ${message}`
   }
-}
-
-async function selectLamp(lamp: NearbyLamp) {
-  errorMessage.value = null
-
-  // Case A — unconfigured lamp advertising setup GATT (regardless of whether
-  // we coincidentally have a stale mDNS hit for it)
-  if (lamp.isUnconfigured) {
-    openSetupWizard(lamp)
-    return
-  }
-
-  // Case B — known/configured lamp.
-  // mDNS browse on Android (capacitor-zeroconf) is unreliable; if we don't have
-  // an IP, fall back to the .local hostname which the phone's OS will resolve
-  // natively via mDNS. Try the lamp's own name first (post-Phase-7 firmware
-  // uses per-lamp hostnames), then "lamp.local" as a legacy fallback.
-  let host = lamp.ip
-  if (!host) {
-    const candidates = [`${lamp.name}.local`, `lamp.local`]
-    for (const candidate of candidates) {
-      try {
-        const probe = await fetch(`http://${candidate}/settings`, {
-          method: 'HEAD',
-          signal: AbortSignal.timeout(3000),
-        })
-        if (probe.ok || probe.status === 401) {
-          host = candidate
-          break
-        }
-      } catch {
-        // try next candidate
-      }
-    }
-  }
-
-  if (!host) {
-    errorMessage.value = `${lamp.name} is on Bluetooth but not reachable on this WiFi (mDNS lookup failed and no fallback hostname responded). Make sure the lamp has joined the same network as your phone.`
-    return
-  }
-
-  caseBLamp.value = { ...lamp, ip: host }
-  caseBFormValues.value = { caseBPassword: '' }
-  caseBBusy.value = false
 }
 </script>
 
@@ -286,55 +75,10 @@ async function selectLamp(lamp: NearbyLamp) {
     <div class="container">
       <div class="main-content">
 
-        <!-- ── Case A Wizard ──────────────────────────────────────────────── -->
-        <template v-if="wizardLamp">
+        <!-- ── Connect Panel ─────────────────────────────────────────────── -->
+        <template v-if="selectedLamp">
           <header class="page-header">
-            <button class="back-btn" :disabled="wizardBusy" @click="cancelWizard">
-              <span class="back-arrow">←</span>
-              <span>Back</span>
-            </button>
-            <h1>Set Up Lamp</h1>
-          </header>
-
-          <!-- Error banner -->
-          <div v-if="errorMessage" class="error-banner">
-            <span class="error-text">{{ errorMessage }}</span>
-            <button class="error-dismiss" @click="clearError">Try again</button>
-          </div>
-
-          <!-- Status / spinner -->
-          <div v-if="wizardStatus" class="status-panel">
-            <div class="loading-spinner"></div>
-            <p class="status-text">{{ wizardStatus }}</p>
-          </div>
-
-          <!-- Setup form -->
-          <div v-else class="wizard-form-wrap">
-            <ComponentForm
-              :fields="setupFields"
-              :model-value="wizardFormValues"
-              @update:model-value="handleWizardFormUpdate"
-              :show-button="false"
-              :disabled="wizardBusy"
-            />
-
-            <div class="form-actions">
-              <button
-                class="gradient-btn"
-                :disabled="wizardBusy"
-                @click="submitSetup"
-              >
-                <span v-if="wizardBusy">Setting up…</span>
-                <span v-else>Set up</span>
-              </button>
-            </div>
-          </div>
-        </template>
-
-        <!-- ── Case B Password Panel ──────────────────────────────────────── -->
-        <template v-else-if="caseBLamp">
-          <header class="page-header">
-            <button class="back-btn" :disabled="caseBBusy" @click="cancelCaseB">
+            <button class="back-btn" :disabled="connecting" @click="cancelSelection">
               <span class="back-arrow">←</span>
               <span>Back</span>
             </button>
@@ -348,26 +92,30 @@ async function selectLamp(lamp: NearbyLamp) {
           </div>
 
           <div class="lamp-connect-info">
-            <div class="connect-lamp-name">{{ caseBLamp.name }}</div>
-            <div class="connect-lamp-ip">{{ caseBLamp.ip }}</div>
+            <div class="connect-lamp-name">{{ selectedLamp.name }}</div>
           </div>
 
-          <div class="case-b-form-wrap">
-            <ComponentForm
-              :fields="caseBFields"
-              :model-value="caseBFormValues"
-              @update:model-value="handleCaseBFormUpdate"
-              :show-button="false"
-              :disabled="caseBBusy"
-            />
+          <div class="connect-form-wrap">
+            <div class="field-group">
+              <label class="field-label">Password <span class="optional">(optional)</span></label>
+              <input
+                v-model="lampPassword"
+                type="password"
+                class="field-input"
+                placeholder="Leave blank if none"
+                :disabled="connecting"
+                autocomplete="off"
+              />
+              <p class="field-hint">Enter the lamp's password if one has been set.</p>
+            </div>
 
             <div class="form-actions">
               <button
                 class="gradient-btn"
-                :disabled="caseBBusy"
-                @click="connectCaseB"
+                :disabled="connecting"
+                @click="connectLamp"
               >
-                <span v-if="caseBBusy">Connecting…</span>
+                <span v-if="connecting">Connecting…</span>
                 <span v-else>Connect</span>
               </button>
             </div>
@@ -408,46 +156,12 @@ async function selectLamp(lamp: NearbyLamp) {
               >
                 <div class="lamp-info">
                   <span class="lamp-name">{{ lamp.name }}</span>
-                  <span class="lamp-hint">
-                    <template v-if="lamp.isUnconfigured">Nearby — not set up yet</template>
-                    <template v-else-if="lamp.viaMdns">On your WiFi · {{ lamp.ip }}</template>
-                    <template v-else>Nearby</template>
-                  </span>
+                  <span class="lamp-hint">Nearby</span>
                 </div>
                 <span class="lamp-chevron">›</span>
               </li>
             </ul>
           </template>
-
-          <!-- ── DEBUG PANEL (remove when scan is confirmed working) ────────── -->
-          <details v-if="showDebug && debug" class="debug-panel" open>
-            <summary>Debug scan ({{ debug.rawBleResults.length }} BLE · {{ debug.rawMdnsResults.length }} mDNS)</summary>
-
-            <div v-if="debug.bleError" class="debug-error">
-              <strong>BLE error:</strong> {{ debug.bleError }}
-            </div>
-            <div v-if="debug.mdnsError" class="debug-error">
-              <strong>mDNS error:</strong> {{ debug.mdnsError }}
-            </div>
-
-            <h4>Raw BLE results ({{ debug.rawBleResults.length }})</h4>
-            <p v-if="!debug.rawBleResults.length" class="debug-empty">No BLE advertisements seen yet.</p>
-            <ul v-else class="debug-list">
-              <li v-for="r in debug.rawBleResults" :key="r.deviceId">
-                <div><strong>{{ r.name }}</strong> ({{ r.deviceId }}) rssi={{ r.rssi }}</div>
-                <div>mfgKeys: <code>[{{ r.mfgKeys.join(', ') || '(none)' }}]</code></div>
-                <div v-if="r.uuids.length">uuids: <code>{{ r.uuids.join(', ') }}</code></div>
-              </li>
-            </ul>
-
-            <h4>Raw mDNS results ({{ debug.rawMdnsResults.length }})</h4>
-            <p v-if="!debug.rawMdnsResults.length" class="debug-empty">No mDNS services resolved yet.</p>
-            <ul v-else class="debug-list">
-              <li v-for="r in debug.rawMdnsResults" :key="r.name + r.ip">
-                <strong>{{ r.name }}</strong> @ {{ r.ip }}:{{ r.port }}
-              </li>
-            </ul>
-          </details>
         </template>
 
       </div>
@@ -456,7 +170,7 @@ async function selectLamp(lamp: NearbyLamp) {
 </template>
 
 <style scoped>
-/* ── Page shell (matches Lamp.vue layout) ──────────────────────────────────── */
+/* ── Page shell ──────────────────────────────────────────────────────────── */
 .add-lamp-page {
   min-height: 100vh;
   background: var(--brand-midnight-black);
@@ -654,7 +368,7 @@ async function selectLamp(lamp: NearbyLamp) {
   font-size: 0.95rem;
 }
 
-/* ── Case B connect info ─────────────────────────────────────────────────── */
+/* ── Connect panel ───────────────────────────────────────────────────────── */
 .lamp-connect-info {
   background: var(--color-background-mute);
   border-radius: 12px;
@@ -669,18 +383,58 @@ async function selectLamp(lamp: NearbyLamp) {
   font-size: 1rem;
 }
 
-.connect-lamp-ip {
-  color: var(--color-text-secondary);
-  font-size: 0.85rem;
-  margin-top: 3px;
-}
-
-/* ── Form wrappers ───────────────────────────────────────────────────────── */
-.wizard-form-wrap,
-.case-b-form-wrap {
+/* ── Form ────────────────────────────────────────────────────────────────── */
+.connect-form-wrap {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  color: var(--brand-lamp-white);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.optional {
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.field-input {
+  background: var(--color-background-mute);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  color: var(--brand-lamp-white);
+  font-size: 0.95rem;
+  padding: 12px 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s ease;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.field-input:focus {
+  border-color: var(--brand-aurora-blue);
+}
+
+.field-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.field-hint {
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  margin: 0;
 }
 
 /* ── Form actions / gradient button ─────────────────────────────────────── */
@@ -746,55 +500,5 @@ async function selectLamp(lamp: NearbyLamp) {
   .gradient-btn {
     width: 100%;
   }
-}
-/* ── Debug panel ───────────────────────────────────────────────────────────── */
-.debug-panel {
-  margin-top: 24px;
-  padding: 12px 16px;
-  background: var(--color-background-mute);
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  font-size: 0.8rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.debug-panel summary {
-  cursor: pointer;
-  color: var(--brand-lamp-white);
-  font-weight: 600;
-  font-family: inherit;
-}
-.debug-panel h4 {
-  margin: 12px 0 6px;
-  color: var(--brand-lamp-white);
-  font-size: 0.85rem;
-  font-family: inherit;
-}
-.debug-panel .debug-error {
-  margin: 8px 0;
-  padding: 8px;
-  background: rgba(248, 113, 113, 0.12);
-  border: 1px solid var(--color-error);
-  border-radius: 6px;
-  color: var(--color-error);
-}
-.debug-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.debug-list li {
-  padding: 6px 0;
-  border-bottom: 1px solid var(--color-border);
-}
-.debug-list li:last-child { border-bottom: none; }
-.debug-list code {
-  background: rgba(255, 255, 255, 0.05);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-.debug-empty {
-  color: var(--brand-slate-grey);
-  font-style: italic;
 }
 </style>

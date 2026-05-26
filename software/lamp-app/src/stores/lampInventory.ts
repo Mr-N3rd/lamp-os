@@ -5,12 +5,12 @@ import { Preferences } from '@capacitor/preferences'
 const STORAGE_KEY = 'lamp-inventory'
 
 export interface InventoryLamp {
-  id: string           // BLE MAC, stable across reboots
+  id: string           // BLE deviceId, stable across reboots
   name: string         // user-facing
-  lastIp: string       // last-known IP on the home network
-  lastSeen?: number    // epoch ms
+  lastSeen?: number    // epoch ms (last BLE-direct sighting)
   addedAt?: number     // epoch ms
-  password?: string    // lamp's password, if set (stored so user doesn't re-enter)
+  password?: string    // lamp's control password, if set
+  viaMesh?: boolean    // true if known only via a bridge's roster (v2+)
 }
 
 export const useLampInventoryStore = defineStore('lampInventory', () => {
@@ -50,11 +50,10 @@ export const useLampInventoryStore = defineStore('lampInventory', () => {
     void persist()
   }
 
-  const updateSeen = (id: string, ip?: string) => {
+  const updateSeen = (id: string) => {
     const lamp = lamps.value.find((l) => l.id === id)
     if (!lamp) return
     lamp.lastSeen = Date.now()
-    if (ip) lamp.lastIp = ip
     void persist()
   }
 

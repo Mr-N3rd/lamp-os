@@ -49,11 +49,5 @@
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Used to find and configure your lamps.</string>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_lamp._tcp</string>
-	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Used to find your lamps on the local network.</string>
 </dict>
 </plist>

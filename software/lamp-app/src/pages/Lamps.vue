@@ -3,7 +3,6 @@ import { onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useLampInventoryStore } from '@/stores/lampInventory'
 import { initBle, scanForLamps } from '@/services/ble'
-import { scanMdnsLamps } from '@/services/mdns'
 import { BleClient } from '@capacitor-community/bluetooth-le'
 
 const router = useRouter()
@@ -12,9 +11,6 @@ const inventory = useLampInventoryStore()
 let pollTimer: number | undefined
 
 async function pollOnce() {
-  const knownNamesLowered = new Map(
-    inventory.lamps.map((l) => [l.name.toLowerCase(), l.id]),
-  )
   const knownIds = new Set(inventory.lamps.map((l) => l.id))
 
   try {
@@ -26,15 +22,6 @@ async function pollOnce() {
     }, 8_000)
   } catch (err) {
     console.warn('BLE scan failed:', err)
-  }
-
-  try {
-    void scanMdnsLamps((discovered) => {
-      const id = knownNamesLowered.get(discovered.name.toLowerCase())
-      if (id) inventory.updateSeen(id, discovered.ip)
-    }, 5_000)
-  } catch (err) {
-    console.warn('mDNS scan failed:', err)
   }
 }
 
@@ -82,7 +69,6 @@ const isOnline = (lamp: { lastSeen?: number }) => {
             <span class="status-dot" :class="{ online: isOnline(lamp) }"></span>
             <div class="lamp-info">
               <span class="lamp-name">{{ lamp.name }}</span>
-              <span class="lamp-ip">{{ lamp.lastIp }}</span>
             </div>
             <span class="lamp-chevron">›</span>
           </li>
@@ -218,11 +204,6 @@ const isOnline = (lamp: { lastSeen?: number }) => {
   color: var(--brand-lamp-white);
   font-weight: 600;
   font-size: 1rem;
-}
-
-.lamp-ip {
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
 }
 
 .lamp-chevron {

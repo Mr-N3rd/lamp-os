@@ -1,4 +1,5 @@
 import { BleClient } from '@capacitor-community/bluetooth-le'
+import { CONTROL_SERVICE_UUID } from '@/services/bleControl'
 
 // The firmware sets manufacturer id = 42069 (0xA455). The BLE stack uses bytes 0-1
 // of manufacturer-specific data as the Company ID — they appear as the KEY of
@@ -9,6 +10,7 @@ const LAMP_MANUFACTURER_ID = '42069'
 export interface DiscoveredLamp {
   id: string         // BLE MAC / identifier
   name: string       // BLE advertisement name
+  rssi?: number
   baseColor?: [number, number, number]
   shadeColor?: [number, number, number]
   /** true when the lamp is advertising its unconfigured-setup GATT service */
@@ -45,24 +47,37 @@ export async function scanForLamps(
       })
     }
 
+    const uuids = result.uuids?.map((u) => u.toLowerCase()) ?? []
+
     // Configured lamp: color-sync beacon (manufacturer data keyed by 42069).
     const colorData = result.manufacturerData?.[LAMP_MANUFACTURER_ID]
     if (colorData && colorData.byteLength >= 6) {
       onLamp({
         id: result.device.deviceId,
         name,
+        rssi: result.rssi,
         baseColor: [colorData.getUint8(0), colorData.getUint8(1), colorData.getUint8(2)],
         shadeColor: [colorData.getUint8(3), colorData.getUint8(4), colorData.getUint8(5)],
       })
       return
     }
 
+    // Lamp advertising the BLE control service (v1 firmware).
+    if (uuids.includes(CONTROL_SERVICE_UUID.toLowerCase())) {
+      onLamp({
+        id: result.device.deviceId,
+        name,
+        rssi: result.rssi,
+      })
+      return
+    }
+
     // Unconfigured lamp: advertises the setup GATT service UUID.
-    const uuids = result.uuids?.map((u) => u.toLowerCase()) ?? []
     if (uuids.includes(SETUP_SERVICE_UUID.toLowerCase())) {
       onLamp({
         id: result.device.deviceId,
         name,
+        rssi: result.rssi,
         isUnconfigured: true,
       })
     }

@@ -14,17 +14,22 @@ describe('useLampInventoryStore', () => {
 
   it('adds a lamp and dedupes by id', () => {
     const store = useLampInventoryStore()
-    store.add({ id: 'AA:BB:CC:DD:EE:FF', name: 'kitchen', lastIp: '192.168.1.10' })
-    store.add({ id: 'AA:BB:CC:DD:EE:FF', name: 'kitchen-renamed', lastIp: '192.168.1.11' })
+    store.add({ id: 'AA:BB:CC:DD:EE:FF', name: 'kitchen' })
+    store.add({ id: 'AA:BB:CC:DD:EE:FF', name: 'kitchen-renamed' })
     expect(store.lamps).toHaveLength(1)
     expect(store.lamps[0].name).toBe('kitchen-renamed')
-    expect(store.lamps[0].lastIp).toBe('192.168.1.11')
+  })
+
+  it('adds a lamp with password', () => {
+    const store = useLampInventoryStore()
+    store.add({ id: 'AA:BB:CC:DD:EE:FF', name: 'kitchen', password: 'secret' })
+    expect(store.lamps[0].password).toBe('secret')
   })
 
   it('removes a lamp by id', () => {
     const store = useLampInventoryStore()
-    store.add({ id: 'X', name: 'a', lastIp: '1.1.1.1' })
-    store.add({ id: 'Y', name: 'b', lastIp: '2.2.2.2' })
+    store.add({ id: 'X', name: 'a' })
+    store.add({ id: 'Y', name: 'b' })
     store.remove('X')
     expect(store.lamps).toHaveLength(1)
     expect(store.lamps[0].id).toBe('Y')
@@ -32,8 +37,16 @@ describe('useLampInventoryStore', () => {
 
   it('finds a lamp by id', () => {
     const store = useLampInventoryStore()
-    store.add({ id: 'Z', name: 'desk', lastIp: '3.3.3.3' })
+    store.add({ id: 'Z', name: 'desk' })
     expect(store.findById('Z')?.name).toBe('desk')
     expect(store.findById('nope')).toBeUndefined()
+  })
+
+  it('updateSeen sets lastSeen timestamp', () => {
+    const store = useLampInventoryStore()
+    store.add({ id: 'A', name: 'test' })
+    const before = Date.now()
+    store.updateSeen('A')
+    expect(store.lamps[0].lastSeen).toBeGreaterThanOrEqual(before)
   })
 })
