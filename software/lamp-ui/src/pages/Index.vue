@@ -89,14 +89,20 @@ const formValues = computed({
 })
 
 // Handle form value changes
+const sameColors = (a?: string[], b?: string[]) =>
+  a !== undefined && b !== undefined &&
+  a.length === b.length && a.every((v, i) => v === b[i])
+
 const handleFormUpdate = (values: FormValues) => {
   if (values.brightness !== undefined && values.brightness !== formValues.value.brightness) {
     lampStore.updateBrightness(values.brightness as number)
   }
-  if (values.shadeColors !== undefined) {
+  if (values.shadeColors !== undefined &&
+      !sameColors(values.shadeColors as string[], formValues.value.shadeColors)) {
     lampStore.updateShadeColors(values.shadeColors as string[])
   }
-  if (values.baseColors !== undefined) {
+  if (values.baseColors !== undefined &&
+      !sameColors(values.baseColors as string[], formValues.value.baseColors)) {
     lampStore.updateBaseColors(values.baseColors as string[])
   }
 }

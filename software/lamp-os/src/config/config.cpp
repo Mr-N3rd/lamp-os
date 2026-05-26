@@ -73,6 +73,10 @@ Config::Config(Preferences* inPrefs) {
   }
 
   JsonObject shadeNode = doc["shade"];
+  shade.px = shadeNode["px"] | 38;
+  if (shade.px > 50) {
+    shade.px = 50;
+  }
   shade.bpp = shadeNode["bpp"] | 4;
   if (shade.bpp != 3 && shade.bpp != 4) {
     shade.bpp = 4;

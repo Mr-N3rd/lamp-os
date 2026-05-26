@@ -43,18 +43,32 @@
     max-width: 360px;
     margin-bottom: 16px;
   }
-  .url {
+  .button {
     display: inline-block;
     margin-top: 12px;
-    padding: 10px 18px;
-    border: 1px solid rgba(253, 253, 253, 0.08);
+    padding: 14px 28px;
+    border: 1px solid rgba(141, 205, 166, 0.4);
     border-radius: 8px;
-    background: #1a1a1a;
-    color: #8dcda6;
-    font-family: "JetBrains Mono", "Courier New", ui-monospace, monospace;
+    background: #8dcda6;
+    color: #0d0d0d;
     font-size: 1rem;
     font-weight: 600;
     letter-spacing: 0.02em;
+    text-decoration: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .button:active {
+    background: #7bbf94;
+  }
+  .fallback {
+    margin-top: 20px;
+    font-size: 0.85rem;
+    color: rgba(253, 253, 253, 0.5);
+  }
+  .fallback code {
+    color: #8dcda6;
+    font-family: "JetBrains Mono", "Courier New", ui-monospace, monospace;
   }
   .footer {
     margin-top: 40px;
@@ -67,9 +81,16 @@
 <main>
   <img class="logo" src="/logo.svg" alt="Lamplit logo">
   <h1>Welcome to your lamp</h1>
-  <p>To configure your lamp, please open Safari, Chrome, or another browser and visit:</p>
-  <span class="url">192.168.4.1</span>
+  <p>Tap the button below to open the configurator.</p>
+  <a id="setupLink" class="button" href="http://192.168.4.1/">Open Lamp Setup</a>
+  <p class="fallback">If the button doesn't work, open Safari, Chrome, or another browser and visit <code>192.168.4.1</code>.</p>
   <div class="footer">Lamplit</div>
 </main>
+<script>
+  if (/Android/i.test(navigator.userAgent)) {
+    document.getElementById('setupLink').href =
+      'intent://192.168.4.1/#Intent;scheme=http;end';
+  }
+</script>
 </body>
 </html>
