@@ -54,6 +54,8 @@ const emit = defineEmits<{
 }>()
 
 const localValue = ref(props.modelValue)
+const isInteracting = ref(false)
+let interactionTimeout: ReturnType<typeof setTimeout> | null = null
 
 // Calculate step value based on steps prop or step prop
 const stepValue = computed(() => {
@@ -98,6 +100,11 @@ const sliderStyle = computed(() => {
 
 const updateValue = () => {
   emit('update:modelValue', localValue.value)
+  isInteracting.value = true
+  if (interactionTimeout) clearTimeout(interactionTimeout)
+  interactionTimeout = setTimeout(() => {
+    isInteracting.value = false
+  }, 200)
 }
 
 // Touch event handlers to prevent page swiping
@@ -130,13 +137,11 @@ const validate = (): FieldValidationResult => {
 watch(
   () => props.modelValue,
   (newValue) => {
-    localValue.value = newValue
+    if (!isInteracting.value) {
+      localValue.value = newValue
+    }
   },
 )
-
-watch(localValue, (newValue) => {
-  emit('update:modelValue', newValue)
-})
 
 defineExpose({ validate })
 </script>
