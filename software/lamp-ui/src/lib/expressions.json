@@ -6,16 +6,15 @@
     "fields": [
       {
         "name": "target",
-        "type": "number-slider",
+        "type": "segmented-buttons",
         "label": "Target",
-        "help": "Where to apply the expression (1=Shade, 2=Base, 3=Both)",
         "default": 2,
         "optional": true,
-        "props": {
-          "min": 1,
-          "max": 3,
-          "step": 1
-        }
+        "options": [
+          { "value": 1, "label": "Shade" },
+          { "value": 2, "label": "Base" },
+          { "value": 3, "label": "Both" }
+        ]
       },
       {
         "name": "colors",
@@ -68,16 +67,15 @@
     "fields": [
       {
         "name": "target",
-        "type": "number-slider",
+        "type": "segmented-buttons",
         "label": "Target",
-        "help": "Where to apply the expression (1=Shade, 2=Base, 3=Both)",
         "default": 2,
         "optional": true,
-        "props": {
-          "min": 1,
-          "max": 3,
-          "step": 1
-        }
+        "options": [
+          { "value": 1, "label": "Shade" },
+          { "value": 2, "label": "Base" },
+          { "value": 3, "label": "Both" }
+        ]
       },
       {
         "name": "colors",
@@ -144,16 +142,15 @@
     "fields": [
       {
         "name": "target",
-        "type": "number-slider",
+        "type": "segmented-buttons",
         "label": "Target",
-        "help": "Where to apply the expression (1=Shade, 2=Base, 3=Both)",
         "default": 2,
         "optional": true,
-        "props": {
-          "min": 1,
-          "max": 3,
-          "step": 1
-        }
+        "options": [
+          { "value": 1, "label": "Shade" },
+          { "value": 2, "label": "Base" },
+          { "value": 3, "label": "Both" }
+        ]
       },
       {
         "name": "colors",
@@ -205,16 +202,15 @@
     "fields": [
       {
         "name": "target",
-        "type": "number-slider",
+        "type": "segmented-buttons",
         "label": "Target",
-        "help": "Where to apply the expression (1=Shade, 2=Base, 3=Both)",
         "default": 2,
         "optional": true,
-        "props": {
-          "min": 1,
-          "max": 3,
-          "step": 1
-        }
+        "options": [
+          { "value": 1, "label": "Shade" },
+          { "value": 2, "label": "Base" },
+          { "value": 3, "label": "Both" }
+        ]
       },
       {
         "name": "colors",

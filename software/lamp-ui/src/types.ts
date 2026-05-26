@@ -51,6 +51,7 @@ export type FieldType =
   | 'slot'
   | 'group-heading'
   | 'select'
+  | 'segmented-buttons'
 
 /**
  * Field props that can be passed to individual field components
