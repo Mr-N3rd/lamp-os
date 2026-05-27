@@ -424,7 +424,7 @@ export const useLampStore = defineStore('lamp', () => {
         await BleClient.connect(newTarget.deviceId, () => {
           wsConnected.value = false
           dlog('BLE disconnected (callback fired)')
-        })
+        }, { skipDescriptorDiscovery: true })
         connected = true
         dlog(`BleClient.connect attempt ${attempt} OK`)
       } catch (err) {
@@ -441,34 +441,13 @@ export const useLampStore = defineStore('lamp', () => {
       return
     }
 
-    // Best-effort high-priority connection (Android only — reduces GATT latency)
-    try {
-      await BleClient.requestConnectionPriority(newTarget.deviceId, ConnectionPriority.CONNECTION_PRIORITY_HIGH)
-      dlog('requestConnectionPriority HIGH OK')
-    } catch (e) {
-      dlog(`requestConnectionPriority skipped: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    // Capacitor's connect() already does discoverServices + MTU exchange before
+    // resolving, so we go straight to reading state.
 
-    // Force fresh service discovery (Android caches services across sessions;
-    // if firmware changed, the cache may be stale).
-    try {
-      dlog('discoverServices…')
-      await BleClient.discoverServices(newTarget.deviceId)
-      dlog('discoverServices OK')
-    } catch (e) {
-      dlog(`discoverServices threw: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    BleClient.requestConnectionPriority(newTarget.deviceId, ConnectionPriority.CONNECTION_PRIORITY_HIGH)
+      .then(() => dlog('requestConnectionPriority HIGH OK'))
+      .catch((e) => dlog(`requestConnectionPriority skipped: ${e instanceof Error ? e.message : String(e)}`))
 
-    // Log discovered services so we can see what the app actually knows about
-    try {
-      const services = await BleClient.getServices(newTarget.deviceId)
-      const uuids = services.map((s) => s.uuid)
-      dlog(`getServices: ${uuids.length} services [${uuids.join(', ')}]`)
-    } catch (e) {
-      dlog(`getServices threw: ${e instanceof Error ? e.message : String(e)}`)
-    }
-
-    // Read current settings
     try {
       dlog('readSettingsBlob…')
       const json = await readSettingsBlob(newTarget.deviceId)
@@ -482,34 +461,25 @@ export const useLampStore = defineStore('lamp', () => {
       dlog(`readSettingsBlob failed: ${msg}`)
     }
 
-    // Auth if the user gave us a password. We trust the inventory entry — if
-    // the lamp redacts the password in its settings JSON for security (future
-    // change), we shouldn't gate auth on what's in state.value.lamp.password.
-    if (newTarget.password) {
-      try {
-        dlog('authConnection…')
-        await authConnection(newTarget.deviceId, newTarget.password)
-        dlog('authConnection OK')
-      } catch (err) {
-        dlog(`authConnection failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-
-    // Subscribe to state notifications
-    try {
-      dlog('subscribeStateNotify…')
-      await subscribeStateNotify(newTarget.deviceId, () => {
-        void refreshState()
-      })
-      dlog('subscribeStateNotify OK')
-    } catch (err) {
-      dlog(`subscribeStateNotify failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-
+    // UI can render and the user can start interacting. Auth and notify
+    // finish in the background — the first write happens long after a 30ms
+    // auth round-trip would land.
     wsConnected.value = true
     loaded.value = true
     saving.value = false
     dlog('initialize complete; wsConnected=true loaded=true')
+
+    if (newTarget.password) {
+      authConnection(newTarget.deviceId, newTarget.password)
+        .then(() => dlog('authConnection OK'))
+        .catch((err) => dlog(`authConnection failed: ${err instanceof Error ? err.message : String(err)}`))
+    }
+
+    subscribeStateNotify(newTarget.deviceId, () => {
+      void refreshState()
+    })
+      .then(() => dlog('subscribeStateNotify OK'))
+      .catch((err) => dlog(`subscribeStateNotify failed: ${err instanceof Error ? err.message : String(err)}`))
   }
 
   // ── Cleanup ───────────────────────────────────────────────────────────────────

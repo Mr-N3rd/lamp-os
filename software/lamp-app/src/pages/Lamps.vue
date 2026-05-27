@@ -8,31 +8,34 @@ import { BleClient } from '@capacitor-community/bluetooth-le'
 const router = useRouter()
 const inventory = useLampInventoryStore()
 
-let pollTimer: number | undefined
-
 async function pollOnce() {
   const knownIds = new Set(inventory.lamps.map((l) => l.id))
-
   try {
     await initBle()
     void scanForLamps((discovered) => {
-      if (knownIds.has(discovered.id)) {
-        inventory.updateSeen(discovered.id)
-      }
-    }, 8_000)
+      if (!knownIds.has(discovered.id)) return
+      inventory.updateSeen(discovered.id, {
+        base: discovered.baseColor,
+        shade: discovered.shadeColor,
+      })
+    }, 1_500)
   } catch (err) {
     console.warn('BLE scan failed:', err)
   }
 }
 
+const onVisibilityChange = () => {
+  if (document.visibilityState === 'visible') void pollOnce()
+}
+
 onMounted(async () => {
   await inventory.load()
-  await pollOnce()
-  pollTimer = window.setInterval(() => { void pollOnce() }, 30_000)
+  void pollOnce()
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   try { void BleClient.stopLEScan() } catch { /* not running or unavailable */ }
 })
 
@@ -47,6 +50,11 @@ const addLamp = () => {
 const isOnline = (lamp: { lastSeen?: number }) => {
   if (!lamp.lastSeen) return false
   return Date.now() - lamp.lastSeen < 30_000
+}
+
+const swatchStyle = (color?: [number, number, number]) => {
+  if (!color) return { background: 'var(--brand-slate-grey)' }
+  return { background: `rgb(${color[0]}, ${color[1]}, ${color[2]})` }
 }
 </script>
 
@@ -69,6 +77,10 @@ const isOnline = (lamp: { lastSeen?: number }) => {
             <span class="status-dot" :class="{ online: isOnline(lamp) }"></span>
             <div class="lamp-info">
               <span class="lamp-name">{{ lamp.name }}</span>
+            </div>
+            <div class="lamp-colors" :class="{ offline: !isOnline(lamp) }">
+              <span class="swatch" :style="swatchStyle(lamp.lastShadeColor)"></span>
+              <span class="swatch" :style="swatchStyle(lamp.lastBaseColor)"></span>
             </div>
             <span class="lamp-chevron">›</span>
           </li>
@@ -204,6 +216,27 @@ const isOnline = (lamp: { lastSeen?: number }) => {
   color: var(--brand-lamp-white);
   font-weight: 600;
   font-size: 1rem;
+}
+
+.lamp-colors {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 1;
+  transition: opacity 0.3s ease;
+}
+
+.lamp-colors.offline {
+  opacity: 0.35;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(253, 253, 253, 0.15);
+  box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.3);
+  transition: background 0.3s ease;
 }
 
 .lamp-chevron {

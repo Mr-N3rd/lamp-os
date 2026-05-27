@@ -122,8 +122,7 @@ watch(
     <!-- Loading State -->
     <div v-else class="loading-container">
       <div class="loading-spinner"></div>
-      <p>Connecting to lamp...</p>
-      <button class="loading-cancel-btn" @click="goBackToLamps">Back to Lamps</button>
+      <p>Connecting…</p>
     </div>
 
     <!-- Debug console — surfaces the BLE init flow step by step -->
@@ -294,18 +293,6 @@ watch(
   font-size: 0.8rem;
   font-weight: 600;
   padding: 6px 12px;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.loading-cancel-btn {
-  margin-top: 16px;
-  background: transparent;
-  border: 1px solid var(--color-border);
-  border-radius: 20px;
-  color: var(--brand-fog-grey);
-  font-size: 0.85rem;
-  padding: 8px 16px;
   cursor: pointer;
   font-family: inherit;
 }

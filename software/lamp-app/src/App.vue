@@ -31,7 +31,10 @@ onMounted(async () => {
       void scanForLamps(
         (lamp) => {
           if (!knownIds.has(lamp.id)) return
-          inventory.updateSeen(lamp.id)
+          inventory.updateSeen(lamp.id, {
+            base: lamp.baseColor,
+            shade: lamp.shadeColor,
+          })
           const rssi = lamp.rssi ?? -100
           if (rssi > bestRssi) {
             bestRssi = rssi

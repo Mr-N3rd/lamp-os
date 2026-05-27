@@ -4,6 +4,8 @@ import { Preferences } from '@capacitor/preferences'
 
 const STORAGE_KEY = 'lamp-inventory'
 
+export type RgbTriple = [number, number, number]
+
 export interface InventoryLamp {
   id: string           // BLE deviceId, stable across reboots
   name: string         // user-facing
@@ -11,6 +13,8 @@ export interface InventoryLamp {
   addedAt?: number     // epoch ms
   password?: string    // lamp's control password, if set
   viaMesh?: boolean    // true if known only via a bridge's roster (v2+)
+  lastBaseColor?: RgbTriple   // last RGB seen via BLE color-sync beacon
+  lastShadeColor?: RgbTriple
 }
 
 export const useLampInventoryStore = defineStore('lampInventory', () => {
@@ -50,10 +54,15 @@ export const useLampInventoryStore = defineStore('lampInventory', () => {
     void persist()
   }
 
-  const updateSeen = (id: string) => {
+  const updateSeen = (
+    id: string,
+    colors?: { base?: RgbTriple; shade?: RgbTriple },
+  ) => {
     const lamp = lamps.value.find((l) => l.id === id)
     if (!lamp) return
     lamp.lastSeen = Date.now()
+    if (colors?.base) lamp.lastBaseColor = colors.base
+    if (colors?.shade) lamp.lastShadeColor = colors.shade
     void persist()
   }
 
