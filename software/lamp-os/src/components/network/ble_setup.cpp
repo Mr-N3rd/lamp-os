@@ -128,13 +128,12 @@ void start(lamp::Config* config, Preferences* prefs) {
 
   service->start();
 
-  // Add setup service UUID to the existing advertising payload so the mobile
-  // app can filter by service UUID during discovery.
-  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-  adv->addServiceUUID(SERVICE_UUID);
-  // Re-start advertising to pick up the new UUID (no-op if already running
-  // but ensures the updated data is broadcast).
-  adv->start();
+  // Advertising start is OWNED by wifi.cpp::toApMode() and runs AFTER both
+  // ble_setup and ble_control have registered their services. Calling
+  // adv->start() here would lock the GATT database (ble_gatts_mutable=false)
+  // before ble_control gets a chance to register its service, causing
+  // ble_gatts_add_svcs() to silently fail and the control service to be
+  // missing from the GATT database.
 
   running = true;
 

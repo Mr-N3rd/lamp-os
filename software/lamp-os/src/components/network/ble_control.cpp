@@ -290,6 +290,11 @@ void start(lamp::Config* config, Preferences* prefs) {
   // lifetime and must not be freed by NimBLE.
   s_server->setCallbacks(new ControlServerCallbacks(), false);
 
+  // NimBLE 2.x default is FALSE — advertising does NOT auto-restart after a
+  // client disconnects (per CHANGELOG). Without this, the first phone disconnect
+  // makes the lamp permanently undiscoverable until reboot.
+  s_server->advertiseOnDisconnect(true);
+
   s_service = s_server->createService(SERVICE_UUID);
 
   // Auth — write-with-response so the app receives a GATT ack
@@ -317,9 +322,22 @@ void start(lamp::Config* config, Preferences* prefs) {
       ->setCallbacks(new ExpressionTestCallback());
 
   // Settings blob — read + write-with-response
-  s_service->createCharacteristic(CHAR_SETTINGS_BLOB,
-                                  NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE)
-      ->setCallbacks(new SettingsBlobCallback());
+  // Important: NimBLE returns the previously-set value on reads; the onRead
+  // callback runs alongside but the response payload is the captured value.
+  // So we must seed the value here at creation time AND keep it refreshed
+  // on each onRead so subsequent reads see updated config.
+  NimBLECharacteristic* settingsBlobChar = s_service->createCharacteristic(
+      CHAR_SETTINGS_BLOB,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+  settingsBlobChar->setCallbacks(new SettingsBlobCallback());
+  {
+    JsonDocument doc = s_config->asJsonDocument();
+    String json;
+    serializeJson(doc, json);
+    settingsBlobChar->setValue(json.c_str());
+    Serial.printf("[ble_control] settings_blob initial value set, %d bytes\n",
+                  (int)json.length());
+  }
 
   // State notify — notify only; no write/read needed
   s_stateNotify = s_service->createCharacteristic(CHAR_STATE_NOTIFY,

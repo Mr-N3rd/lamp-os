@@ -1,6 +1,7 @@
 #include "./wifi.hpp"
 
 #include <Arduino.h>
+#include <NimBLEDevice.h>
 #include "./ble_control.hpp"
 #include "./ble_setup.hpp"
 #include <ArduinoJson.h>
@@ -250,10 +251,40 @@ void WifiComponent::toApMode() {
       config->lamp.name.substr(0, 12).append("-lamp").c_str(),
       String(config->lamp.password.c_str()),
       WIFI_PREFERRED_CHANNEL);
+  // Stop the central scan BEFORE registering GATT services. NimBLE's
+  // ble_gatts_mutable() returns false if any GAP procedure (scan, advertising,
+  // connection) is active, AND ble_gatts_add_svcs() (called by service.start)
+  // checks the same flag. If scan is active when ble_setup or ble_control
+  // calls service.start(), the service is silently dropped from the GATT
+  // database before it can ever be registered. The color-sync scanner started
+  // in BluetoothComponent::begin() must be paused for the duration of GATT
+  // setup.
+  NimBLEScan* scan = NimBLEDevice::getScan();
+  bool scanWasActive = scan->isScanning();
+  if (scanWasActive) {
+    scan->stop();
+    Serial.printf("[ble] stopped central scan for GATT registration\n");
+  }
+
   if (config->lamp.homeModeSSID.empty()) {
     ble_setup::start(config, &prefs);
   }
   ble_control::start(config, &prefs);
+
+  // NimBLEServer::start() invokes ble_gatts_start() which registers all
+  // services queued by the service.start() calls above. Must run while no
+  // GAP procedure is active.
+  NimBLEDevice::getServer()->start();
+  Serial.printf("[ble] server.start() done (GATT services registered)\n");
+
+  bool advStarted = NimBLEDevice::getAdvertising()->start();
+  Serial.printf("[ble] advertising started=%d\n", advStarted);
+
+  // Restart central scan so color-sync between lamps continues.
+  if (scanWasActive) {
+    scan->start(0);  // 0 = continuous
+    Serial.printf("[ble] central scan restarted\n");
+  }
 };
 
 bool WifiComponent::isHomeNetworkVisible() {

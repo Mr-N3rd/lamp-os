@@ -25,9 +25,13 @@ void BluetoothPool::addLamp(BluetoothLampRecord lamp) {
 void BluetoothPool::addOrUpdateLamp(BluetoothLampRecord lamp) {
   uint32_t timeNow = millis();
 
-  for (int i = 0; i < lampPool.size(); i++) {
+  for (size_t i = 0; i < lampPool.size(); i++) {
     if (lampPool[i].name == lamp.name) {
       lampPool[i].lastSeenTimeMs = timeNow;
+      // Refresh the colors too — without this, the social color-sync sees
+      // only each lamp's boot-time colors, never their live ones.
+      lampPool[i].baseColor  = lamp.baseColor;
+      lampPool[i].shadeColor = lamp.shadeColor;
       return;
     }
   }
@@ -38,9 +42,15 @@ void BluetoothPool::addOrUpdateLamp(BluetoothLampRecord lamp) {
 void BluetoothPool::pruneLamps() {
   uint32_t timeNow = millis();
 
-  for (int i = 0; i < lampPool.size(); i++) {
-    if (lampPool[i].lastSeenTimeMs + LAMP_PRUNE_TIME_MS < timeNow) {
-      lampPool.erase(lampPool.begin() + i);
+  // Iterator-based erase: erase() returns the iterator to the next element,
+  // so we don't skip the post-erase shifted neighbor (which the index-based
+  // pattern did).
+  auto it = lampPool.begin();
+  while (it != lampPool.end()) {
+    if (it->lastSeenTimeMs + LAMP_PRUNE_TIME_MS < timeNow) {
+      it = lampPool.erase(it);
+    } else {
+      ++it;
     }
   }
 }
@@ -79,9 +89,13 @@ void BluetoothPool::addOrUpdateStage(BluetoothStageRecord stage) {
 void BluetoothPool::pruneStages() {
   uint32_t timeNow = millis();
 
-  for (int i = 0; i < stagePool.size(); i++) {
-    if (stagePool[i].lastSeenTimeMs + STAGE_PRUNE_TIME_MS < timeNow) {
-      stagePool.erase(stagePool.begin() + i);
+  // Iterator-based erase — see pruneLamps for rationale.
+  auto it = stagePool.begin();
+  while (it != stagePool.end()) {
+    if (it->lastSeenTimeMs + STAGE_PRUNE_TIME_MS < timeNow) {
+      it = stagePool.erase(it);
+    } else {
+      ++it;
     }
   }
 }

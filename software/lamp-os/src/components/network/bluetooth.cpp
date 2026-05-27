@@ -150,16 +150,16 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
   };
   pAdvertising->setManufacturerData(data);
   // Connectable mode UND lets the mobile app open a GATT connection to the
-  // control service (ble_control). NimBLE requires a GATT server to exist
-  // before connectable advertising can start — create an empty one here;
-  // ble_control will attach its service to this same server later.
-  NimBLEDevice::createServer();
+  // control service (ble_control).
   pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_UND);
   pAdvertising->setMinInterval(BLE_ADVERTISING_INTERVAL_MIN);
   pAdvertising->setMaxInterval(BLE_ADVERTISING_INTERVAL_MAX);
-  bool advStarted = pAdvertising->start();
-  Serial.printf("[ble] advertising name=%s connectable=UND start=%d\n",
-                name.c_str(), advStarted);
+  // Do NOT start advertising here. NimBLE's GATT database is effectively
+  // frozen once advertising starts; services registered later (ble_setup,
+  // ble_control) won't be visible to clients. Advertising start is deferred
+  // to wifi.cpp::toApMode() after both GATT services are registered.
+  Serial.printf("[ble] advertising configured for name=%s (deferred start)\n",
+                name.c_str());
 };
 
 std::vector<BluetoothLampRecord> *BluetoothComponent::getLamps() {
