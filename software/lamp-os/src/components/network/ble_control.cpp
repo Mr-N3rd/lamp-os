@@ -110,9 +110,7 @@ class BrightnessCallback : public NimBLECharacteristicCallbacks {
     doc["v"] = level;
     dispatchLampAction(doc, millis());
 
-    // No notifyStateChange here — slider drag can send 30+ writes/sec; queuing
-    // a notification per write floods the BLE stack and the app already knows
-    // what it just sent. State notifications fire on lamp-driven changes only.
+    notifyStateChange();
   }
 };
 
