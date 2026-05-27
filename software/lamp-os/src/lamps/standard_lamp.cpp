@@ -29,6 +29,12 @@
 Adafruit_NeoPixel* shadeStrip = nullptr;
 Adafruit_NeoPixel* baseStrip = nullptr;
 Preferences prefs;
+
+// Brightness change requested from a non-loop thread (BLE callback / WS).
+// Sentinel -1 = no pending change. Loop() applies it on next tick. Marked
+// volatile so the loop sees writes from other tasks without aggressive
+// caching by the compiler. int8_t writes/reads are atomic on Xtensa.
+volatile int8_t pendingBrightness = -1;
 uint32_t lastStageModeCheckTimeMs = 0;
 uint32_t lastDmxCheckTimeMs = 0;
 uint32_t lastArtnetFrameTimeMs = 0;
@@ -206,9 +212,14 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
   String action = String(doc["a"]);
   if (action == "bright") {
     int level = doc["v"] | 100;
-    // Apply immediately for real-time control
-    shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-    baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    // Don't call setBrightness directly from here — dispatchLampAction can run
+    // on the BLE host task (Core 0) while loop()'s compositor.tick() renders
+    // on Core 1, and Adafruit_NeoPixel::setBrightness mutates the in-place
+    // pixel buffer used by show(), corrupting an in-flight render (visible as
+    // sudden full-white then potentially a crash). Stash the requested value
+    // and let loop() apply it on the next tick (sub-frame latency).
+    pendingBrightness = static_cast<int8_t>(level & 0x7F);
+    config.lamp.brightness = level;
   } else if (action == "knockout") {
     int pixelIndex = doc["p"];
     int percentage = doc["b"];
@@ -304,6 +315,15 @@ void setup() {
 };
 
 void loop() {
+  // Apply any pending brightness change from BLE/WebSocket BEFORE rendering
+  // this frame, so the render sees a consistent brightness multiplier.
+  if (pendingBrightness >= 0) {
+    uint8_t level = static_cast<uint8_t>(pendingBrightness);
+    shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    pendingBrightness = -1;
+  }
+
   handleStageMode();
   handleArtnet();
   handleWebSocket();
