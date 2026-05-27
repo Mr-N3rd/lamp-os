@@ -150,11 +150,16 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
   };
   pAdvertising->setManufacturerData(data);
   // Connectable mode UND lets the mobile app open a GATT connection to the
-  // control service (ble_control). The color-sync beacon still works the same.
+  // control service (ble_control). NimBLE requires a GATT server to exist
+  // before connectable advertising can start — create an empty one here;
+  // ble_control will attach its service to this same server later.
+  NimBLEDevice::createServer();
   pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_UND);
   pAdvertising->setMinInterval(BLE_ADVERTISING_INTERVAL_MIN);
   pAdvertising->setMaxInterval(BLE_ADVERTISING_INTERVAL_MAX);
-  pAdvertising->start();
+  bool advStarted = pAdvertising->start();
+  Serial.printf("[ble] advertising name=%s connectable=UND start=%d\n",
+                name.c_str(), advStarted);
 };
 
 std::vector<BluetoothLampRecord> *BluetoothComponent::getLamps() {

@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { startScan } from '@/services/scan'
-import type { NearbyLamp } from '@/services/scan'
+import type { NearbyLamp, ScanDebug } from '@/services/scan'
 import { useLampInventoryStore } from '@/stores/lampInventory'
 
 const router = useRouter()
@@ -12,12 +12,14 @@ const inventory = useLampInventoryStore()
 // ── Scan state ────────────────────────────────────────────────────────────────
 const lamps: Ref<NearbyLamp[]> = ref<NearbyLamp[]>([])
 const scanning = ref(true)
+const debug = ref<ScanDebug | null>(null)
 let stopScan: (() => void) | null = null
 
 onMounted(async () => {
   const result = await startScan()
   lamps.value = result.lamps.value
   stopScan = result.stop
+  debug.value = result.debug
   scanning.value = false
 })
 
@@ -162,6 +164,24 @@ async function connectLamp() {
               </li>
             </ul>
           </template>
+
+          <!-- Debug — raw BLE scan results -->
+          <details v-if="debug" class="scan-debug-panel" open>
+            <summary>Debug: BLE scan ({{ debug.rawBleResults.length }} ads seen)</summary>
+            <div v-if="debug.bleError" class="scan-debug-error">
+              <strong>BLE error:</strong> {{ debug.bleError }}
+            </div>
+            <p v-if="!debug.rawBleResults.length" class="scan-debug-empty">
+              No advertisements received. Check Bluetooth is on and the app has Nearby Devices permission.
+            </p>
+            <ul v-else class="scan-debug-list">
+              <li v-for="r in debug.rawBleResults" :key="r.deviceId">
+                <div><strong>{{ r.name }}</strong> ({{ r.deviceId }}) rssi={{ r.rssi }}</div>
+                <div>mfgKeys: <code>[{{ r.mfgKeys.join(', ') || '(none)' }}]</code></div>
+                <div v-if="r.uuids.length">uuids: <code>{{ r.uuids.join(', ') }}</code></div>
+              </li>
+            </ul>
+          </details>
         </template>
 
       </div>
@@ -500,5 +520,52 @@ async function connectLamp() {
   .gradient-btn {
     width: 100%;
   }
+}
+/* Scan debug panel */
+.scan-debug-panel {
+  margin-top: 16px;
+  padding: 10px 14px;
+  background: var(--color-background-mute);
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.scan-debug-panel summary {
+  cursor: pointer;
+  color: var(--brand-lamp-white);
+  font-weight: 600;
+  font-family: inherit;
+}
+.scan-debug-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid var(--color-error);
+  border-radius: 6px;
+  color: var(--color-error);
+  word-break: break-word;
+}
+.scan-debug-empty {
+  color: var(--brand-slate-grey);
+  font-style: italic;
+  margin: 8px 0;
+}
+.scan-debug-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+.scan-debug-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+  word-break: break-word;
+}
+.scan-debug-list li:last-child { border-bottom: none; }
+.scan-debug-list code {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 </style>
