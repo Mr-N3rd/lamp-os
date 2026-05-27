@@ -58,53 +58,43 @@ export async function authConnection(deviceId: string, password: string): Promis
 
 // ── Control writes ────────────────────────────────────────────────────────────
 
-/**
- * Write brightness (u8 0-100). write-without-response for minimum drag latency.
- */
 export async function writeBrightness(deviceId: string, value: number): Promise<void> {
   const clamped = Math.max(0, Math.min(100, Math.round(value)))
-  await BleClient.writeWithoutResponse(deviceId, CONTROL_SERVICE_UUID, CHAR_BRIGHTNESS, u8ToDataView(clamped))
+  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_BRIGHTNESS, u8ToDataView(clamped))
 }
 
-/**
- * Write shade colors (JSON array of hex strings). write-without-response.
- */
 export async function writeShadeColors(deviceId: string, colors: string[]): Promise<void> {
-  await BleClient.writeWithoutResponse(deviceId, CONTROL_SERVICE_UUID, CHAR_SHADE_COLORS, textToDataView(JSON.stringify(colors)))
+  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_SHADE_COLORS, textToDataView(JSON.stringify(colors)))
 }
 
-/**
- * Write base colors (JSON array of hex strings). write-without-response.
- */
 export async function writeBaseColors(deviceId: string, colors: string[]): Promise<void> {
-  await BleClient.writeWithoutResponse(deviceId, CONTROL_SERVICE_UUID, CHAR_BASE_COLORS, textToDataView(JSON.stringify(colors)))
+  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_BASE_COLORS, textToDataView(JSON.stringify(colors)))
 }
 
-/**
- * Write a base knockout pixel. 2 bytes: [pixelIndex u8, brightness u8 0-100].
- * write-without-response.
- */
 export async function writeBaseKnockout(deviceId: string, pixelIndex: number, brightness: number): Promise<void> {
   const clampedB = Math.max(0, Math.min(100, Math.round(brightness)))
-  await BleClient.writeWithoutResponse(deviceId, CONTROL_SERVICE_UUID, CHAR_BASE_KNOCKOUT, twoU8ToDataView(pixelIndex, clampedB))
+  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_BASE_KNOCKOUT, twoU8ToDataView(pixelIndex, clampedB))
 }
 
-/**
- * Start an expression preview. write-with-response (GATT ack).
- * @param type  Expression type name (non-empty string).
- */
-export async function writeExpressionTest(deviceId: string, type: string): Promise<void> {
-  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_EXPRESSION_TEST, textToDataView(type))
+export async function writeExpressionTest(
+  deviceId: string,
+  expr: Record<string, unknown>,
+): Promise<void> {
+  const payload = JSON.stringify({ a: 'test_expression', ...expr })
+  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_EXPRESSION_TEST, textToDataView(payload))
 }
 
-/**
- * End expression preview (restore configurator colors). write-with-response.
- * Firmware treats empty or "complete" as test_expression_complete. We send
- * "complete" because some BLE stacks (iOS Core Bluetooth, certain Android
- * builds) silently drop ATT WRITE requests with 0-byte payloads.
- */
-export async function writeExpressionComplete(deviceId: string): Promise<void> {
-  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_EXPRESSION_TEST, textToDataView('complete'))
+export async function writeExpressionComplete(
+  deviceId: string,
+  shadeColors: string[],
+  baseColors: string[],
+): Promise<void> {
+  const payload = JSON.stringify({
+    a: 'test_expression_complete',
+    shadeColors,
+    baseColors,
+  })
+  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_EXPRESSION_TEST, textToDataView(payload))
 }
 
 // ── Settings blob ─────────────────────────────────────────────────────────────

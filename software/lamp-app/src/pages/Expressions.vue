@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import ComponentForm from '@/components/Form.vue'
 import type { FormValues } from '@/types'
 import { useLampStore } from '@/stores/lamp'
@@ -8,8 +8,24 @@ import { useExpressionsStore } from '@/stores/expressions'
 const lampStore = useLampStore()
 const expressionsStore = useExpressionsStore()
 
-// Track which expression panel is currently expanded (only one at a time)
 const expandedPanel = ref<string | null>(null)
+
+const TEST_PREVIEW_MS = 5000
+const testTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+
+const clearTestTimer = () => {
+  if (testTimer.value) {
+    clearTimeout(testTimer.value)
+    testTimer.value = null
+  }
+}
+
+onBeforeUnmount(() => {
+  if (testTimer.value) {
+    clearTestTimer()
+    lampStore.testExpressionComplete()
+  }
+})
 
 // Check if a specific panel is expanded
 const isPanelExpanded = (expressionIndex: string): boolean => {
@@ -130,9 +146,25 @@ const updateExpressionValues = (expressionIndex: string, values: FormValues) => 
 // Get all available expression types
 const allExpressions = computed(() => expressionsStore.expressionsList)
 
-// Test expression
 const handleTestExpression = (expressionIndex: string) => {
+  clearTestTimer()
   lampStore.testExpression(expressionIndex)
+  testTimer.value = setTimeout(() => {
+    testTimer.value = null
+    lampStore.testExpressionComplete()
+  }, TEST_PREVIEW_MS)
+}
+
+const handleColorPreview = (expressionIndex: string, fieldName: string, value: string) => {
+  if (fieldName !== 'colors') return
+  const expr = lampStore.state.expressions?.find((e) => e.type === expressionIndex)
+  const target = expr?.target ?? 2
+  lampStore.previewExpressionColor(value, target)
+}
+
+const handleColorPreviewEnd = (fieldName: string) => {
+  if (fieldName !== 'colors') return
+  lampStore.restoreColorsAfterPreview()
 }
 </script>
 

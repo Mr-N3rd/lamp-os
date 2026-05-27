@@ -269,8 +269,14 @@ export const useLampStore = defineStore('lamp', () => {
   // Expression handlers
   const testExpression = async (type: string) => {
     if (!wsConnected.value) return
+    const expr = state.value.expressions?.find((e) => e.type === type)
+    if (!expr) return
+    const cleaned: Record<string, unknown> = { ...expr }
+    if (Array.isArray(expr.colors)) {
+      cleaned.colors = expr.colors.filter((c): c is string => typeof c === 'string')
+    }
     try {
-      await writeExpressionTest(deviceId(), type)
+      await writeExpressionTest(deviceId(), cleaned)
     } catch (err) {
       console.warn('[lamp] writeExpressionTest failed:', err)
     }
@@ -279,7 +285,9 @@ export const useLampStore = defineStore('lamp', () => {
   const testExpressionComplete = async () => {
     if (!wsConnected.value) return
     try {
-      await writeExpressionComplete(deviceId())
+      const shadeColors = state.value.shade?.colors ?? []
+      const baseColors = state.value.base?.colors ?? []
+      await writeExpressionComplete(deviceId(), shadeColors, baseColors)
     } catch (err) {
       console.warn('[lamp] writeExpressionComplete failed:', err)
     }
@@ -340,13 +348,28 @@ export const useLampStore = defineStore('lamp', () => {
         ({ p, b }) => p !== undefined && p !== null && b < 100
       ) ?? []
 
+    dlog(`writeSettingsBlob: ${JSON.stringify(state.value).length} bytes`)
     try {
       await writeSettingsBlob(deviceId(), state.value)
       originalState.value = JSON.stringify(state.value)
+      dlog('writeSettingsBlob OK')
     } catch (err) {
-      // Lamp reboots → GATT connection drops mid-write → throws. Expected.
-      console.log('[lamp] writeSettingsBlob threw (likely reboot-induced disconnect):', err)
-      originalState.value = JSON.stringify(state.value)
+      const msg = err instanceof Error ? err.message : String(err)
+      dlog(`writeSettingsBlob threw: ${msg}`)
+      // "Not connected" / "Device disconnected" → likely the lamp rebooted
+      // (expected on settings_blob writes which trigger ESP.restart()).
+      // Other errors (timeout, ATT errors) mean the write didn't reach.
+      const looksLikeReboot = msg.toLowerCase().includes('not connected') ||
+                              msg.toLowerCase().includes('disconnect')
+      if (looksLikeReboot) {
+        dlog('treating as reboot-induced disconnect (expected)')
+        originalState.value = JSON.stringify(state.value)
+      } else {
+        connectionError.value = `Save failed: ${msg}`
+        saving.value = false
+        wsConnected.value = false
+        return  // Don't try to reconnect — let user retry manually
+      }
     }
 
     // Wait for firmware to reboot then reconnect
