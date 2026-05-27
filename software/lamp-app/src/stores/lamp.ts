@@ -100,6 +100,7 @@ export const useLampStore = defineStore('lamp', () => {
 
   // BLE connection state (exported as wsConnected for backward compat with pages)
   const wsConnected = ref(false)
+  const connectionError = ref<string | null>(null)
 
   // Computed
   const hasChanges = computed(() => {
@@ -381,6 +382,7 @@ export const useLampStore = defineStore('lamp', () => {
 
   const initialize = async (newTarget: LampTarget) => {
     target.value = newTarget
+    connectionError.value = null
 
     // Make sure no stray LE scan is fighting with our GATT connect
     try { await BleClient.stopLEScan() } catch { /* ignore */ }
@@ -403,6 +405,8 @@ export const useLampStore = defineStore('lamp', () => {
       }
     }
     if (!connected) {
+      const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
+      connectionError.value = `Couldn't connect to lamp: ${msg}`
       console.warn('[lamp] BleClient.connect gave up:', lastErr)
       loaded.value = true
       return
@@ -422,6 +426,8 @@ export const useLampStore = defineStore('lamp', () => {
       state.value = data
       originalState.value = JSON.stringify(data)
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      connectionError.value = `Couldn't read lamp settings: ${msg}`
       console.warn('[lamp] readSettingsBlob failed:', err)
     }
 
@@ -480,6 +486,7 @@ export const useLampStore = defineStore('lamp', () => {
     loaded,
     saving,
     wsConnected,
+    connectionError,
     disabled,
     hasChanges,
     activeTab,

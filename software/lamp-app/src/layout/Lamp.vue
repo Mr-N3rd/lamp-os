@@ -51,6 +51,18 @@ const handleTabChange = (tabId: string) => {
   router.push({ name: `lamp-${tabId}`, params: { id: route.params.id } })
 }
 
+async function goBackToLamps() {
+  await lampStore.cleanup()
+  await router.push({ name: 'lamps' })
+}
+
+async function retryConnect() {
+  const id = String(route.params.id)
+  const target = targetForLamp(id)
+  if (!target) return
+  await lampStore.setTarget(target)
+}
+
 // Map route name to tab ID
 const getTabIdFromRoute = (routeName: string | undefined): string => {
   if (!routeName) return 'home'
@@ -80,6 +92,22 @@ watch(
     </div>
 
     <div v-if="lampStore.loaded" class="container">
+      <!-- Top bar: back to lamps + lamp name -->
+      <div class="lamp-topbar">
+        <button class="lamp-back-btn" @click="goBackToLamps">
+          <span class="lamp-back-arrow">←</span>
+          <span>Lamps</span>
+        </button>
+        <span class="lamp-topbar-name">{{ lampStore.state.lamp?.name || 'Lamp' }}</span>
+        <span class="lamp-topbar-spacer"></span>
+      </div>
+
+      <!-- Connection error banner -->
+      <div v-if="lampStore.connectionError" class="connection-error-banner">
+        <span class="connection-error-text">{{ lampStore.connectionError }}</span>
+        <button class="connection-error-retry" @click="retryConnect">Retry</button>
+      </div>
+
       <main class="main-content">
         <!-- Tab Navigation -->
         <TopNavigation :tabs="tabs" :active-tab="lampStore.activeTab" @update:active-tab="handleTabChange" />
@@ -95,6 +123,7 @@ watch(
     <div v-else class="loading-container">
       <div class="loading-spinner"></div>
       <p>Connecting to lamp...</p>
+      <button class="loading-cancel-btn" @click="goBackToLamps">Back to Lamps</button>
     </div>
 
     <!-- Floating Save Button -->
@@ -171,6 +200,100 @@ watch(
 /* Tab Content Styles */
 .tab-content {
   min-height: 200px;
+}
+
+/* Top bar with back button + lamp name */
+.lamp-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+
+.lamp-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-background-mute);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  color: var(--brand-lamp-white);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 12px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.lamp-back-btn:hover {
+  background: var(--color-border-hover);
+}
+
+.lamp-back-arrow {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.lamp-topbar-name {
+  flex: 1;
+  text-align: center;
+  color: var(--brand-lamp-white);
+  font-weight: 600;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lamp-topbar-spacer {
+  /* Mirrors back button width so the name truly centers */
+  width: 72px;
+}
+
+/* Connection error banner */
+.connection-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.connection-error-text {
+  flex: 1;
+  color: var(--color-error);
+  font-size: 0.85rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.connection-error-retry {
+  background: transparent;
+  border: 1px solid var(--color-error);
+  border-radius: 8px;
+  color: var(--color-error);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.loading-cancel-btn {
+  margin-top: 16px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  color: var(--brand-fog-grey);
+  font-size: 0.85rem;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 /* Floating Save Button Styles */
