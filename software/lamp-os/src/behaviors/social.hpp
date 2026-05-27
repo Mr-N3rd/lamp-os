@@ -21,7 +21,6 @@ class SocialBehavior : public AnimatedBehavior {
   uint32_t nextAcknowledgeTimeMs = 0;
   Color foundLampColor;
   BluetoothComponent* bt;
-  std::vector<BluetoothLampRecord>* foundLamps;
   void draw() override;
 
   void control() override;

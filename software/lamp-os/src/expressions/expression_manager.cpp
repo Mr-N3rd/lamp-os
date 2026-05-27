@@ -124,4 +124,25 @@ bool ExpressionManager::triggerExpression(const std::string& type) {
   return triggered;
 }
 
+std::vector<Color> ExpressionManager::getExpressionColors(const std::string& type) const {
+  for (const auto& entry : expressions) {
+    if (entry.type == type && entry.expression) {
+      return entry.expression->getColors();
+    }
+  }
+  return {};
+}
+
+void ExpressionManager::reconfigureByType(const std::string& type,
+                                          const std::vector<Color>& colors,
+                                          uint32_t intervalMin,
+                                          uint32_t intervalMax,
+                                          ExpressionTarget target) {
+  for (auto& entry : expressions) {
+    if (entry.type == type && entry.expression) {
+      entry.expression->configure(colors, intervalMin, intervalMax, target);
+    }
+  }
+}
+
 }  // namespace lamp

@@ -4,8 +4,9 @@
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
-#include <WiFi.h>
+#include <esp_mac.h>
 
+#include "../../behaviors/fade_out.hpp"  // fadeOutRebootRequested flag
 #include "../../config/config.hpp"
 
 namespace ble_setup {
@@ -60,11 +61,12 @@ class FieldCallback : public NimBLECharacteristicCallbacks {
  */
 class ApplyCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (pendingSsid.length() == 0 && pendingName.length() == 0) return;
+    if (pendingName.length() == 0 && pendingPassword.length() == 0) return;
 
-    if (pendingSsid.length() > 0) {
-      s_config->lamp.homeModeSSID = std::string(pendingSsid.c_str());
-    }
+    // pendingSsid is a leftover from the WiFi era and is ignored. The
+    // setup-service SSID characteristic still exists for backward compat
+    // but writes to it are accepted-and-discarded.
+    (void)pendingSsid;
     if (pendingPassword.length() > 0) {
       s_config->lamp.password = std::string(pendingPassword.c_str());
     }
@@ -82,11 +84,10 @@ class ApplyCallback : public NimBLECharacteristicCallbacks {
     s_prefs->end();
 
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_setup] Config persisted, rebooting\n");
+    Serial.printf("[ble_setup] Config persisted, fading out for reboot\n");
 #endif
-
-    delay(200);
-    ESP.restart();
+    // FadeOutBehavior handles the fade + ESP.restart() on its last frame.
+    lamp::fadeOutRebootRequested = true;
   }
 };
 
@@ -121,10 +122,16 @@ void start(lamp::Config* config, Preferences* prefs) {
   service->createCharacteristic(CHAR_APPLY, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ApplyCallback());
 
-  // Info characteristic: read-only, exposes MAC address for device identity
+  // Info characteristic: read-only, exposes MAC address for device identity.
+  // Use esp_read_mac to avoid pulling in WiFi just for the MAC.
+  uint8_t mac[6] = {0};
+  esp_read_mac(mac, ESP_MAC_BT);
+  char macStr[32];
+  snprintf(macStr, sizeof(macStr), "mac=%02X:%02X:%02X:%02X:%02X:%02X",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   NimBLECharacteristic* info =
       service->createCharacteristic(CHAR_INFO, NIMBLE_PROPERTY::READ);
-  info->setValue((String("mac=") + WiFi.macAddress()).c_str());
+  info->setValue(macStr);
 
   service->start();
 

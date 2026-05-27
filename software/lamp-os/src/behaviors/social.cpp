@@ -22,18 +22,21 @@ void SocialBehavior::draw() {
 };
 
 void SocialBehavior::control() {
-  foundLamps = bt->getLamps();
+  // Snapshot the pool under the BluetoothPool mutex. Iterating a live
+  // pool while the NimBLE scan task mutates it on Core 0 was the cause of
+  // _invalid_pc_placeholder crashes (vector iterator invalidation).
+  std::vector<BluetoothLampRecord> foundLamps = bt->getLamps();
 
   if (animationState == STOPPED && millis() > nextAcknowledgeTimeMs) {
-    for (std::vector<BluetoothLampRecord>::reverse_iterator revIter =
-             foundLamps->rbegin();
-         revIter != foundLamps->rend(); ++revIter) {
-      if (!revIter->acknowledged) {
+    for (auto it = foundLamps.rbegin(); it != foundLamps.rend(); ++it) {
+      if (!it->acknowledged) {
 #ifdef LAMP_DEBUG
-        Serial.printf("Acknowledging %s\n", revIter->name.c_str());
+        Serial.printf("Acknowledging %s\n", it->name.c_str());
 #endif
-        revIter->acknowledged = true;
-        foundLampColor = revIter->baseColor;
+        // Persist the acknowledgement back to the live pool through the
+        // locked API; the local `it` is just a snapshot copy.
+        bt->acknowledgeLamp(it->name);
+        foundLampColor = it->baseColor;
         nextAcknowledgeTimeMs = millis() + LAMP_TIME_BETWEEN_ACKNOWLEDGEMENT_MS;
 
         playOnce();

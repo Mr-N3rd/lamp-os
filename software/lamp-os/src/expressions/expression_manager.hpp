@@ -72,6 +72,14 @@ class ExpressionManager {
    * @return true if expression was found and triggered, false otherwise
    */
   bool triggerExpression(const std::string& type);
+
+  std::vector<Color> getExpressionColors(const std::string& type) const;
+
+  void reconfigureByType(const std::string& type,
+                         const std::vector<Color>& colors,
+                         uint32_t intervalMin,
+                         uint32_t intervalMax,
+                         ExpressionTarget target);
 };
 
 }  // namespace lamp

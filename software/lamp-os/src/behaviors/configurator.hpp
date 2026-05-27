@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "../components/network/wifi.hpp"
 #include "../config/config_types.hpp"
 #include "../core/animated_behavior.hpp"
 #include "../util/color.hpp"

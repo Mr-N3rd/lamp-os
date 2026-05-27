@@ -1,13 +1,5 @@
-
 /**
- *  Lamp Bluetooth Management
- *
- *  Based on: NimBLE_Async_client Demo
- *
- *  Demonstrates asynchronous client operations.
- *
- *  Created: on November 4, 2024
- *      Author: H2zero
+ *  Lamp Bluetooth Management. Pure-BLE v1 — no WiFi, no stage mode, no ArtNet.
  */
 #include "./bluetooth.hpp"
 
@@ -17,19 +9,20 @@
 #include <string>
 #include <vector>
 
+#include "../../config/config.hpp"
 #include "../../util/color.hpp"
+#include "./ble_control.hpp"
+#include "./ble_setup.hpp"
 #include "./bluetooth_pool.hpp"
 
 namespace lamp {
 BluetoothPool lampBluetoothPool;
 
-class ScanCallbacks : public NimBLEScanCallbacks {
-  bool isStage(std::string data) {
-    return (data.length() > 1 &&
-            data[0] == (BLE_STAGE_MAGIC_NUMBER & 0xff) &&
-            data[1] == ((BLE_STAGE_MAGIC_NUMBER >> 8) & 0xff));
-  };
+// Set true by ble_control on GATT connect; suppresses scan-restart in
+// onScanEnd. Cleared on disconnect.
+volatile bool scanPausedForGattClient = false;
 
+class ScanCallbacks : public NimBLEScanCallbacks {
   bool isLamp(std::string data) {
     return (data.length() == 8 &&
             data[0] == (BLE_LAMP_MAGIC_NUMBER & 0xff) &&
@@ -37,77 +30,26 @@ class ScanCallbacks : public NimBLEScanCallbacks {
   };
 
   void onResult(const NimBLEAdvertisedDevice *advertisedDevice) override {
-    if (advertisedDevice->haveName() && advertisedDevice->haveManufacturerData()) {
-      std::string data = advertisedDevice->getManufacturerData();
+    if (!advertisedDevice->haveName() || !advertisedDevice->haveManufacturerData()) return;
+    if (advertisedDevice->getRSSI() <= BLE_MINIMUM_RSSI_VALUE) return;
+    std::string data = advertisedDevice->getManufacturerData();
+    if (!isLamp(data)) return;
 
-      if (advertisedDevice->getRSSI() > BLE_MINIMUM_RSSI_VALUE && isStage(data)) {
-        // parse mfg message
-        // 2 bytes - stage ID
-        // 26 bytes - 2 null terminated strings
-        String ssid;
-        String password;
-        int i = 2;
-        for (; i < data.size(); i++) {
-          if (data[i] == 0) {
-            i++;
-            break;
-          }
-          ssid.concat((char)data[i]);
-        }
-
-        for (; i < data.size(); i++) {
-          if (data[i] == 0) {
-            break;
-          }
-
-          password.concat((char)data[i]);
-        }
-
-        auto stage = BluetoothStageRecord(
-            advertisedDevice->getName(),
-            ssid,
-            password,
-            millis());
-
-        lampBluetoothPool.addOrUpdateStage(stage);
-      }
-
-      if (advertisedDevice->getRSSI() > BLE_MINIMUM_RSSI_VALUE && isLamp(data)) {
-        auto lamp = BluetoothLampRecord(
-            advertisedDevice->getName(),
-            Color(data[2], data[3], data[4], 0),
-            Color(data[5], data[6], data[7], 0),
-            millis());
-        lampBluetoothPool.addOrUpdateLamp(lamp);
-      }
-    }
+    auto lamp = BluetoothLampRecord(
+        advertisedDevice->getName(),
+        Color(data[2], data[3], data[4], 0),
+        Color(data[5], data[6], data[7], 0),
+        millis());
+    lampBluetoothPool.addOrUpdateLamp(lamp);
   };
 
   void onScanEnd(const NimBLEScanResults &results, int reason) override {
-#ifdef LAMP_DEBUG
-    std::vector<BluetoothLampRecord> lampsFound = lampBluetoothPool.getLamps();
-    int i = 0;
-    for (i = 0; i < lampsFound.size(); i++) {
-      Serial.printf("Lamp Name: %s time found: %ld - acknowledged: %d - ",
-                    lampsFound[i].name.c_str(),
-                    lampsFound[i].lastSeenTimeMs,
-                    lampsFound[i].acknowledged);
-      Serial.printf("color base: #%02x%02x%02x - ", lampsFound[i].baseColor.r, lampsFound[i].baseColor.g, lampsFound[i].baseColor.b);
-      Serial.printf("color shade: #%02x%02x%02x\n", lampsFound[i].shadeColor.r, lampsFound[i].shadeColor.g, lampsFound[i].shadeColor.b);
-    }
-
-    std::vector<BluetoothStageRecord> stagesFound = lampBluetoothPool.getStages();
-    for (i = 0; i < stagesFound.size(); i++) {
-      Serial.printf("Stage Name: %s time found: %ld - ssid: %s - pass: %s\n",
-                    stagesFound[i].name.c_str(),
-                    stagesFound[i].lastSeenTimeMs,
-                    stagesFound[i].ssid.c_str(),
-                    stagesFound[i].password.c_str());
-    }
-#endif
     lampBluetoothPool.pruneLamps();
-    lampBluetoothPool.pruneStages();
-    NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
+    // Skip restart while a phone is using the GATT control service.
+    // ble_control resumes the scan on disconnect.
+    if (!scanPausedForGattClient) {
+      NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
+    }
   }
 } scanCallbacks;
 
@@ -121,9 +63,6 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
   NimBLEDevice::init(name.substr(0, 12));
   NimBLEDevice::setPower(BLE_POWER_LEVEL);
 
-  // Scan for all bluetooth devices and filter the list
-  // for lamps by manufacturer ID. If a lamp is found, add
-  // it to the found lamps buffer
   NimBLEScan *pScan = NimBLEDevice::getScan();
   pScan->setScanCallbacks(&scanCallbacks);
   pScan->setInterval(BLE_GAP_ADV_INTERVAL_MS);
@@ -131,10 +70,6 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
   pScan->setActiveScan(true);
   pScan->start(BLE_GAP_SCAN_TIME_MS);
 
-  // Lamps advertise 8 bytes of manufacturer data to share colors
-  // 2 bytes: lamp identifier [Manufacturer ID block]
-  // 3 bytes: RGB base color (white omitted)
-  // 3 bytes: RGB shade color (white omitted)
   NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->setName(name);
   pAdvertising->enableScanResponse(true);
@@ -149,24 +84,46 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
       static_cast<unsigned char>(inShadeColor.b),
   };
   pAdvertising->setManufacturerData(data);
-  // Connectable mode UND lets the mobile app open a GATT connection to the
-  // control service (ble_control).
   pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_UND);
   pAdvertising->setMinInterval(BLE_ADVERTISING_INTERVAL_MIN);
   pAdvertising->setMaxInterval(BLE_ADVERTISING_INTERVAL_MAX);
-  // Do NOT start advertising here. NimBLE's GATT database is effectively
-  // frozen once advertising starts; services registered later (ble_setup,
-  // ble_control) won't be visible to clients. Advertising start is deferred
-  // to wifi.cpp::toApMode() after both GATT services are registered.
+  // Advertising start is deferred to activateGattServices() — NimBLE's
+  // GATT database is frozen once advertising starts.
   Serial.printf("[ble] advertising configured for name=%s (deferred start)\n",
                 name.c_str());
 };
 
-std::vector<BluetoothLampRecord> *BluetoothComponent::getLamps() {
-  return &lampBluetoothPool.lampPool;
+void BluetoothComponent::activateGattServices(Config* cfg, Preferences* prefs) {
+  // NimBLE's ble_gatts_mutable() returns false if any GAP procedure is
+  // active, and ble_gatts_add_svcs() silently drops services if so. Pause
+  // the central scan while registering services + starting advertising.
+  NimBLEScan* scan = NimBLEDevice::getScan();
+  bool wasScanning = scan->isScanning();
+  if (wasScanning) {
+    scan->stop();
+    Serial.printf("[ble] stopped central scan for GATT registration\n");
+  }
+
+  ble_setup::start(cfg, prefs);
+  ble_control::start(cfg, prefs);
+
+  NimBLEDevice::getServer()->start();
+  Serial.printf("[ble] server.start() done (GATT services registered)\n");
+
+  bool advStarted = NimBLEDevice::getAdvertising()->start();
+  Serial.printf("[ble] advertising started=%d\n", advStarted);
+
+  if (wasScanning) {
+    scan->start(0);  // 0 = continuous
+    Serial.printf("[ble] central scan restarted\n");
+  }
+}
+
+std::vector<BluetoothLampRecord> BluetoothComponent::getLamps() {
+  return lampBluetoothPool.getLamps();
 };
 
-std::vector<BluetoothStageRecord> *BluetoothComponent::getStages() {
-  return &lampBluetoothPool.stagePool;
+void BluetoothComponent::acknowledgeLamp(const std::string& name) {
+  lampBluetoothPool.acknowledgeLamp(name);
 };
 }  // namespace lamp

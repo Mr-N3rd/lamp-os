@@ -89,6 +89,8 @@ class Expression : public AnimatedBehavior {
    */
   Color getRandomColor();
 
+  const std::vector<Color>& getColors() const { return colors; }
+
 protected:
   /**
    * @brief Expression-specific setup when triggered (REQUIRED)

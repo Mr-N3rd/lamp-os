@@ -8,6 +8,13 @@
 #include "../../util/color.hpp"
 
 namespace lamp {
+BluetoothPool::BluetoothPool() {
+  // Created once at static-init / first use. The mutex protects every
+  // pool method from cross-task races (NimBLE host on Core 0 vs Arduino
+  // loop on Core 1).
+  mutex = xSemaphoreCreateMutex();
+}
+
 BluetoothLampRecord::BluetoothLampRecord(std::string inName,
                                          Color inBaseColor,
                                          Color inShadeColor,
@@ -17,14 +24,18 @@ BluetoothLampRecord::BluetoothLampRecord(std::string inName,
                                                                       lastSeenTimeMs(inLastSeenTimeMs) {};
 
 void BluetoothPool::addLamp(BluetoothLampRecord lamp) {
+  xSemaphoreTake(mutex, portMAX_DELAY);
   if (lampPool.size() < MAX_POOL_SIZE) {
     lampPool.push_back(lamp);
   }
+  xSemaphoreGive(mutex);
 };
 
 void BluetoothPool::addOrUpdateLamp(BluetoothLampRecord lamp) {
+  xSemaphoreTake(mutex, portMAX_DELAY);
   uint32_t timeNow = millis();
 
+  bool updated = false;
   for (size_t i = 0; i < lampPool.size(); i++) {
     if (lampPool[i].name == lamp.name) {
       lampPool[i].lastSeenTimeMs = timeNow;
@@ -32,19 +43,21 @@ void BluetoothPool::addOrUpdateLamp(BluetoothLampRecord lamp) {
       // only each lamp's boot-time colors, never their live ones.
       lampPool[i].baseColor  = lamp.baseColor;
       lampPool[i].shadeColor = lamp.shadeColor;
-      return;
+      updated = true;
+      break;
     }
   }
 
-  addLamp(lamp);
+  if (!updated && lampPool.size() < MAX_POOL_SIZE) {
+    lampPool.push_back(lamp);
+  }
+  xSemaphoreGive(mutex);
 };
 
 void BluetoothPool::pruneLamps() {
+  xSemaphoreTake(mutex, portMAX_DELAY);
   uint32_t timeNow = millis();
 
-  // Iterator-based erase: erase() returns the iterator to the next element,
-  // so we don't skip the post-erase shifted neighbor (which the index-based
-  // pattern did).
   auto it = lampPool.begin();
   while (it != lampPool.end()) {
     if (it->lastSeenTimeMs + LAMP_PRUNE_TIME_MS < timeNow) {
@@ -53,52 +66,25 @@ void BluetoothPool::pruneLamps() {
       ++it;
     }
   }
+  xSemaphoreGive(mutex);
 }
 
-std::vector<BluetoothLampRecord> BluetoothPool::getLamps() { return lampPool; };
-
-BluetoothStageRecord::BluetoothStageRecord(std::string inName,
-                                           String inSsid,
-                                           String inPassword,
-                                           uint32_t inLastSeenTimeMs) {
-  name = inName;
-  ssid = inSsid;
-  password = inPassword;
-  lastSeenTimeMs = inLastSeenTimeMs;
+std::vector<BluetoothLampRecord> BluetoothPool::getLamps() {
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  std::vector<BluetoothLampRecord> snapshot = lampPool;  // copy under lock
+  xSemaphoreGive(mutex);
+  return snapshot;
 };
 
-void BluetoothPool::addStage(BluetoothStageRecord stage) {
-  if (stagePool.size() < MAX_POOL_SIZE) {
-    stagePool.push_back(stage);
-  }
-};
-
-void BluetoothPool::addOrUpdateStage(BluetoothStageRecord stage) {
-  uint32_t timeNow = millis();
-
-  for (int i = 0; i < stagePool.size(); i++) {
-    if (stagePool[i].name == stage.name) {
-      stagePool[i].lastSeenTimeMs = timeNow;
-      return;
+void BluetoothPool::acknowledgeLamp(const std::string& name) {
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  for (auto& r : lampPool) {
+    if (r.name == name) {
+      r.acknowledged = true;
+      break;
     }
   }
-
-  addStage(stage);
+  xSemaphoreGive(mutex);
 };
 
-void BluetoothPool::pruneStages() {
-  uint32_t timeNow = millis();
-
-  // Iterator-based erase — see pruneLamps for rationale.
-  auto it = stagePool.begin();
-  while (it != stagePool.end()) {
-    if (it->lastSeenTimeMs + STAGE_PRUNE_TIME_MS < timeNow) {
-      it = stagePool.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-std::vector<BluetoothStageRecord> BluetoothPool::getStages() { return stagePool; };
 }  // namespace lamp

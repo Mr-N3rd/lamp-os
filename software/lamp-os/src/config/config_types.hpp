@@ -26,22 +26,15 @@ class KnockoutPixel {
 
 /**
  * @brief Global lamp settings to control initialization
- * @property name - a name that can be used to identify this lamp. it can be up
- * to 12 characters long
+ * @property name - a name that can be used to identify this lamp. it can be up to 12 characters long
  * @property brightness - global brightness level for the lamp as a percentage
- * @property homeMode - if true it will disable some animations while at home
- * @property homeModeSSID - SSID to detect for home mode activation
- * @property homeModeBrightness - brightness level to use when home mode is active
- * @property password - password to protect lamp API and web access
+ * @property password - password to protect lamp BLE control surface
  * @property advancedEnabled - if true, advanced settings UI is unlocked
  */
 class LampSettings {
  public:
   std::string name = "standard";
   uint8_t brightness = 100;
-  bool homeMode = false;
-  std::string homeModeSSID = "";
-  uint8_t homeModeBrightness = 80;
   std::string password = "";
   bool advancedEnabled = false;
 };

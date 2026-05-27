@@ -9,7 +9,23 @@
 #include <string>
 
 #include "../../config/config.hpp"
+#include "../../behaviors/configurator.hpp"
+#include "../../behaviors/fade_out.hpp"  // fadeOutRebootRequested flag
+#include "../../util/color.hpp"
 #include "../../lamps/standard_lamp.hpp"
+#include "./bluetooth.hpp"  // for lamp::scanPausedForGattClient + BLE_GAP_SCAN_TIME_MS
+
+// Defined in standard_lamp.cpp. Each BLE callback does ONLY a fixed-size
+// byte copy into a pending slot — zero heap allocation on Core 0. The loop
+// task on Core 1 drains the slots and does all heap work (JSON parse,
+// vector build, gradient construction, timestamp updates). This restores
+// the single-core memory pattern the lamp used to have when the only
+// transport was AsyncTCP+WebSocket (everything ran on Core 1).
+void postPendingBrightness(int8_t level);
+void postPendingShadeColorsJson(const char* data, size_t len);
+void postPendingBaseColorsJson(const char* data, size_t len);
+void postPendingKnockout(uint8_t pixel, uint8_t brightness);
+static constexpr size_t MAX_PENDING_JSON = 256;
 
 namespace ble_control {
 
@@ -50,11 +66,22 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     s_connAuth[handle] = false;
 
     // Request a higher MTU so color JSON and settings blob fit in fewer packets.
-    server->setDataLen(handle, TARGET_MTU);
+    // BT Core spec caps LL data length (DLE) at 251 bytes; passing TARGET_MTU
+    // (=512) here makes NimBLE return BLE_HS_EINVAL ("Set data length error: 3"
+    // in the serial log). MTU max is 517, so setMTU still uses TARGET_MTU.
+    server->setDataLen(handle, 251);
     NimBLEDevice::setMTU(TARGET_MTU);
 
+    // Pause the lamp's BLE central scan while a phone is connected. The
+    // constant scan-callback churn on the NimBLE host task contends with
+    // high-rate write-without-response traffic and was crashing the lamp
+    // under sustained color drag. The flag also makes onScanEnd skip its
+    // auto-restart, so the scan stays down until disconnect.
+    lamp::scanPausedForGattClient = true;
+    NimBLEDevice::getScan()->stop();
+
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] Client connected, handle=%u\n", handle);
+    Serial.printf("[ble_control] Client connected, handle=%u (scan paused)\n", handle);
 #endif
   }
 
@@ -62,8 +89,12 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     uint16_t handle = connInfo.getConnHandle();
     s_connAuth.erase(handle);
 
+    // Resume the central scan now that the phone is gone.
+    lamp::scanPausedForGattClient = false;
+    NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
+
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] Client disconnected, handle=%u reason=%d\n", handle, reason);
+    Serial.printf("[ble_control] Client disconnected, handle=%u reason=%d (scan resumed)\n", handle, reason);
 #endif
   }
 };
@@ -92,25 +123,15 @@ class AuthCallback : public NimBLECharacteristicCallbacks {
 
 class BrightnessCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) {
-#ifdef LAMP_DEBUG
-      Serial.printf("[ble_control] brightness: write rejected (not authed)\n");
-#endif
-      return;
-    }
-
+    if (!isAuthed(connInfo.getConnHandle())) return;
     std::string val = c->getValue();
     if (val.empty()) return;
-
     uint8_t level = static_cast<uint8_t>(val[0]);
     if (level > 100) level = 100;
-
-    JsonDocument doc;
-    doc["a"] = "bright";
-    doc["v"] = level;
-    dispatchLampAction(doc, millis());
-
-    notifyStateChange();
+    // Zero-alloc on Core 0. The drain in standard_lamp.cpp::loop() reads
+    // pendingBrightness on Core 1, updates config + timestamps + strip
+    // brightness all on Core 1.
+    postPendingBrightness(static_cast<int8_t>(level & 0x7F));
   }
 };
 
@@ -121,24 +142,10 @@ class BrightnessCallback : public NimBLECharacteristicCallbacks {
 class ShadeColorsCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     if (!isAuthed(connInfo.getConnHandle())) return;
-
-    std::string json = c->getValue();
-    if (json.empty()) return;
-
-    // Parse the incoming color array and forward as an action document
-    JsonDocument colors;
-    DeserializationError err = deserializeJson(colors, json);
-    if (err) {
-#ifdef LAMP_DEBUG
-      Serial.printf("[ble_control] shade_colors: bad JSON: %s\n", err.c_str());
-#endif
-      return;
-    }
-
-    JsonDocument doc;
-    doc["a"] = "shade";
-    doc["c"] = colors.as<JsonArray>();
-    dispatchLampAction(doc, millis());
+    std::string val = c->getValue();
+    if (val.empty() || val.size() > MAX_PENDING_JSON) return;
+    // Pure memcpy. The loop drain parses the JSON on Core 1.
+    postPendingShadeColorsJson(val.data(), val.size());
   }
 };
 
@@ -149,23 +156,9 @@ class ShadeColorsCallback : public NimBLECharacteristicCallbacks {
 class BaseColorsCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     if (!isAuthed(connInfo.getConnHandle())) return;
-
-    std::string json = c->getValue();
-    if (json.empty()) return;
-
-    JsonDocument colors;
-    DeserializationError err = deserializeJson(colors, json);
-    if (err) {
-#ifdef LAMP_DEBUG
-      Serial.printf("[ble_control] base_colors: bad JSON: %s\n", err.c_str());
-#endif
-      return;
-    }
-
-    JsonDocument doc;
-    doc["a"] = "base";
-    doc["c"] = colors.as<JsonArray>();
-    dispatchLampAction(doc, millis());
+    std::string val = c->getValue();
+    if (val.empty() || val.size() > MAX_PENDING_JSON) return;
+    postPendingBaseColorsJson(val.data(), val.size());
   }
 };
 
@@ -176,40 +169,41 @@ class BaseColorsCallback : public NimBLECharacteristicCallbacks {
 class BaseKnockoutCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     if (!isAuthed(connInfo.getConnHandle())) return;
-
     std::string val = c->getValue();
     if (val.size() < 2) return;
-
     uint8_t pixelIndex = static_cast<uint8_t>(val[0]);
     uint8_t brightness = static_cast<uint8_t>(val[1]);
     if (brightness > 100) brightness = 100;
-
-    JsonDocument doc;
-    doc["a"] = "knockout";
-    doc["p"] = pixelIndex;
-    doc["b"] = brightness;
-    dispatchLampAction(doc, millis());
+    postPendingKnockout(pixelIndex, brightness);
   }
 };
-
-// ---------------------------------------------------------------------------
-// Expression test — write-with-response
-//   Non-empty string  → start preview of that expression type.
-//   Empty string or "complete" → end preview (restore configurator colors).
-// ---------------------------------------------------------------------------
 
 class ExpressionTestCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     if (!isAuthed(connInfo.getConnHandle())) return;
 
-    std::string type = c->getValue();
+    std::string value = c->getValue();
+    if (value.empty()) {
+      JsonDocument doc;
+      doc["a"] = "test_expression_complete";
+      dispatchLampAction(doc, millis());
+      return;
+    }
 
     JsonDocument doc;
-    if (type.empty() || type == "complete") {
+    DeserializationError err = deserializeJson(doc, value.c_str(), value.size());
+    const char* action = err ? nullptr : doc["a"].as<const char*>();
+    if (action && *action) {
+      dispatchLampAction(doc, millis());
+      return;
+    }
+
+    doc.clear();
+    if (value == "complete") {
       doc["a"] = "test_expression_complete";
     } else {
       doc["a"] = "test_expression";
-      doc["type"] = type;
+      doc["type"] = value;
     }
     dispatchLampAction(doc, millis());
   }
@@ -248,11 +242,13 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
 
     if (written > 0) {
 #ifdef LAMP_DEBUG
-      Serial.printf("[ble_control] settings_blob: persisted %zu bytes, rebooting\n", written);
+      Serial.printf("[ble_control] settings_blob: persisted %zu bytes, fading out for reboot\n", written);
 #endif
       notifyStateChange();
-      delay(200);
-      ESP.restart();
+      // Signal FadeOutBehavior to play the fade-to-black animation and then
+      // call ESP.restart() on its last frame. Better UX than abrupt reboot,
+      // and gives any in-flight GATT ack time to land.
+      lamp::fadeOutRebootRequested = true;
     } else {
 #ifdef LAMP_DEBUG
       Serial.printf("[ble_control] settings_blob: putString failed\n");
@@ -301,23 +297,14 @@ void start(lamp::Config* config, Preferences* prefs) {
   s_service->createCharacteristic(CHAR_AUTH, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new AuthCallback());
 
-  // Brightness — write-without-response for minimum latency during drag
-  s_service->createCharacteristic(CHAR_BRIGHTNESS, NIMBLE_PROPERTY::WRITE_NR)
+  s_service->createCharacteristic(CHAR_BRIGHTNESS, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new BrightnessCallback());
-
-  // Shade colors — write-without-response
-  s_service->createCharacteristic(CHAR_SHADE_COLORS, NIMBLE_PROPERTY::WRITE_NR)
+  s_service->createCharacteristic(CHAR_SHADE_COLORS, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ShadeColorsCallback());
-
-  // Base colors — write-without-response
-  s_service->createCharacteristic(CHAR_BASE_COLORS, NIMBLE_PROPERTY::WRITE_NR)
+  s_service->createCharacteristic(CHAR_BASE_COLORS, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new BaseColorsCallback());
-
-  // Base knockout — write-without-response
-  s_service->createCharacteristic(CHAR_BASE_KNOCKOUT, NIMBLE_PROPERTY::WRITE_NR)
+  s_service->createCharacteristic(CHAR_BASE_KNOCKOUT, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new BaseKnockoutCallback());
-
-  // Expression test — write-with-response
   s_service->createCharacteristic(CHAR_EXPRESSION_TEST, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ExpressionTestCallback());
 

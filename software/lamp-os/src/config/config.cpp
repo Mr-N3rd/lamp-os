@@ -28,9 +28,6 @@ Config::Config(Preferences* inPrefs) {
   JsonObject lampNode = doc["lamp"];
   lamp.name = std::string(lampNode["name"] | "standard");
   lamp.brightness = lampNode["brightness"] | 100;
-  lamp.homeMode = lampNode["homeMode"] | false;
-  lamp.homeModeSSID = std::string(lampNode["homeModeSSID"] | "");
-  lamp.homeModeBrightness = lampNode["homeModeBrightness"] | 80;
   std::string password = std::string(lampNode["password"] | "");
   if (!password.empty()) {
     lamp.password = password;
@@ -130,6 +127,22 @@ Config::Config(Preferences* inPrefs) {
       expressions.expressions.push_back(expr);
     }
   }
+
+  // Ensure both color vectors have at least one entry. Empty NVS (or NVS
+  // erased / corrupted) returns "{}" with no colors arrays; downstream code
+  // (e.g. bt.begin in standard_lamp.cpp uses base.colors[ac] and shade.colors[0])
+  // calls operator[] on a std::vector, which is UB on empty and crashes boot
+  // with an invalid-PC fault. Default to a visible white so the lamp at least
+  // boots and the user can adjust colors via the app.
+  if (base.colors.empty()) {
+    base.colors.push_back(Color{255, 255, 255, 0});
+  }
+  if (shade.colors.empty()) {
+    shade.colors.push_back(Color{255, 255, 255, 0});
+  }
+  if (base.ac >= base.colors.size()) {
+    base.ac = 0;
+  }
 };
 
 JsonDocument Config::asJsonDocument() {
@@ -138,9 +151,6 @@ JsonDocument Config::asJsonDocument() {
   JsonObject lampNode = doc["lamp"].to<JsonObject>();
   lampNode["name"] = lamp.name;
   lampNode["brightness"] = lamp.brightness;
-  lampNode["homeMode"] = lamp.homeMode;
-  lampNode["homeModeSSID"] = lamp.homeModeSSID;
-  lampNode["homeModeBrightness"] = lamp.homeModeBrightness;
   if (!lamp.password.empty()) {
     lampNode["password"] = lamp.password;
   }
