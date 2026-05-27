@@ -126,6 +126,20 @@ watch(
       <button class="loading-cancel-btn" @click="goBackToLamps">Back to Lamps</button>
     </div>
 
+    <!-- Debug console — surfaces the BLE init flow step by step -->
+    <details class="lamp-debug-panel" open>
+      <summary>Debug ({{ lampStore.debugLog.length }} steps, wsConnected={{ lampStore.wsConnected }}, loaded={{ lampStore.loaded }})</summary>
+      <div v-if="lampStore.connectionError" class="lamp-debug-error">
+        <strong>error:</strong> {{ lampStore.connectionError }}
+      </div>
+      <ul class="lamp-debug-list">
+        <li v-for="(entry, i) in lampStore.debugLog" :key="i">
+          <span class="lamp-debug-time">+{{ ((entry.t - lampStore.debugLog[0].t) / 1000).toFixed(2) }}s</span>
+          <span class="lamp-debug-msg">{{ entry.msg }}</span>
+        </li>
+      </ul>
+    </details>
+
     <!-- Floating Save Button -->
     <div v-if="lampStore.loaded" class="floating-save-container">
       <button
@@ -294,6 +308,58 @@ watch(
   padding: 8px 16px;
   cursor: pointer;
   font-family: inherit;
+}
+
+/* Debug console */
+.lamp-debug-panel {
+  margin: 16px 4px 80px;
+  padding: 10px 14px;
+  background: var(--color-background-mute);
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.lamp-debug-panel summary {
+  cursor: pointer;
+  color: var(--brand-lamp-white);
+  font-weight: 600;
+  font-family: inherit;
+  word-break: break-all;
+}
+.lamp-debug-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid var(--color-error);
+  border-radius: 6px;
+  color: var(--color-error);
+  word-break: break-word;
+}
+.lamp-debug-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lamp-debug-list li {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 4px;
+}
+.lamp-debug-list li:last-child { border-bottom: none; }
+.lamp-debug-time {
+  color: var(--brand-slate-grey);
+  flex-shrink: 0;
+  min-width: 50px;
+}
+.lamp-debug-msg {
+  flex: 1;
+  word-break: break-word;
 }
 
 /* Floating Save Button Styles */

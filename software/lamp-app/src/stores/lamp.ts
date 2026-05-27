@@ -102,6 +102,15 @@ export const useLampStore = defineStore('lamp', () => {
   const wsConnected = ref(false)
   const connectionError = ref<string | null>(null)
 
+  // In-app debug log — rolling buffer of init/connect steps so user can see
+  // what's happening without chrome://inspect. Keep last 30 entries.
+  const debugLog = ref<Array<{ t: number; msg: string }>>([])
+  function dlog(msg: string) {
+    const entry = { t: Date.now(), msg }
+    debugLog.value = [...debugLog.value, entry].slice(-30)
+    console.log('[lamp]', msg)
+  }
+
   // Computed
   const hasChanges = computed(() => {
     return JSON.stringify(state.value) !== originalState.value
@@ -383,9 +392,15 @@ export const useLampStore = defineStore('lamp', () => {
   const initialize = async (newTarget: LampTarget) => {
     target.value = newTarget
     connectionError.value = null
+    dlog(`initialize: target=${newTarget.deviceId} password=${newTarget.password ? '<set>' : '<none>'}`)
 
     // Make sure no stray LE scan is fighting with our GATT connect
-    try { await BleClient.stopLEScan() } catch { /* ignore */ }
+    try {
+      await BleClient.stopLEScan()
+      dlog('stopLEScan OK')
+    } catch (e) {
+      dlog(`stopLEScan threw: ${e instanceof Error ? e.message : String(e)}`)
+    }
 
     // Connect with one automatic retry on transient failure (Android in
     // particular often needs a second attempt right after a scan).
@@ -393,21 +408,23 @@ export const useLampStore = defineStore('lamp', () => {
     let lastErr: unknown = null
     for (let attempt = 1; attempt <= 2 && !connected; attempt++) {
       try {
+        dlog(`BleClient.connect attempt ${attempt}…`)
         await BleClient.connect(newTarget.deviceId, () => {
           wsConnected.value = false
-          console.log('[lamp] BLE disconnected')
+          dlog('BLE disconnected (callback fired)')
         })
         connected = true
+        dlog(`BleClient.connect attempt ${attempt} OK`)
       } catch (err) {
         lastErr = err
-        console.warn(`[lamp] BleClient.connect attempt ${attempt} failed:`, err)
+        dlog(`BleClient.connect attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`)
         if (attempt < 2) await new Promise((r) => setTimeout(r, 1000))
       }
     }
     if (!connected) {
       const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
       connectionError.value = `Couldn't connect to lamp: ${msg}`
-      console.warn('[lamp] BleClient.connect gave up:', lastErr)
+      dlog(`giving up: ${msg}`)
       loaded.value = true
       return
     }
@@ -415,43 +432,51 @@ export const useLampStore = defineStore('lamp', () => {
     // Best-effort high-priority connection (Android only — reduces GATT latency)
     try {
       await BleClient.requestConnectionPriority(newTarget.deviceId, ConnectionPriority.CONNECTION_PRIORITY_HIGH)
-    } catch {
-      // Not available on all platforms/plugin versions — ignore
+      dlog('requestConnectionPriority HIGH OK')
+    } catch (e) {
+      dlog(`requestConnectionPriority skipped: ${e instanceof Error ? e.message : String(e)}`)
     }
 
     // Read current settings
     try {
+      dlog('readSettingsBlob…')
       const json = await readSettingsBlob(newTarget.deviceId)
+      dlog(`readSettingsBlob OK (${json.length} bytes)`)
       const data = JSON.parse(json) as LampState
       state.value = data
       originalState.value = JSON.stringify(data)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       connectionError.value = `Couldn't read lamp settings: ${msg}`
-      console.warn('[lamp] readSettingsBlob failed:', err)
+      dlog(`readSettingsBlob failed: ${msg}`)
     }
 
     // Auth if password provided and lamp has password set
     if (newTarget.password && state.value.lamp?.password) {
       try {
+        dlog('authConnection…')
         await authConnection(newTarget.deviceId, newTarget.password)
+        dlog('authConnection OK')
       } catch (err) {
-        console.warn('[lamp] authConnection failed:', err)
+        dlog(`authConnection failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
 
     // Subscribe to state notifications
     try {
+      dlog('subscribeStateNotify…')
       await subscribeStateNotify(newTarget.deviceId, () => {
         void refreshState()
       })
+      dlog('subscribeStateNotify OK')
     } catch (err) {
-      console.warn('[lamp] subscribeStateNotify failed:', err)
+      dlog(`subscribeStateNotify failed: ${err instanceof Error ? err.message : String(err)}`)
     }
 
     wsConnected.value = true
     loaded.value = true
     saving.value = false
+    dlog('initialize complete; wsConnected=true loaded=true')
   }
 
   // ── Cleanup ───────────────────────────────────────────────────────────────────
@@ -487,6 +512,7 @@ export const useLampStore = defineStore('lamp', () => {
     saving,
     wsConnected,
     connectionError,
+    debugLog,
     disabled,
     hasChanges,
     activeTab,
