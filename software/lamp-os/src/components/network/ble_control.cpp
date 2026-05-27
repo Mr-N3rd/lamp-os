@@ -328,16 +328,11 @@ void start(lamp::Config* config, Preferences* prefs) {
 
   s_service->start();
 
-  // Add the control service UUID to advertising so the app can filter by it.
-  // BluetoothComponent::begin() already started advertising in non-connectable
-  // mode (setConnectableMode(0)) for the color-sync beacon. NimBLE only applies
-  // mode changes when start() is called on a *stopped* advertiser, so we must
-  // stop, reconfigure, and restart for the connectable mode to take effect.
-  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-  adv->stop();
-  adv->addServiceUUID(SERVICE_UUID);
-  adv->setConnectableMode(BLE_GAP_CONN_MODE_UND);
-  adv->start();
+  // Don't touch advertising — BluetoothComponent::begin() already configures
+  // the advertiser as connectable (BLE_GAP_CONN_MODE_UND) with the color-sync
+  // manufacturer data the app scans for. The control GATT service attaches to
+  // the GATT server and is discovered AFTER connection, not advertised in the
+  // packet (a 128-bit service UUID would overflow the 31-byte adv limit).
 
   s_running = true;
 

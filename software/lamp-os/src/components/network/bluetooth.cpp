@@ -149,7 +149,9 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
       static_cast<unsigned char>(inShadeColor.b),
   };
   pAdvertising->setManufacturerData(data);
-  pAdvertising->setConnectableMode(0);
+  // Connectable mode UND lets the mobile app open a GATT connection to the
+  // control service (ble_control). The color-sync beacon still works the same.
+  pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_UND);
   pAdvertising->setMinInterval(BLE_ADVERTISING_INTERVAL_MIN);
   pAdvertising->setMaxInterval(BLE_ADVERTISING_INTERVAL_MAX);
   pAdvertising->start();
