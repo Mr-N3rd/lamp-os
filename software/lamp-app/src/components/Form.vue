@@ -27,6 +27,9 @@ const emit = defineEmits<{
   'update:modelValue': [value: FormValues, meta: MetaValues]
   submit: [values: FormValues, meta: MetaValues]
   meta: [fieldName: string, value: unknown]
+  preview: [fieldName: string, value: string]
+  open: [fieldName: string]
+  close: [fieldName: string]
 }>()
 
 const slots = useSlots()
@@ -455,6 +458,9 @@ defineExpose({
             :model-value="formValues[field.name]"
             @update:model-value="(value: unknown) => updateFieldValue(field.name!, value)"
             @meta="(value: unknown) => handleFieldMeta(field.name!, value)"
+            @preview="(value: string) => emit('preview', field.name!, value)"
+            @open="() => emit('open', field.name!)"
+            @close="() => emit('close', field.name!)"
             v-bind="field.props"
             :options="field.type === 'select' || field.type === 'segmented-buttons' ? field.options : undefined"
             :disabled="disabled || field.props?.disabled"

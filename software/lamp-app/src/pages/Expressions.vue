@@ -212,6 +212,8 @@ const handleColorPreviewEnd = (fieldName: string) => {
             :fields="expr.fields"
             :model-value="getExpressionValues(expr.index)"
             @update:model-value="(values) => updateExpressionValues(expr.index, values)"
+            @preview="(fieldName: string, value: string) => handleColorPreview(expr.index, fieldName, value)"
+            @close="(fieldName: string) => handleColorPreviewEnd(fieldName)"
             :show-button="false"
             :disabled="lampStore.disabled"
           />

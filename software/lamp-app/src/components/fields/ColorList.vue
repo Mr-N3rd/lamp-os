@@ -14,6 +14,9 @@
           <ColorPicker
             v-model="localColors[localColors.length - 1 - index]"
             @update:model-value="updateColor(localColors.length - 1 - index, $event)"
+            @preview="(v: string) => emit('preview', v)"
+            @open="() => emit('open')"
+            @close="() => emit('close')"
             :disabled="disabled"
           />
 
@@ -101,6 +104,9 @@ const maxColorsComputed = computed(() => props.max ?? props.maxColors)
 const emit = defineEmits<{
   'update:modelValue': [value: string[]]
   'meta': [value: { activeColor: number }]
+  'preview': [value: string]
+  'open': []
+  'close': []
 }>()
 
 const localColors = ref<string[]>([...props.modelValue])

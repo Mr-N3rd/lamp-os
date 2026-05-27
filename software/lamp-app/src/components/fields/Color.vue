@@ -121,17 +121,12 @@ const openDialog = () => {
   if (props.disabled) return
   isDialogOpen.value = true
   emit('open')
-  // Store the original color before making changes
   originalColor.value = props.modelValue || '#FF0000FF'
-  // Initialize the hex input with the current model value
   hexInput.value = props.modelValue || '#FF0000FF'
-  // Parse the hex value to update sliders without emitting
   parseHexwwValue(props.modelValue)
+  emit('preview', hexwwValue.value)
 
-  // Prevent body scroll
   document.body.style.overflow = 'hidden'
-
-  // Add escape key listener
   document.addEventListener('keydown', handleEscapeKey)
 }
 
