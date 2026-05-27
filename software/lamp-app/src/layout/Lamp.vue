@@ -127,7 +127,7 @@ watch(
     </div>
 
     <!-- Debug console — surfaces the BLE init flow step by step -->
-    <details class="lamp-debug-panel" open>
+    <details class="lamp-debug-panel">
       <summary>Debug ({{ lampStore.debugLog.length }} steps, wsConnected={{ lampStore.wsConnected }}, loaded={{ lampStore.loaded }})</summary>
       <div v-if="lampStore.connectionError" class="lamp-debug-error">
         <strong>error:</strong> {{ lampStore.connectionError }}

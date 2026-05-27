@@ -369,6 +369,10 @@ export const useLampStore = defineStore('lamp', () => {
       const savedTarget = { ...target.value }
       setTimeout(async () => {
         try {
+          // Tear down the stale GATT handle on Android before reconnecting.
+          // Without this the OS keeps the old (now-broken) BluetoothGatt
+          // object and the subsequent connect fails or hits a stale cache.
+          await cleanup()
           await initialize(savedTarget)
         } catch (err) {
           console.warn('[lamp] post-save reconnect failed:', err)
@@ -470,8 +474,10 @@ export const useLampStore = defineStore('lamp', () => {
       dlog(`readSettingsBlob failed: ${msg}`)
     }
 
-    // Auth if password provided and lamp has password set
-    if (newTarget.password && state.value.lamp?.password) {
+    // Auth if the user gave us a password. We trust the inventory entry — if
+    // the lamp redacts the password in its settings JSON for security (future
+    // change), we shouldn't gate auth on what's in state.value.lamp.password.
+    if (newTarget.password) {
       try {
         dlog('authConnection…')
         await authConnection(newTarget.deviceId, newTarget.password)

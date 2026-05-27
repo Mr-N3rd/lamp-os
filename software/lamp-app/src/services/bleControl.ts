@@ -99,10 +99,12 @@ export async function writeExpressionTest(deviceId: string, type: string): Promi
 
 /**
  * End expression preview (restore configurator colors). write-with-response.
- * Sends empty string — firmware treats empty or "complete" as test_expression_complete.
+ * Firmware treats empty or "complete" as test_expression_complete. We send
+ * "complete" because some BLE stacks (iOS Core Bluetooth, certain Android
+ * builds) silently drop ATT WRITE requests with 0-byte payloads.
  */
 export async function writeExpressionComplete(deviceId: string): Promise<void> {
-  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_EXPRESSION_TEST, textToDataView(''))
+  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_EXPRESSION_TEST, textToDataView('complete'))
 }
 
 // ── Settings blob ─────────────────────────────────────────────────────────────

@@ -166,7 +166,7 @@ async function connectLamp() {
           </template>
 
           <!-- Debug — raw BLE scan results -->
-          <details v-if="debug" class="scan-debug-panel" open>
+          <details v-if="debug" class="scan-debug-panel">
             <summary>Debug: BLE scan ({{ debug.rawBleResults.length }} ads seen)</summary>
             <div v-if="debug.bleError" class="scan-debug-error">
               <strong>BLE error:</strong> {{ debug.bleError }}
