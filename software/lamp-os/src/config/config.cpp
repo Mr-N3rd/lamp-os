@@ -128,6 +128,14 @@ Config::Config(Preferences* inPrefs) {
     }
   }
 
+  // Load home mode
+  JsonObject homeModeNode = doc["homeMode"];
+  if (homeModeNode) {
+    homeMode.ssid = std::string(homeModeNode["ssid"] | "");
+    homeMode.password = std::string(homeModeNode["password"] | "");
+    homeMode.brightness = homeModeNode["brightness"] | 60;
+  }
+
   // Ensure both color vectors have at least one entry. Empty NVS (or NVS
   // erased / corrupted) returns "{}" with no colors arrays; downstream code
   // (e.g. bt.begin in standard_lamp.cpp uses base.colors[ac] and shade.colors[0])
@@ -210,7 +218,97 @@ JsonDocument Config::asJsonDocument() {
     }
   }
 
+  JsonObject homeModeNode = doc["homeMode"].to<JsonObject>();
+  homeModeNode["ssid"] = homeMode.ssid;
+  if (!homeMode.password.empty()) {
+    homeModeNode["password"] = homeMode.password;
+  }
+  homeModeNode["brightness"] = homeMode.brightness;
+
   return doc;
 };
+
+String Config::asLampJson() {
+  JsonDocument doc;
+  doc["name"] = lamp.name;
+  doc["brightness"] = lamp.brightness;
+  if (!lamp.password.empty()) {
+    doc["password"] = lamp.password;
+  }
+  doc["advancedEnabled"] = lamp.advancedEnabled;
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+String Config::asBaseJson() {
+  JsonDocument doc;
+  doc["px"] = base.px;
+  doc["ac"] = base.ac;
+  doc["bpp"] = base.bpp;
+  JsonArray colorsNode = doc["colors"].to<JsonArray>();
+  for (size_t i = 0; i < base.colors.size(); i++) {
+    colorsNode.add(colorToHexString(base.colors[i]));
+  }
+  JsonArray knockoutNode = doc["knockout"].to<JsonArray>();
+  for (size_t i = 0; i < base.knockoutPixels.size(); i++) {
+    int value = base.knockoutPixels[i];
+    if (value == 100) continue;  // omit defaults
+    JsonObject entry = knockoutNode.add<JsonObject>();
+    entry["p"] = i;
+    entry["b"] = value;
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+String Config::asShadeJson() {
+  JsonDocument doc;
+  doc["px"] = shade.px;
+  doc["bpp"] = shade.bpp;
+  JsonArray colorsNode = doc["colors"].to<JsonArray>();
+  for (size_t i = 0; i < shade.colors.size(); i++) {
+    colorsNode.add(colorToHexString(shade.colors[i]));
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+String Config::asExpressionsJson() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  for (const auto& expr : expressions.expressions) {
+    JsonObject exprNode = arr.add<JsonObject>();
+    exprNode["type"] = expr.type;
+    exprNode["enabled"] = expr.enabled;
+    exprNode["intervalMin"] = expr.intervalMin;
+    exprNode["intervalMax"] = expr.intervalMax;
+    exprNode["target"] = expr.target;
+    for (const auto& param : expr.parameters) {
+      exprNode[param.first] = param.second;
+    }
+    JsonArray colorsNode = exprNode["colors"].to<JsonArray>();
+    for (const auto& color : expr.colors) {
+      colorsNode.add(colorToHexString(color));
+    }
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+String Config::asHomeModeJson() {
+  JsonDocument doc;
+  doc["ssid"] = homeMode.ssid;
+  if (!homeMode.password.empty()) {
+    doc["password"] = homeMode.password;
+  }
+  doc["brightness"] = homeMode.brightness;
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
 
 }  // namespace lamp

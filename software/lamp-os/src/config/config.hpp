@@ -23,6 +23,7 @@ class Config {
   BaseSettings base;
   ShadeSettings shade;
   ExpressionSettings expressions;
+  HomeModeSettings homeMode;
 
   Config() {};
 
@@ -37,6 +38,15 @@ class Config {
    * @return a JsonDocument to serialize
    */
   JsonDocument asJsonDocument();
+
+  // Per-section serializers — each returns a String of just the JSON for
+  // that section. Used by the split CHAR_*_SECTION characteristics so each
+  // stays well under MTU.
+  String asLampJson();
+  String asBaseJson();
+  String asShadeJson();
+  String asExpressionsJson();
+  String asHomeModeJson();
 };
 }  // namespace lamp
 

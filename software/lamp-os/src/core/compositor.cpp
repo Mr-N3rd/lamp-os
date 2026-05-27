@@ -91,4 +91,27 @@ void Compositor::setHomeMode(bool homeMode) {
     behaviorsComputed = false;  // Force recomputation of active behaviors
   }
 };
+
+void Compositor::setExpressionBandEnd(size_t end) {
+  expressionBandEnd = end;
+}
+
+void Compositor::addBehavior(AnimatedBehavior* b) {
+  if (!b) return;
+  if (expressionBandEnd > behaviors.size()) expressionBandEnd = behaviors.size();
+  behaviors.insert(behaviors.begin() + expressionBandEnd, b);
+  expressionBandEnd++;
+}
+
+void Compositor::removeBehavior(AnimatedBehavior* b) {
+  if (!b) return;
+  for (size_t idx = 0; idx < behaviors.size(); idx++) {
+    if (behaviors[idx] == b) {
+      behaviors.erase(behaviors.begin() + idx);
+      if (idx < expressionBandEnd) expressionBandEnd--;
+      if (activeExclusive == b) activeExclusive = nullptr;
+      return;
+    }
+  }
+}
 };  // namespace lamp

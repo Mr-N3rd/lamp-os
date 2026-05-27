@@ -16,10 +16,23 @@ import {
   writeBaseKnockout,
   writeExpressionTest,
   writeExpressionComplete,
-  readSettingsBlob,
+  writeExpressionUpsert,
+  writeExpressionRemove,
+  writeWifiScan,
+  writeWifiConnect,
+  writeWifiForget,
+  readWifiState,
+  subscribeWifiState,
+  unsubscribeWifiState,
   writeSettingsBlob,
-  subscribeStateNotify,
-  unsubscribeStateNotify,
+  readLampSection,
+  readBaseSection,
+  readShadeSection,
+  readExprSection,
+  readHomeSection,
+  subscribeSectionNotifies,
+  unsubscribeSectionNotifies,
+  type WifiState,
 } from '@/services/bleControl'
 
 export const MAX_LEDS_BASE = 50
@@ -71,11 +84,18 @@ interface ExpressionSettings {
   pulseSpeed?: number
 }
 
+interface HomeModeSettings {
+  ssid?: string
+  password?: string
+  brightness?: number
+}
+
 export interface LampState {
   lamp?: LampSettings
   shade?: ShadeSettings
   base?: BaseSettings
   expressions?: ExpressionSettings[]
+  homeMode?: HomeModeSettings
 }
 
 // Tab configuration
@@ -122,17 +142,13 @@ export const useLampStore = defineStore('lamp', () => {
     return target.value.deviceId
   }
 
-  async function refreshState() {
-    try {
-      const json = await readSettingsBlob(deviceId())
-      const data = JSON.parse(json) as LampState
-      state.value = data
-      // Only update originalState if we haven't made local changes since last save
-      if (!hasChanges.value) {
-        originalState.value = JSON.stringify(data)
-      }
-    } catch (err) {
-      console.warn('[lamp] refreshState failed:', err)
+  // Apply a section update from a notify (or background lazy-load). Only refreshes
+  // originalState when the user hasn't made unsaved local changes, so an
+  // incoming push doesn't silently discard their pending edits.
+  function applySection<K extends keyof LampState>(key: K, data: LampState[K]) {
+    state.value = { ...state.value, [key]: data }
+    if (!hasChanges.value) {
+      originalState.value = JSON.stringify(state.value)
     }
   }
 
@@ -266,20 +282,51 @@ export const useLampStore = defineStore('lamp', () => {
     state.value.expressions = expressions
   }
 
-  // Expression handlers
-  const testExpression = async (type: string) => {
-    if (!wsConnected.value) return
-    const expr = state.value.expressions?.find((e) => e.type === type)
-    if (!expr) return
-    const cleaned: Record<string, unknown> = { ...expr }
-    if (Array.isArray(expr.colors)) {
-      cleaned.colors = expr.colors.filter((c): c is string => typeof c === 'string')
+  const cleanExpressionForWire = (entry: ExpressionSettings): Record<string, unknown> => {
+    const out: Record<string, unknown> = { ...entry }
+    if (Array.isArray(entry.colors)) {
+      out.colors = entry.colors.filter((c): c is string => typeof c === 'string')
     }
+    return out
+  }
+
+  const testExpression = async (type: string, target: number) => {
+    if (!wsConnected.value) return
     try {
-      await writeExpressionTest(deviceId(), cleaned)
+      await writeExpressionTest(deviceId(), type, target)
     } catch (err) {
       console.warn('[lamp] writeExpressionTest failed:', err)
     }
+  }
+
+  const addExpression = async (entry: ExpressionSettings) => {
+    if (!wsConnected.value) throw new Error('Not connected')
+    await writeExpressionUpsert(deviceId(), cleanExpressionForWire(entry))
+    state.value.expressions = [...(state.value.expressions ?? []), entry]
+  }
+
+  const updateExpression = async (
+    prevKey: { type: string; target: number },
+    entry: ExpressionSettings,
+  ) => {
+    if (!wsConnected.value) throw new Error('Not connected')
+    if (prevKey.type !== entry.type || prevKey.target !== entry.target) {
+      await writeExpressionRemove(deviceId(), prevKey.type, prevKey.target)
+    }
+    await writeExpressionUpsert(deviceId(), cleanExpressionForWire(entry))
+    const next = (state.value.expressions ?? []).filter(
+      (e) => !(e.type === prevKey.type && e.target === prevKey.target),
+    )
+    next.push(entry)
+    state.value.expressions = next
+  }
+
+  const removeExpression = async (type: string, target: number) => {
+    if (!wsConnected.value) throw new Error('Not connected')
+    await writeExpressionRemove(deviceId(), type, target)
+    state.value.expressions = (state.value.expressions ?? []).filter(
+      (e) => !(e.type === type && e.target === target),
+    )
   }
 
   const testExpressionComplete = async () => {
@@ -293,18 +340,60 @@ export const useLampStore = defineStore('lamp', () => {
     }
   }
 
-  const previewExpressionColor = async (color: string, previewTarget: number) => {
+  const previewExpressionColor = (color: string, previewTarget: number) => {
     if (!wsConnected.value) return
-    try {
-      if (previewTarget === 1 || previewTarget === 3) {
-        await writeShadeColors(deviceId(), [color])
-      }
-      if (previewTarget === 2 || previewTarget === 3) {
-        await writeBaseColors(deviceId(), [color])
-      }
-    } catch (err) {
-      console.warn('[lamp] previewExpressionColor failed:', err)
+    if (previewTarget === 1 || previewTarget === 3) {
+      scheduleWrite('shadeColors', [color], (v) => writeShadeColors(deviceId(), v as string[]))
     }
+    if (previewTarget === 2 || previewTarget === 3) {
+      scheduleWrite('baseColors', [color], (v) => writeBaseColors(deviceId(), v as string[]))
+    }
+  }
+
+  const wifiState = ref<WifiState | null>(null)
+
+  const wifiScan = async () => {
+    if (!wsConnected.value) return
+    try { await writeWifiScan(deviceId()) } catch (err) {
+      console.warn('[lamp] writeWifiScan failed:', err)
+    }
+  }
+
+  const wifiConnect = async (ssid: string, password: string) => {
+    if (!wsConnected.value) throw new Error('Not connected')
+    if (!state.value.homeMode) state.value.homeMode = {}
+    state.value.homeMode.ssid = ssid
+    state.value.homeMode.password = password
+    await writeWifiConnect(deviceId(), ssid, password)
+  }
+
+  const wifiForget = async () => {
+    if (!wsConnected.value) throw new Error('Not connected')
+    if (!state.value.homeMode) state.value.homeMode = {}
+    state.value.homeMode.ssid = ''
+    state.value.homeMode.password = ''
+    await writeWifiForget(deviceId())
+  }
+
+  // Preview the home-mode brightness while the user is dragging the slider.
+  // The lamp is in regular brightness (because BLE is connected = WiFi paused),
+  // so this just writes the previewed level via the existing throttle. When
+  // the user releases the slider, restoreBrightness writes the saved
+  // lamp.brightness back.
+  const previewHomeBrightness = (level: number) => {
+    if (!wsConnected.value) return
+    scheduleWrite('brightness', level, (v) => writeBrightness(deviceId(), v as number))
+  }
+
+  const restoreBrightness = () => {
+    if (!wsConnected.value) return
+    const level = state.value.lamp?.brightness ?? 100
+    scheduleWrite('brightness', level, (v) => writeBrightness(deviceId(), v as number))
+  }
+
+  const updateHomeModeBrightness = (level: number) => {
+    if (!state.value.homeMode) state.value.homeMode = {}
+    state.value.homeMode.brightness = level
   }
 
   const restoreColorsAfterPreview = async () => {
@@ -401,9 +490,116 @@ export const useLampStore = defineStore('lamp', () => {
 
   // ── Initialize (connect + load) ───────────────────────────────────────────────
 
+  const reconnectTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+  const reconnectAttempts = ref(0)
+  const reconnecting = ref(false)
+  const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000]
+
+  // Post-connect bootstrap: priority bump, eager-load home-tab sections
+  // (lamp/base/shade), flip the UI to interactive, then lazy-load
+  // expressions + home-mode in the background. Per-section notifies replace
+  // the legacy single state-notify (clients no longer re-read a monolithic
+  // settings blob).
+  const bootstrap = async (t: LampTarget) => {
+    BleClient.requestConnectionPriority(t.deviceId, ConnectionPriority.CONNECTION_PRIORITY_HIGH)
+      .then(() => dlog('requestConnectionPriority HIGH OK'))
+      .catch((e) => dlog(`requestConnectionPriority skipped: ${e instanceof Error ? e.message : String(e)}`))
+
+    const next: LampState = {}
+    try {
+      dlog('reading lamp/base/shade sections…')
+      const [lampSec, baseSec, shadeSec] = await Promise.all([
+        readLampSection(t.deviceId),
+        readBaseSection(t.deviceId),
+        readShadeSection(t.deviceId),
+      ])
+      next.lamp = lampSec as LampSettings
+      next.base = baseSec as BaseSettings
+      next.shade = shadeSec as ShadeSettings
+      dlog('home-tab sections OK')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      connectionError.value = `Couldn't read lamp settings: ${msg}`
+      dlog(`home-tab sections failed: ${msg}`)
+    }
+
+    state.value = next
+    originalState.value = JSON.stringify(next)
+    wsConnected.value = true
+    loaded.value = true
+    saving.value = false
+    dlog('bootstrap home-tab ready; wsConnected=true loaded=true')
+
+    if (t.password) {
+      authConnection(t.deviceId, t.password)
+        .then(() => dlog('authConnection OK'))
+        .catch((err) => dlog(`authConnection failed: ${err instanceof Error ? err.message : String(err)}`))
+    }
+
+    // Lazy-load the tabs the user hasn't opened yet. By the time they tap
+    // Expressions / Setup, the data is already in state.
+    Promise.all([
+      readExprSection(t.deviceId).then((d) => applySection('expressions', d as ExpressionSettings[])),
+      readHomeSection(t.deviceId).then((d) => applySection('homeMode', d as HomeModeSettings)),
+    ])
+      .then(() => dlog('lazy sections OK'))
+      .catch((err) => dlog(`lazy sections failed: ${err instanceof Error ? err.message : String(err)}`))
+
+    subscribeSectionNotifies(t.deviceId, {
+      onLamp:        (d) => applySection('lamp',        d as LampSettings),
+      onBase:        (d) => applySection('base',        d as BaseSettings),
+      onShade:       (d) => applySection('shade',       d as ShadeSettings),
+      onExpressions: (d) => applySection('expressions', d as ExpressionSettings[]),
+      onHomeMode:    (d) => applySection('homeMode',    d as HomeModeSettings),
+    })
+      .then(() => dlog('subscribeSectionNotifies OK'))
+      .catch((err) => dlog(`subscribeSectionNotifies failed: ${err instanceof Error ? err.message : String(err)}`))
+
+    readWifiState(t.deviceId)
+      .then((ws) => { wifiState.value = ws })
+      .catch((err) => dlog(`readWifiState failed: ${err instanceof Error ? err.message : String(err)}`))
+    subscribeWifiState(t.deviceId, (ws) => { wifiState.value = ws })
+      .then(() => dlog('subscribeWifiState OK'))
+      .catch((err) => dlog(`subscribeWifiState failed: ${err instanceof Error ? err.message : String(err)}`))
+  }
+
+  const onLinkDisconnect = () => {
+    wsConnected.value = false
+    dlog('BLE disconnected (callback fired) — scheduling reconnect')
+    scheduleReconnect()
+  }
+
+  const scheduleReconnect = () => {
+    if (!target.value) return
+    if (reconnectTimer.value) return
+    reconnecting.value = true
+    const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempts.value, RECONNECT_DELAYS_MS.length - 1)]
+    reconnectTimer.value = setTimeout(async () => {
+      reconnectTimer.value = null
+      if (!target.value) {
+        reconnecting.value = false
+        return
+      }
+      reconnectAttempts.value++
+      const t = target.value
+      try {
+        dlog(`reconnect attempt ${reconnectAttempts.value}…`)
+        await BleClient.connect(t.deviceId, onLinkDisconnect, { skipDescriptorDiscovery: true })
+        dlog('reconnect connect OK')
+        await bootstrap(t)
+        reconnectAttempts.value = 0
+        reconnecting.value = false
+      } catch (err) {
+        dlog(`reconnect failed: ${err instanceof Error ? err.message : String(err)}`)
+        scheduleReconnect()
+      }
+    }, delay)
+  }
+
   const initialize = async (newTarget: LampTarget) => {
     target.value = newTarget
     connectionError.value = null
+    reconnectAttempts.value = 0
     dlog(`initialize: target=${newTarget.deviceId} password=${newTarget.password ? '<set>' : '<none>'}`)
 
     // Make sure no stray LE scan is fighting with our GATT connect
@@ -421,10 +617,7 @@ export const useLampStore = defineStore('lamp', () => {
     for (let attempt = 1; attempt <= 2 && !connected; attempt++) {
       try {
         dlog(`BleClient.connect attempt ${attempt}…`)
-        await BleClient.connect(newTarget.deviceId, () => {
-          wsConnected.value = false
-          dlog('BLE disconnected (callback fired)')
-        }, { skipDescriptorDiscovery: true })
+        await BleClient.connect(newTarget.deviceId, onLinkDisconnect, { skipDescriptorDiscovery: true })
         connected = true
         dlog(`BleClient.connect attempt ${attempt} OK`)
       } catch (err) {
@@ -441,54 +634,27 @@ export const useLampStore = defineStore('lamp', () => {
       return
     }
 
-    // Capacitor's connect() already does discoverServices + MTU exchange before
-    // resolving, so we go straight to reading state.
-
-    BleClient.requestConnectionPriority(newTarget.deviceId, ConnectionPriority.CONNECTION_PRIORITY_HIGH)
-      .then(() => dlog('requestConnectionPriority HIGH OK'))
-      .catch((e) => dlog(`requestConnectionPriority skipped: ${e instanceof Error ? e.message : String(e)}`))
-
-    try {
-      dlog('readSettingsBlob…')
-      const json = await readSettingsBlob(newTarget.deviceId)
-      dlog(`readSettingsBlob OK (${json.length} bytes)`)
-      const data = JSON.parse(json) as LampState
-      state.value = data
-      originalState.value = JSON.stringify(data)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      connectionError.value = `Couldn't read lamp settings: ${msg}`
-      dlog(`readSettingsBlob failed: ${msg}`)
-    }
-
-    // UI can render and the user can start interacting. Auth and notify
-    // finish in the background — the first write happens long after a 30ms
-    // auth round-trip would land.
-    wsConnected.value = true
-    loaded.value = true
-    saving.value = false
-    dlog('initialize complete; wsConnected=true loaded=true')
-
-    if (newTarget.password) {
-      authConnection(newTarget.deviceId, newTarget.password)
-        .then(() => dlog('authConnection OK'))
-        .catch((err) => dlog(`authConnection failed: ${err instanceof Error ? err.message : String(err)}`))
-    }
-
-    subscribeStateNotify(newTarget.deviceId, () => {
-      void refreshState()
-    })
-      .then(() => dlog('subscribeStateNotify OK'))
-      .catch((err) => dlog(`subscribeStateNotify failed: ${err instanceof Error ? err.message : String(err)}`))
+    await bootstrap(newTarget)
   }
 
   // ── Cleanup ───────────────────────────────────────────────────────────────────
 
   const cleanup = async () => {
+    if (reconnectTimer.value) {
+      clearTimeout(reconnectTimer.value)
+      reconnectTimer.value = null
+    }
+    reconnecting.value = false
+    reconnectAttempts.value = 0
     if (!target.value) return
     const id = target.value.deviceId
     try {
-      await unsubscribeStateNotify(id)
+      await unsubscribeSectionNotifies(id)
+    } catch {
+      // ignore
+    }
+    try {
+      await unsubscribeWifiState(id)
     } catch {
       // ignore
     }
@@ -514,6 +680,7 @@ export const useLampStore = defineStore('lamp', () => {
     loaded,
     saving,
     wsConnected,
+    reconnecting,
     connectionError,
     debugLog,
     disabled,
@@ -544,6 +711,18 @@ export const useLampStore = defineStore('lamp', () => {
     testExpressionComplete,
     previewExpressionColor,
     restoreColorsAfterPreview,
+    addExpression,
+    updateExpression,
+    removeExpression,
+
+    // Home mode (WiFi)
+    wifiState,
+    wifiScan,
+    wifiConnect,
+    wifiForget,
+    previewHomeBrightness,
+    restoreBrightness,
+    updateHomeModeBrightness,
 
     // Navigation
     setActiveTab,

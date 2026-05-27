@@ -26,6 +26,22 @@ constexpr const char* CHAR_EXPRESSION_TEST = "5f64f4d6-d6d9-4a44-9b3f-3a8d6f7e6b
 constexpr const char* CHAR_SETTINGS_BLOB   = "5f64f4d7-d6d9-4a44-9b3f-3a8d6f7e6b40";
 // state_notify (notify): lamp-driven state change notifications
 constexpr const char* CHAR_STATE_NOTIFY    = "5f64f4d8-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// expression_op (write-with-response): JSON op for runtime expression CRUD
+//   {"op":"upsert","entry":{...full expression config...}}
+//   {"op":"remove","type":"<type>","target":<1|2|3>}
+constexpr const char* CHAR_EXPRESSION_OP   = "5f64f4d9-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// wifi_op (write-with-response): JSON op for WiFi STA management
+//   {"op":"scan"} | {"op":"connect","ssid":"...","password":"..."} | {"op":"forget"}
+constexpr const char* CHAR_WIFI_OP         = "5f64f4da-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// wifi_state (read + notify): JSON snapshot of WiFi state
+constexpr const char* CHAR_WIFI_STATE      = "5f64f4db-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// Per-section settings characteristics (read + notify). Replace the single
+// settings_blob read path — each stays well under MTU on its own.
+constexpr const char* CHAR_LAMP_SECTION    = "5f64f4dc-d6d9-4a44-9b3f-3a8d6f7e6b40";
+constexpr const char* CHAR_BASE_SECTION    = "5f64f4dd-d6d9-4a44-9b3f-3a8d6f7e6b40";
+constexpr const char* CHAR_SHADE_SECTION   = "5f64f4de-d6d9-4a44-9b3f-3a8d6f7e6b40";
+constexpr const char* CHAR_EXPR_SECTION    = "5f64f4df-d6d9-4a44-9b3f-3a8d6f7e6b40";
+constexpr const char* CHAR_HOME_SECTION    = "5f64f4e0-d6d9-4a44-9b3f-3a8d6f7e6b40";
 
 /**
  * @brief Start the BLE GATT control service.
@@ -52,5 +68,11 @@ bool isRunning();
  * also be triggered from outside (e.g. after home-mode brightness auto-adjust).
  */
 void notifyStateChange();
+
+/**
+ * @brief Send a WiFi-state-change notification on CHAR_WIFI_STATE. Called by
+ *        wifi::tick() whenever the WiFi state machine transitions.
+ */
+void notifyWifiState();
 
 }  // namespace ble_control

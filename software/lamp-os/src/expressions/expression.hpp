@@ -90,6 +90,11 @@ class Expression : public AnimatedBehavior {
   Color getRandomColor();
 
   const std::vector<Color>& getColors() const { return colors; }
+  ExpressionTarget getTarget() const { return target; }
+
+  // Suppresses auto-trigger from control() while true. Manual trigger() and
+  // chain-triggered firing still work. Listing's enabled toggle drives this.
+  bool autoTriggerEnabled = true;
 
 protected:
   /**

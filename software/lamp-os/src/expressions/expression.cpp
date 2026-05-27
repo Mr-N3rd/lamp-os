@@ -64,7 +64,7 @@ void Expression::control() {
 
 
   // Check for automatic trigger
-  if (animationState == STOPPED && millis() > nextTriggerMs) {
+  if (autoTriggerEnabled && animationState == STOPPED && millis() > nextTriggerMs) {
     trigger();
   }
 

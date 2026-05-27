@@ -1,11 +1,50 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import ComponentForm from '@/components/Form.vue'
 import BrightnessSlider from '@/components/BrightnessSlider.vue'
+import HomeNetworkSheet from '@/components/HomeNetworkSheet.vue'
 import type { FieldDefinition, FormValues } from '@/types'
 import { useLampStore, MAX_LEDS_BASE } from '@/stores/lamp'
 
 const lampStore = useLampStore()
+
+const homeSheetOpen = ref(false)
+
+const homeMode = computed(() => lampStore.state.homeMode ?? {})
+const homeSsid = computed(() => homeMode.value.ssid ?? '')
+const homeBrightness = computed(() => homeMode.value.brightness ?? 60)
+
+const wifiStatusLabel = computed(() => {
+  const ws = lampStore.wifiState
+  if (!ws) return 'Unknown'
+  switch (ws.state) {
+    case 'connected':  return `Connected${ws.ip ? ' · ' + ws.ip : ''}`
+    case 'connecting': return 'Connecting…'
+    case 'scanning':   return 'Scanning…'
+    case 'failed':
+      if (ws.lastError === 'auth') return 'Wrong password'
+      if (ws.lastError === 'noap') return 'Network not found'
+      if (ws.lastError === 'timeout') return 'Connection timed out'
+      return 'Connection failed'
+    case 'idle':
+    default:           return 'Not connected'
+  }
+})
+
+const onForget = async () => {
+  if (!confirm(`Forget ${homeSsid.value}?`)) return
+  try { await lampStore.wifiForget() } catch (err) { console.warn('[setup] wifiForget failed:', err) }
+}
+
+const onHomeBrightnessInput = (value: number) => {
+  if (!lampStore.state.homeMode) lampStore.state.homeMode = {}
+  lampStore.state.homeMode.brightness = value
+  lampStore.previewHomeBrightness(value)
+}
+
+const onHomeBrightnessChange = () => {
+  lampStore.restoreBrightness()
+}
 
 // Field definitions for the setup page form
 const fields = computed<FieldDefinition[]>(() => [
@@ -177,6 +216,50 @@ const ledCount = computed(() => lampStore.state.base?.px ?? 36)
         </CollapsiblePanel>
       </template>
     </ComponentForm>
+
+    <section class="home-mode">
+      <h3 class="home-mode-heading">Home Mode</h3>
+      <p class="home-mode-blurb">
+        When the lamp joins your home WiFi, it switches to a separate brightness level — useful for ambient
+        background brightness at home. WiFi is paused while you're using the app over Bluetooth.
+      </p>
+
+      <div class="home-mode-row">
+        <div class="home-mode-network">
+          <span class="home-mode-label">Network</span>
+          <span class="home-mode-value">
+            {{ homeSsid || 'Not configured' }}
+            <span v-if="homeSsid" class="home-mode-status" :class="`home-mode-status--${lampStore.wifiState?.state ?? 'idle'}`">
+              · {{ wifiStatusLabel }}
+            </span>
+          </span>
+        </div>
+        <div class="home-mode-actions">
+          <button class="home-mode-btn home-mode-btn--primary" :disabled="lampStore.disabled" @click="homeSheetOpen = true">
+            {{ homeSsid ? 'Change' : 'Choose network' }}
+          </button>
+          <button v-if="homeSsid" class="home-mode-btn home-mode-btn--danger" :disabled="lampStore.disabled" @click="onForget">
+            Forget
+          </button>
+        </div>
+      </div>
+
+      <div class="home-mode-brightness">
+        <span class="home-mode-label">Home Mode Brightness</span>
+        <BrightnessSlider
+          :model-value="homeBrightness"
+          @update:model-value="onHomeBrightnessInput"
+          @change="onHomeBrightnessChange"
+          id="home-mode-brightness"
+          :min="0"
+          :max="100"
+          append="%"
+          :disabled="lampStore.disabled"
+        />
+      </div>
+    </section>
+
+    <HomeNetworkSheet :open="homeSheetOpen" @close="homeSheetOpen = false" />
   </section>
 </template>
 
@@ -226,5 +309,110 @@ const ledCount = computed(() => lampStore.state.base?.px ?? 36)
 
 .pixel-row .number-slider {
   flex: 1;
+}
+
+/* Home Mode */
+.home-mode {
+  margin-top: 20px;
+  padding: 16px;
+  background: var(--color-background-mute);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.home-mode-heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--brand-lamp-white);
+}
+
+.home-mode-blurb {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--brand-fog-grey);
+  line-height: 1.4;
+}
+
+.home-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.home-mode-network {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 160px;
+}
+
+.home-mode-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--brand-fog-grey);
+  font-weight: 600;
+}
+
+.home-mode-value {
+  color: var(--brand-lamp-white);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.home-mode-status {
+  font-weight: 500;
+  color: var(--brand-fog-grey);
+  font-size: 0.85rem;
+}
+
+.home-mode-status--connected { color: var(--color-success); }
+.home-mode-status--connecting,
+.home-mode-status--scanning { color: var(--brand-aurora-blue); }
+.home-mode-status--failed { color: #ff6b6b; }
+
+.home-mode-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.home-mode-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+  color: var(--brand-fog-grey);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.home-mode-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.home-mode-btn--primary {
+  background: linear-gradient(135deg, var(--brand-aurora-blue), var(--brand-glow-pink));
+  color: var(--brand-lamp-white);
+  border-color: transparent;
+}
+
+.home-mode-btn--danger {
+  border-color: rgba(255, 107, 107, 0.5);
+  color: #ff6b6b;
+}
+
+.home-mode-brightness {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 </style>

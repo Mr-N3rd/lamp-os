@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount } from 'vue'
-import ComponentForm from '@/components/Form.vue'
-import type { FormValues } from '@/types'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useLampStore } from '@/stores/lamp'
 import { useExpressionsStore } from '@/stores/expressions'
+import ExpressionSheet from '@/components/ExpressionSheet.vue'
+
+interface ExpressionEntry {
+  type: string
+  enabled: boolean
+  target: number
+  colors: (string | null)[]
+  [key: string]: unknown
+}
 
 const lampStore = useLampStore()
 const expressionsStore = useExpressionsStore()
 
-const expandedPanel = ref<string | null>(null)
+const TARGET_LABELS: Record<number, string> = { 1: 'Shade', 2: 'Base', 3: 'Both' }
 
 const TEST_PREVIEW_MS = 5000
 const testTimer = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -27,215 +34,134 @@ onBeforeUnmount(() => {
   }
 })
 
-// Check if a specific panel is expanded
-const isPanelExpanded = (expressionIndex: string): boolean => {
-  return expandedPanel.value === expressionIndex
+const sheetOpen = ref(false)
+const sheetMode = ref<'add' | 'edit'>('add')
+const sheetEntry = ref<ExpressionEntry | null>(null)
+
+const entries = computed<ExpressionEntry[]>(
+  () => (lampStore.state.expressions as ExpressionEntry[] | undefined) ?? [],
+)
+
+const existingKeys = computed(() =>
+  entries.value.map((e) => ({ type: e.type, target: e.target })),
+)
+
+const labelFor = (entry: ExpressionEntry) =>
+  `${expressionsStore.getExpressionName(entry.type)} — ${TARGET_LABELS[entry.target] ?? 'Target'}`
+
+const openAdd = () => {
+  sheetMode.value = 'add'
+  sheetEntry.value = null
+  sheetOpen.value = true
 }
 
-// Handle panel expansion - closes other panels
-const handlePanelToggle = (expressionIndex: string, isOpen: boolean) => {
-  if (isOpen) {
-    expandedPanel.value = expressionIndex
-  } else {
-    expandedPanel.value = null
-  }
+const openEdit = (entry: ExpressionEntry) => {
+  sheetMode.value = 'edit'
+  sheetEntry.value = entry
+  sheetOpen.value = true
 }
 
-// Get expression values from lamp state
-const getExpressionValues = (expressionIndex: string): FormValues => {
-  const expr = lampStore.state.expressions?.find((e) => e.type === expressionIndex)
-  if (!expr) return {}
-
-  const values: FormValues = {
-    enabled: expr.enabled,
-    target: expr.target,
-    colors: expr.colors,
-  }
-
-  // Handle interval range fields
-  if (expr.intervalMin !== undefined) values.intervalMin = expr.intervalMin
-  if (expr.intervalMax !== undefined) values.intervalMax = expr.intervalMax
-
-  // Handle duration range fields (glitchy)
-  if (expr.durationMin !== undefined) values.durationMin = expr.durationMin
-  if (expr.durationMax !== undefined) values.durationMax = expr.durationMax
-
-  // Handle shift duration range fields (shifty)
-  if (expr.shiftDurationMin !== undefined) values.shiftDurationMin = expr.shiftDurationMin
-  if (expr.shiftDurationMax !== undefined) values.shiftDurationMax = expr.shiftDurationMax
-
-  // Handle other fields
-  if (expr.fadeDuration !== undefined) values.fadeDuration = expr.fadeDuration
-  if (expr.pulseSpeed !== undefined) values.pulseSpeed = expr.pulseSpeed
-
-  return values
+const closeSheet = () => {
+  sheetOpen.value = false
+  sheetEntry.value = null
 }
 
-// Check if an expression is enabled
-const isExpressionEnabled = (expressionIndex: string): boolean => {
-  const expr = lampStore.state.expressions?.find((e) => e.type === expressionIndex)
-  return expr?.enabled ?? false
-}
-
-// Toggle expression enabled state
-const toggleExpression = (expressionIndex: string, enabled: boolean) => {
-  const expressions = [...(lampStore.state.expressions || [])]
-  const existingIndex = expressions.findIndex((e) => e.type === expressionIndex)
-
-  if (enabled) {
-    if (existingIndex === -1) {
-      // Add new expression with defaults from library
-      const exprDef = expressionsStore.getExpression(expressionIndex)
-      if (exprDef) {
-        const defaultValues: Record<string, unknown> = {
-          type: expressionIndex,
-          enabled: true,
-          target: 2,
-          colors: ['#FFFFFFFF'],
-        }
-
-        // Apply defaults from field definitions
-        exprDef.fields.forEach((field) => {
-          if (field.default !== undefined) {
-            if (field.transform && Array.isArray(field.transform)) {
-              // Handle range fields - split array into Min/Max values
-              const values = field.default as number[]
-              field.transform.forEach((suffix, i) => {
-                defaultValues[`${field.name}${suffix}`] = values[i]
-              })
-            } else {
-              defaultValues[field.name as string] = field.default
-            }
-          }
-        })
-
-        expressions.push(defaultValues as typeof expressions[0])
-      }
-    } else {
-      expressions[existingIndex].enabled = true
-    }
-  } else {
-    if (existingIndex !== -1) {
-      expressions[existingIndex].enabled = false
-    }
-  }
-
-  lampStore.updateExpressions(expressions)
-}
-
-// Update expression values
-const updateExpressionValues = (expressionIndex: string, values: FormValues) => {
-  const expressions = [...(lampStore.state.expressions || [])]
-  const existingIndex = expressions.findIndex((e) => e.type === expressionIndex)
-
-  if (existingIndex !== -1) {
-    const updated = { ...expressions[existingIndex] }
-
-    // Update fields from form values
-    Object.entries(values).forEach(([key, value]) => {
-      if (key !== 'enabled') {
-        (updated as Record<string, unknown>)[key] = value
-      }
-    })
-
-    expressions[existingIndex] = updated
-    lampStore.updateExpressions(expressions)
-  }
-}
-
-// Get all available expression types
-const allExpressions = computed(() => expressionsStore.expressionsList)
-
-const handleTestExpression = (expressionIndex: string) => {
+const testEntry = (entry: ExpressionEntry) => {
   clearTestTimer()
-  lampStore.testExpression(expressionIndex)
+  lampStore.testExpression(entry.type, entry.target)
   testTimer.value = setTimeout(() => {
     testTimer.value = null
     lampStore.testExpressionComplete()
   }, TEST_PREVIEW_MS)
 }
 
-const handleColorPreview = (expressionIndex: string, fieldName: string, value: string) => {
-  if (fieldName !== 'colors') return
-  const expr = lampStore.state.expressions?.find((e) => e.type === expressionIndex)
-  const target = expr?.target ?? 2
-  lampStore.previewExpressionColor(value, target)
+const deleteEntry = async (entry: ExpressionEntry) => {
+  if (!confirm(`Delete ${labelFor(entry)}?`)) return
+  try {
+    await lampStore.removeExpression(entry.type, entry.target)
+  } catch (err) {
+    console.warn('[expressions] remove failed:', err)
+  }
 }
 
-const handleColorPreviewEnd = (fieldName: string) => {
-  if (fieldName !== 'colors') return
-  lampStore.restoreColorsAfterPreview()
+const toggleEnabled = async (entry: ExpressionEntry, enabled: boolean) => {
+  const next: ExpressionEntry = { ...entry, enabled }
+  try {
+    await lampStore.updateExpression(
+      { type: entry.type, target: entry.target },
+      next,
+    )
+  } catch (err) {
+    console.warn('[expressions] toggle failed:', err)
+  }
 }
+
+const allTargetsTakenForAllTypes = computed(() =>
+  expressionsStore.expressionsList.every((t) =>
+    [1, 2, 3].every((target) => existingKeys.value.some((k) => k.type === t.index && k.target === target)),
+  ),
+)
 </script>
 
 <template>
-  <section class="tab-panel" aria-label="Expression settings">
+  <section class="tab-panel" aria-label="Expressions">
     <InfoPanel>
-      Add expressions to give your lamp personality. Expressions are behaviors that trigger
-      randomly to create visual effects.
+      Add expressions to give your lamp personality. Each expression runs on a chosen target
+      (shade, base, or both). Tap Test to preview one.
     </InfoPanel>
 
-    <div class="expressions-list">
-      <CollapsiblePanel
-        v-for="expr in allExpressions"
-        :key="expr.index"
-        :label="expr.name"
-        :model-value="isPanelExpanded(expr.index)"
-        @update:model-value="(v: boolean) => handlePanelToggle(expr.index, v)"
-      >
-        <template #left>
-          <div class="expression-toggle" @click.stop>
-            <button
-              type="button"
-              class="boolean-toggle"
-              :class="{ 'boolean-toggle--active': isExpressionEnabled(expr.index) }"
-              @click.stop="toggleExpression(expr.index, !isExpressionEnabled(expr.index))"
-              :disabled="lampStore.disabled"
-              :aria-checked="isExpressionEnabled(expr.index)"
-              role="switch"
-            >
-              <div class="boolean-toggle-track">
-                <div class="boolean-toggle-thumb"></div>
-              </div>
-            </button>
-          </div>
-        </template>
+    <ul v-if="entries.length" class="expr-list">
+      <li v-for="entry in entries" :key="`${entry.type}-${entry.target}`" class="expr-row">
+        <button
+          type="button"
+          class="expr-toggle"
+          :class="{ 'expr-toggle--active': entry.enabled }"
+          :disabled="lampStore.disabled"
+          :aria-checked="entry.enabled"
+          role="switch"
+          @click="toggleEnabled(entry, !entry.enabled)"
+        >
+          <div class="expr-toggle-track"><div class="expr-toggle-thumb"></div></div>
+        </button>
 
-        <!-- Expression description -->
-        <div class="expression-description">
-          <p>{{ expr.description }}</p>
+        <button
+          class="expr-btn expr-btn--test"
+          :disabled="lampStore.disabled"
+          @click="testEntry(entry)"
+        >
+          Test
+        </button>
+
+        <span class="expr-label">{{ labelFor(entry) }}</span>
+
+        <div class="expr-actions-right">
+          <button class="expr-btn expr-btn--edit" :disabled="lampStore.disabled" @click="openEdit(entry)">
+            Edit
+          </button>
+          <button class="expr-btn expr-btn--delete" :disabled="lampStore.disabled" @click="deleteEntry(entry)">
+            Delete
+          </button>
         </div>
+      </li>
+    </ul>
 
-        <!-- Expression form (only show when enabled) -->
-        <div v-if="isExpressionEnabled(expr.index)" class="expression-form">
-          <ComponentForm
-            :fields="expr.fields"
-            :model-value="getExpressionValues(expr.index)"
-            @update:model-value="(values) => updateExpressionValues(expr.index, values)"
-            @preview="(fieldName: string, value: string) => handleColorPreview(expr.index, fieldName, value)"
-            @close="(fieldName: string) => handleColorPreviewEnd(fieldName)"
-            :show-button="false"
-            :disabled="lampStore.disabled"
-          />
+    <p v-else class="expr-empty">No expressions yet. Tap "+ Add expression" to get started.</p>
 
-          <!-- Test button -->
-          <div class="expression-actions">
-            <button
-              type="button"
-              class="test-button"
-              @click="handleTestExpression(expr.index)"
-              :disabled="lampStore.disabled"
-            >
-              Test {{ expr.name }}
-            </button>
-          </div>
-        </div>
+    <button
+      class="expr-add"
+      :disabled="lampStore.disabled || allTargetsTakenForAllTypes"
+      @click="openAdd"
+    >
+      + Add expression
+    </button>
 
-        <InfoPanel v-else>
-          Enable this expression to configure it.
-        </InfoPanel>
-      </CollapsiblePanel>
-    </div>
+    <ExpressionSheet
+      :open="sheetOpen"
+      :mode="sheetMode"
+      :entry="sheetEntry ?? undefined"
+      :existing-keys="existingKeys"
+      @close="closeSheet"
+    />
   </section>
 </template>
 
@@ -245,123 +171,135 @@ const handleColorPreviewEnd = (fieldName: string) => {
 }
 
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.expressions-list {
+.expr-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
   display: flex;
   flex-direction: column;
+  gap: 8px;
+}
+
+.expr-row {
+  display: flex;
+  align-items: center;
   gap: 12px;
-}
-
-.expression-toggle {
-  display: flex;
-  align-items: center;
-}
-
-/* Boolean toggle styles (inline version) */
-.boolean-toggle {
-  position: relative;
-  width: 44px;
-  height: 24px;
-  border: none;
+  padding: 12px 14px;
+  background: var(--color-background-mute);
+  border: 1px solid var(--color-border);
   border-radius: 12px;
-  background-color: var(--color-background-mute);
+  flex-wrap: wrap;
+}
+
+.expr-toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border: none;
+  border-radius: 11px;
+  background: var(--color-background-soft);
   cursor: pointer;
-  transition: all 0.2s ease;
   padding: 0;
-  display: flex;
-  align-items: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
-.boolean-toggle:focus {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(68, 108, 156, 0.2);
-}
-
-.boolean-toggle--active {
-  background-color: var(--color-background-mute);
-}
-
-.boolean-toggle:disabled {
+.expr-toggle:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.boolean-toggle-track {
+.expr-toggle-track {
   position: relative;
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
 }
 
-.boolean-toggle-thumb {
+.expr-toggle-thumb {
   position: absolute;
+  top: 2px;
   left: 2px;
-  width: 20px;
-  height: 20px;
-  background-color: var(--brand-slate-grey);
+  width: 18px;
+  height: 18px;
+  background: var(--brand-slate-grey);
   border-radius: 50%;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: left 0.2s ease, background 0.2s ease;
 }
 
-.boolean-toggle--active .boolean-toggle-thumb {
-  left: calc(100% - 22px);
-  background-color: var(--brand-lumen-green);
+.expr-toggle--active .expr-toggle-thumb {
+  left: calc(100% - 20px);
+  background: var(--brand-lumen-green);
 }
 
-.expression-form {
-  margin-top: 8px;
+.expr-label {
+  flex: 1;
+  min-width: 160px;
+  font-weight: 600;
+  color: var(--brand-lamp-white);
 }
 
-.expression-actions {
-  margin-top: 16px;
+.expr-actions-right {
   display: flex;
-  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
-.expression-description {
-  margin-bottom: 20px;
-  margin-top: 12px;
-  padding: 0;
-}
-
-.expression-description p {
-  margin: 0;
-  font-size: 0.95rem;
-  color: var(--brand-lumen-green);
-  line-height: 1.6;
-  font-style: italic;
-}
-
-.test-button {
-  padding: 10px 20px;
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 2px solid #3b82f6;
+.expr-btn {
+  padding: 8px 12px;
   border-radius: 8px;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  border: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+  color: var(--brand-fog-grey);
 }
 
-.test-button:hover:not(:disabled) {
-  background: rgba(59, 130, 246, 0.2);
-}
-
-.test-button:disabled {
+.expr-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
+.expr-btn--test {
+  border-color: var(--brand-aurora-blue);
+  color: var(--brand-aurora-blue);
+}
+
+.expr-btn--delete {
+  border-color: rgba(255, 107, 107, 0.5);
+  color: #ff6b6b;
+}
+
+.expr-empty {
+  text-align: center;
+  color: var(--brand-fog-grey);
+  padding: 32px 16px;
+  background: var(--color-background-mute);
+  border: 1px dashed var(--color-border);
+  border-radius: 12px;
+  margin: 0 0 16px;
+}
+
+.expr-add {
+  width: 100%;
+  padding: 14px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--brand-lamp-white);
+  background: linear-gradient(135deg, var(--brand-aurora-blue), var(--brand-glow-pink));
+  transition: opacity 0.2s ease;
+}
+
+.expr-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 </style>

@@ -96,7 +96,7 @@ const swatchStyle = (color?: [number, number, number]) => {
 .lamps-page {
   min-height: 100vh;
   background: var(--brand-midnight-black);
-  padding: 16px;
+  padding: 0;
   width: 100%;
 }
 
@@ -108,8 +108,7 @@ const swatchStyle = (color?: [number, number, number]) => {
 
 .main-content {
   background: var(--color-background-soft);
-  border-radius: 16px;
-  padding: 20px;
+  padding: 16px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(10px);
 }
@@ -233,7 +232,7 @@ const swatchStyle = (color?: [number, number, number]) => {
 .swatch {
   width: 18px;
   height: 18px;
-  border-radius: 50%;
+  border-radius: 3px;
   border: 1px solid rgba(253, 253, 253, 0.15);
   box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.3);
   transition: background 0.3s ease;
@@ -253,20 +252,4 @@ const swatchStyle = (color?: [number, number, number]) => {
   font-size: 0.95rem;
 }
 
-/* Responsive */
-@media (min-width: 480px) {
-  .container {
-    max-width: 400px;
-  }
-
-  .lamps-page {
-    padding: 20px;
-  }
-}
-
-@media (min-width: 1024px) {
-  .container {
-    max-width: 450px;
-  }
-}
 </style>

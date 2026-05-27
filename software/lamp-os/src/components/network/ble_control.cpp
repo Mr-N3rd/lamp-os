@@ -14,6 +14,7 @@
 #include "../../util/color.hpp"
 #include "../../lamps/standard_lamp.hpp"
 #include "./bluetooth.hpp"  // for lamp::scanPausedForGattClient + BLE_GAP_SCAN_TIME_MS
+#include "./wifi.hpp"
 
 // Defined in standard_lamp.cpp. Each BLE callback does ONLY a fixed-size
 // byte copy into a pending slot — zero heap allocation on Core 0. The loop
@@ -25,7 +26,10 @@ void postPendingBrightness(int8_t level);
 void postPendingShadeColorsJson(const char* data, size_t len);
 void postPendingBaseColorsJson(const char* data, size_t len);
 void postPendingKnockout(uint8_t pixel, uint8_t brightness);
+void postPendingExpressionOpJson(const char* data, size_t len);
+void postPendingWifiOpJson(const char* data, size_t len);
 static constexpr size_t MAX_PENDING_JSON = 256;
+static constexpr size_t MAX_PENDING_OP_JSON = 512;
 
 namespace ble_control {
 
@@ -36,6 +40,12 @@ namespace ble_control {
 static NimBLEServer*         s_server      = nullptr;
 static NimBLEService*        s_service     = nullptr;
 static NimBLECharacteristic* s_stateNotify = nullptr;
+static NimBLECharacteristic* s_wifiStateChar = nullptr;
+static NimBLECharacteristic* s_lampSectionChar  = nullptr;
+static NimBLECharacteristic* s_baseSectionChar  = nullptr;
+static NimBLECharacteristic* s_shadeSectionChar = nullptr;
+static NimBLECharacteristic* s_exprSectionChar  = nullptr;
+static NimBLECharacteristic* s_homeSectionChar  = nullptr;
 static lamp::Config*         s_config      = nullptr;
 static Preferences*          s_prefs       = nullptr;
 static bool                  s_running     = false;
@@ -65,23 +75,18 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     uint16_t handle = connInfo.getConnHandle();
     s_connAuth[handle] = false;
 
-    // Request a higher MTU so color JSON and settings blob fit in fewer packets.
-    // BT Core spec caps LL data length (DLE) at 251 bytes; passing TARGET_MTU
-    // (=512) here makes NimBLE return BLE_HS_EINVAL ("Set data length error: 3"
-    // in the serial log). MTU max is 517, so setMTU still uses TARGET_MTU.
     server->setDataLen(handle, 251);
     NimBLEDevice::setMTU(TARGET_MTU);
 
-    // Pause the lamp's BLE central scan while a phone is connected. The
-    // constant scan-callback churn on the NimBLE host task contends with
-    // high-rate write-without-response traffic and was crashing the lamp
-    // under sustained color drag. The flag also makes onScanEnd skip its
-    // auto-restart, so the scan stays down until disconnect.
     lamp::scanPausedForGattClient = true;
     NimBLEDevice::getScan()->stop();
 
+    // Pause WiFi STA while a BLE client is talking to us — avoids BT/WiFi
+    // coexistence stress under high GATT write rates.
+    wifi::disconnect();
+
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] Client connected, handle=%u (scan paused)\n", handle);
+    Serial.printf("[ble_control] Client connected, handle=%u (scan + wifi paused)\n", handle);
 #endif
   }
 
@@ -93,8 +98,13 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     lamp::scanPausedForGattClient = false;
     NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
 
+    // Resume WiFi STA if home mode is configured.
+    if (s_config && !s_config->homeMode.ssid.empty()) {
+      wifi::connect(s_config->homeMode.ssid, s_config->homeMode.password);
+    }
+
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] Client disconnected, handle=%u reason=%d (scan resumed)\n", handle, reason);
+    Serial.printf("[ble_control] Client disconnected, handle=%u reason=%d (scan + wifi resumed)\n", handle, reason);
 #endif
   }
 };
@@ -178,6 +188,74 @@ class BaseKnockoutCallback : public NimBLECharacteristicCallbacks {
   }
 };
 
+class ExpressionOpCallback : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    if (!isAuthed(connInfo.getConnHandle())) return;
+    std::string val = c->getValue();
+    if (val.empty() || val.size() > MAX_PENDING_OP_JSON) return;
+    postPendingExpressionOpJson(val.data(), val.size());
+  }
+};
+
+class WifiOpCallback : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    if (!isAuthed(connInfo.getConnHandle())) return;
+    std::string val = c->getValue();
+    if (val.empty() || val.size() > MAX_PENDING_OP_JSON) return;
+    postPendingWifiOpJson(val.data(), val.size());
+  }
+};
+
+static const char* wifiStateName(wifi::State s) {
+  switch (s) {
+    case wifi::IDLE:       return "idle";
+    case wifi::SCANNING:   return "scanning";
+    case wifi::CONNECTING: return "connecting";
+    case wifi::CONNECTED:  return "connected";
+    case wifi::FAILED:     return "failed";
+  }
+  return "unknown";
+}
+
+static std::string buildWifiStateJson(bool includeScanResults) {
+  JsonDocument doc;
+  doc["state"] = wifiStateName(wifi::state());
+  doc["ssid"] = wifi::currentSsid();
+  doc["ip"] = wifi::currentIp();
+  if (!wifi::lastError().empty()) {
+    doc["lastError"] = wifi::lastError();
+  }
+  if (includeScanResults) {
+    auto results = wifi::consumeScanResults();
+    if (!results.empty()) {
+      JsonArray arr = doc["scanResults"].to<JsonArray>();
+      for (const auto& r : results) {
+        JsonObject o = arr.add<JsonObject>();
+        o["ssid"] = r.ssid;
+        o["rssi"] = r.rssi;
+        o["encrypted"] = r.encrypted;
+      }
+    }
+  }
+  std::string out;
+  serializeJson(doc, out);
+  return out;
+}
+
+class WifiStateCallback : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    auto json = buildWifiStateJson(true);
+    c->setValue(json);
+  }
+};
+
+void notifyWifiState() {
+  if (!s_wifiStateChar) return;
+  auto json = buildWifiStateJson(true);
+  s_wifiStateChar->setValue(json);
+  s_wifiStateChar->notify();
+}
+
 class ExpressionTestCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     if (!isAuthed(connInfo.getConnHandle())) return;
@@ -258,6 +336,53 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
 };
 
 // ---------------------------------------------------------------------------
+// Per-section settings reads — split the old settings_blob into 5 smaller
+// characteristics so each stays well under MTU and can grow independently.
+// ---------------------------------------------------------------------------
+
+class LampSectionCallback : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    c->setValue(s_config->asLampJson().c_str());
+  }
+};
+
+class BaseSectionCallback : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    c->setValue(s_config->asBaseJson().c_str());
+  }
+};
+
+class ShadeSectionCallback : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    c->setValue(s_config->asShadeJson().c_str());
+  }
+};
+
+class ExprSectionCallback : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    c->setValue(s_config->asExpressionsJson().c_str());
+  }
+};
+
+class HomeSectionCallback : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    c->setValue(s_config->asHomeModeJson().c_str());
+  }
+};
+
+static void notifySection(NimBLECharacteristic* c, const String& json) {
+  if (!c) return;
+  c->setValue(json.c_str());
+  c->notify();
+}
+
+void notifyLampSection()        { notifySection(s_lampSectionChar,  s_config->asLampJson());        }
+void notifyBaseSection()        { notifySection(s_baseSectionChar,  s_config->asBaseJson());        }
+void notifyShadeSection()       { notifySection(s_shadeSectionChar, s_config->asShadeJson());       }
+void notifyExpressionsSection() { notifySection(s_exprSectionChar,  s_config->asExpressionsJson()); }
+void notifyHomeModeSection()    { notifySection(s_homeSectionChar,  s_config->asHomeModeJson());    }
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -307,6 +432,44 @@ void start(lamp::Config* config, Preferences* prefs) {
       ->setCallbacks(new BaseKnockoutCallback());
   s_service->createCharacteristic(CHAR_EXPRESSION_TEST, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ExpressionTestCallback());
+  s_service->createCharacteristic(CHAR_EXPRESSION_OP, NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks(new ExpressionOpCallback());
+  s_service->createCharacteristic(CHAR_WIFI_OP, NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks(new WifiOpCallback());
+  s_wifiStateChar = s_service->createCharacteristic(
+      CHAR_WIFI_STATE,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  s_wifiStateChar->setCallbacks(new WifiStateCallback());
+  s_wifiStateChar->setValue(buildWifiStateJson(false));
+
+  // Per-section settings characteristics — read + notify. Each onRead refreshes
+  // the cached value from live config. NimBLE returns the cached value on a
+  // GATT read, so we also seed the initial values here to handle the first read
+  // before any onRead fires.
+  s_lampSectionChar = s_service->createCharacteristic(
+      CHAR_LAMP_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  s_lampSectionChar->setCallbacks(new LampSectionCallback());
+  s_lampSectionChar->setValue(s_config->asLampJson().c_str());
+
+  s_baseSectionChar = s_service->createCharacteristic(
+      CHAR_BASE_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  s_baseSectionChar->setCallbacks(new BaseSectionCallback());
+  s_baseSectionChar->setValue(s_config->asBaseJson().c_str());
+
+  s_shadeSectionChar = s_service->createCharacteristic(
+      CHAR_SHADE_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  s_shadeSectionChar->setCallbacks(new ShadeSectionCallback());
+  s_shadeSectionChar->setValue(s_config->asShadeJson().c_str());
+
+  s_exprSectionChar = s_service->createCharacteristic(
+      CHAR_EXPR_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  s_exprSectionChar->setCallbacks(new ExprSectionCallback());
+  s_exprSectionChar->setValue(s_config->asExpressionsJson().c_str());
+
+  s_homeSectionChar = s_service->createCharacteristic(
+      CHAR_HOME_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  s_homeSectionChar->setCallbacks(new HomeSectionCallback());
+  s_homeSectionChar->setValue(s_config->asHomeModeJson().c_str());
 
   // Settings blob — read + write-with-response
   // Important: NimBLE returns the previously-set value on reads; the onRead
@@ -355,6 +518,12 @@ void stop() {
     s_server->removeService(s_service, true);
     s_service     = nullptr;
     s_stateNotify = nullptr;
+    s_wifiStateChar = nullptr;
+    s_lampSectionChar = nullptr;
+    s_baseSectionChar = nullptr;
+    s_shadeSectionChar = nullptr;
+    s_exprSectionChar = nullptr;
+    s_homeSectionChar = nullptr;
   }
 
   s_server  = nullptr;

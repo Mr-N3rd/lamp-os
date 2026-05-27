@@ -9,6 +9,12 @@ interface LampSettings {
   password?: string
 }
 
+interface HomeModeSettings {
+  ssid?: string
+  password?: string
+  brightness?: number
+}
+
 interface ShadeSettings {
   px?: number
   colors?: string[]
@@ -25,6 +31,7 @@ export interface Settings {
   lamp?: LampSettings
   shade?: ShadeSettings
   base?: BaseSettings
+  homeMode?: HomeModeSettings
 }
 
 // ============================================

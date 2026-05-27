@@ -18,6 +18,10 @@ namespace lamp {
 class Compositor {
  private:
   uint8_t i = 0;
+  // End-of-expression-band index in `behaviors`. Set by the lamp after
+  // pushing initial expressions; runtime adds/removes maintain it so new
+  // expressions land before higher-priority behaviors (configurator etc).
+  size_t expressionBandEnd = 0;
 
  public:
   std::vector<AnimatedBehavior*> underlayBehaviors;
@@ -59,6 +63,25 @@ class Compositor {
    * @return true if an exclusive behavior is running
    */
   bool hasActiveExclusive() const;
+
+  /**
+   * @brief mark the boundary between initial expression behaviors and
+   *        higher-priority behaviors. Runtime expression adds insert before
+   *        this index.
+   */
+  void setExpressionBandEnd(size_t end);
+
+  /**
+   * @brief insert a new expression behavior at the expression-band end.
+   *        Increments the band-end index.
+   */
+  void addBehavior(AnimatedBehavior* b);
+
+  /**
+   * @brief remove a behavior pointer. If it was within the expression band,
+   *        decrements the band-end index.
+   */
+  void removeBehavior(AnimatedBehavior* b);
 };
 }  // namespace lamp
 #endif

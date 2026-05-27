@@ -8,6 +8,8 @@
 #include <string>
 
 #include "../components/network/bluetooth.hpp"
+#include "../components/network/ble_control.hpp"
+#include "../components/network/wifi.hpp"
 #include "../expressions/expression_manager.hpp"
 #include "../util/color.hpp"
 #include "./behaviors/configurator.hpp"
@@ -22,7 +24,6 @@
 #include "./util/color.hpp"
 #include "./util/gradient.hpp"
 #include "./util/levels.hpp"
-#include "SPIFFS.h"
 
 Adafruit_NeoPixel* shadeStrip = nullptr;
 Adafruit_NeoPixel* baseStrip = nullptr;
@@ -34,11 +35,18 @@ Preferences prefs;
 // vector building, state mutation. Single-core memory pattern.
 
 constexpr size_t MAX_PENDING_JSON = 256;
+constexpr size_t MAX_PENDING_OP_JSON = 512;  // expression op payloads are larger
 
 struct PendingJsonUpdate {
   bool valid = false;
   uint16_t length = 0;
   char json[MAX_PENDING_JSON];
+};
+
+struct PendingOpJsonUpdate {
+  bool valid = false;
+  uint16_t length = 0;
+  char json[MAX_PENDING_OP_JSON];
 };
 
 struct PendingKnockoutUpdate {
@@ -51,6 +59,8 @@ volatile int8_t pendingBrightness = -1;
 PendingJsonUpdate pendingBaseColorsJson;
 PendingJsonUpdate pendingShadeColorsJson;
 PendingKnockoutUpdate pendingKnockout;
+PendingOpJsonUpdate pendingExpressionOpJson;
+PendingOpJsonUpdate pendingWifiOpJson;
 portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
 
 static void postPendingJson(PendingJsonUpdate& slot, const char* data, size_t len) {
@@ -70,6 +80,24 @@ void postPendingKnockout(uint8_t pixel, uint8_t brightness) {
   pendingKnockout.pixel = pixel;
   pendingKnockout.brightness = brightness;
   pendingKnockout.valid = true;
+  portEXIT_CRITICAL(&pendingMux);
+}
+
+void postPendingExpressionOpJson(const char* data, size_t len) {
+  if (len > MAX_PENDING_OP_JSON) return;
+  portENTER_CRITICAL(&pendingMux);
+  pendingExpressionOpJson.length = static_cast<uint16_t>(len);
+  memcpy(pendingExpressionOpJson.json, data, len);
+  pendingExpressionOpJson.valid = true;
+  portEXIT_CRITICAL(&pendingMux);
+}
+
+void postPendingWifiOpJson(const char* data, size_t len) {
+  if (len > MAX_PENDING_OP_JSON) return;
+  portENTER_CRITICAL(&pendingMux);
+  pendingWifiOpJson.length = static_cast<uint16_t>(len);
+  memcpy(pendingWifiOpJson.json, data, len);
+  pendingWifiOpJson.valid = true;
   portEXIT_CRITICAL(&pendingMux);
 }
 
@@ -119,6 +147,9 @@ void initBehaviors() {
   allBehaviors.push_back(&shadeFadeOutBehavior);
 
   compositor.begin(allBehaviors, {&shade, &base}, /*homeMode=*/false);
+  // Record where the initial expression behaviors end so runtime adds insert
+  // before higher-priority behaviors (social, configurator, fade-out).
+  compositor.setExpressionBandEnd(exprBehaviors.size());
   compositor.overlayBehaviors.push_back(&baseKnockoutBehavior);
 
   lamp::setGlobalCompositor(&compositor);
@@ -169,22 +200,9 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
   if (action == "test_expression") {
     String type = String(doc["type"]);
     if (type.length() > 0) {
-      // If the payload carries colors/interval, reconfigure the existing
-      // Expression instances in place so Test reflects the UI's current
-      // edits without a settings save. We can NOT addExpression() at runtime
-      // because the compositor's behavior list is built once at setup.
-      if (doc["colors"].is<JsonArray>()) {
-        std::vector<lamp::Color> newColors;
-        for (JsonVariant cv : doc["colors"].as<JsonArray>()) {
-          newColors.push_back(lamp::hexStringToColor(cv));
-        }
-        uint32_t intervalMin = doc["intervalMin"] | 60;
-        uint32_t intervalMax = doc["intervalMax"] | 900;
-        lamp::ExpressionTarget target = doc["target"].is<int>()
-          ? static_cast<lamp::ExpressionTarget>(doc["target"].as<int>())
-          : lamp::TARGET_BOTH;
-        expressionManager.reconfigureByType(type.c_str(), newColors, intervalMin, intervalMax, target);
-      }
+      lamp::ExpressionTarget target = doc["target"].is<int>()
+        ? static_cast<lamp::ExpressionTarget>(doc["target"].as<int>())
+        : lamp::TARGET_BOTH;
 #ifdef LAMP_DEBUG
       auto colors = expressionManager.getExpressionColors(type.c_str());
       String colorList;
@@ -192,11 +210,12 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
         if (colorList.length() > 0) colorList += " ";
         colorList += lamp::colorToHexString(c).c_str();
       }
-      Serial.printf("Testing expression: %s [%s]\n", type.c_str(), colorList.c_str());
+      Serial.printf("Testing expression: %s target=%d [%s]\n",
+                    type.c_str(), static_cast<int>(target), colorList.c_str());
 #endif
       shadeConfiguratorBehavior.disabled = true;
       baseConfiguratorBehavior.disabled = true;
-      expressionManager.triggerExpression(type.c_str());
+      expressionManager.triggerExpression(type.c_str(), target);
     }
   } else if (action == "test_expression_complete") {
     shadeConfiguratorBehavior.disabled = false;
@@ -229,13 +248,37 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
 
 extern void lamp_register_panic_handler();
 
+// Effective brightness depends on whether we're in home mode (joined to the
+// configured WiFi network). Falls back to the regular lamp brightness while
+// the BLE client has paused WiFi or no SSID is configured.
+static uint8_t effectiveBrightness() {
+  if (wifi::isConnected() && !config.homeMode.ssid.empty() &&
+      wifi::currentSsid() == config.homeMode.ssid) {
+    return config.homeMode.brightness;
+  }
+  return config.lamp.brightness;
+}
+
+static void applyEffectiveBrightness() {
+  uint8_t level = effectiveBrightness();
+  if (shadeStrip) shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+  if (baseStrip) baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+}
+
+static void onWifiStateChanged() {
+  applyEffectiveBrightness();
+  ble_control::notifyWifiState();
+}
+
 void setup() {
 #ifdef LAMP_DEBUG
   Serial.begin(115200);
 #endif
   lamp_register_panic_handler();
   config = lamp::Config(&prefs);
-  SPIFFS.begin(true);
+
+  wifi::begin();
+  wifi::setStateChangeCallback(onWifiStateChanged);
 
   bt.begin(config.lamp.name, config.base.colors[config.base.ac], config.shade.colors[0]);
   bt.activateGattServices(&config, &prefs);
@@ -244,11 +287,16 @@ void setup() {
   const uint16_t baseFmt = (config.base.bpp == 3) ? NEO_GRB : NEO_GRBW;
   shadeStrip = new Adafruit_NeoPixel(LAMP_MAX_STRIP_PIXELS_SHADE, LAMP_SHADE_PIN, shadeFmt + NEO_KHZ800);
   baseStrip = new Adafruit_NeoPixel(LAMP_MAX_STRIP_PIXELS_BASE, LAMP_BASE_PIN, baseFmt + NEO_KHZ800);
-  shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, config.lamp.brightness));
-  baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, config.lamp.brightness));
+  applyEffectiveBrightness();
   shade.begin(lamp::buildGradientWithStops(config.shade.px, config.shade.colors), config.shade.px, shadeStrip);
   base.begin(lamp::buildGradientWithStops(config.base.px, config.base.colors), config.base.px, baseStrip);
   initBehaviors();
+
+  // Kick off WiFi STA if home mode is configured. BLE onConnect/onDisconnect
+  // pauses/resumes WiFi for coexistence — this is the boot-time entry.
+  if (!config.homeMode.ssid.empty()) {
+    wifi::connect(config.homeMode.ssid, config.homeMode.password);
+  }
 };
 
 void loop() {
@@ -262,6 +310,10 @@ void loop() {
     config.lamp.brightness = level;
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+    // Apply the brightness the user wrote directly — they're either editing
+    // regular brightness, or live-previewing home-mode brightness (WiFi is
+    // paused while BLE is connected so effectiveBrightness would resolve to
+    // the regular path anyway, but trust the wire value here).
     if (shadeStrip) shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
     if (baseStrip)  baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
   }
@@ -330,6 +382,84 @@ void loop() {
       config.base.knockoutPixels[pixel] = brightness;
     }
   }
+
+  if (pendingExpressionOpJson.valid) {
+    char buf[MAX_PENDING_OP_JSON + 1];
+    uint16_t len;
+    portENTER_CRITICAL(&pendingMux);
+    len = pendingExpressionOpJson.length;
+    memcpy(buf, pendingExpressionOpJson.json, len);
+    pendingExpressionOpJson.valid = false;
+    portEXIT_CRITICAL(&pendingMux);
+    buf[len] = '\0';
+
+    JsonDocument doc;
+    if (deserializeJson(doc, buf) == DeserializationError::Ok) {
+      const char* op = doc["op"].as<const char*>();
+      if (op && strcmp(op, "upsert") == 0 && doc["entry"].is<JsonObject>()) {
+        JsonObject entry = doc["entry"].as<JsonObject>();
+        lamp::ExpressionConfig cfg;
+        cfg.type = std::string(entry["type"] | "");
+        cfg.enabled = entry["enabled"] | true;
+        cfg.intervalMin = entry["intervalMin"] | 60;
+        cfg.intervalMax = entry["intervalMax"] | 900;
+        cfg.target = entry["target"] | 3;
+        for (JsonPair kv : entry) {
+          std::string key(kv.key().c_str());
+          if (key == "type" || key == "enabled" || key == "intervalMin" ||
+              key == "intervalMax" || key == "target" || key == "colors") continue;
+          JsonVariant v = kv.value();
+          if (v.is<uint32_t>()) cfg.setParameter(key, v.as<uint32_t>());
+          else if (v.is<int>()) cfg.setParameter(key, static_cast<uint32_t>(v.as<int>()));
+        }
+        for (JsonVariant cv : entry["colors"].as<JsonArray>()) {
+          cfg.colors.push_back(lamp::hexStringToColor(cv));
+        }
+        if (!cfg.type.empty()) {
+          expressionManager.upsertExpression(cfg, &compositor);
+        }
+      } else if (op && strcmp(op, "remove") == 0) {
+        const char* type = doc["type"].as<const char*>();
+        int tgt = doc["target"] | 0;
+        if (type && tgt >= 1 && tgt <= 3) {
+          expressionManager.removeExpression(type, static_cast<lamp::ExpressionTarget>(tgt), &compositor);
+        }
+      }
+    }
+  }
+
+  if (pendingWifiOpJson.valid) {
+    char buf[MAX_PENDING_OP_JSON + 1];
+    uint16_t len;
+    portENTER_CRITICAL(&pendingMux);
+    len = pendingWifiOpJson.length;
+    memcpy(buf, pendingWifiOpJson.json, len);
+    pendingWifiOpJson.valid = false;
+    portEXIT_CRITICAL(&pendingMux);
+    buf[len] = '\0';
+
+    JsonDocument doc;
+    if (deserializeJson(doc, buf) == DeserializationError::Ok) {
+      const char* op = doc["op"].as<const char*>();
+      if (op && strcmp(op, "scan") == 0) {
+        wifi::startScan();
+      } else if (op && strcmp(op, "connect") == 0) {
+        std::string ssid(doc["ssid"] | "");
+        std::string password(doc["password"] | "");
+        if (!ssid.empty()) {
+          config.homeMode.ssid = ssid;
+          config.homeMode.password = password;
+          wifi::connect(ssid, password);
+        }
+      } else if (op && strcmp(op, "forget") == 0) {
+        config.homeMode.ssid.clear();
+        config.homeMode.password.clear();
+        wifi::forget();
+      }
+    }
+  }
+
+  wifi::tick();
 
   compositor.tick();
 };

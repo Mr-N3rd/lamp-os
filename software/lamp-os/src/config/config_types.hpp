@@ -106,5 +106,17 @@ class ExpressionSettings {
   std::vector<ExpressionConfig> expressions;
 };
 
+/**
+ * @brief Home mode: lamp joins this WiFi network as STA. While joined, the
+ *        lamp uses `brightness` (this struct's) instead of LampSettings.brightness.
+ *        WiFi is paused while a BLE client is connected (coexistence safety).
+ */
+class HomeModeSettings {
+ public:
+  std::string ssid;
+  std::string password;
+  uint8_t brightness = 60;
+};
+
 }  // namespace lamp
 #endif

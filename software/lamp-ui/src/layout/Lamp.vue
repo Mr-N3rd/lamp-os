@@ -218,7 +218,7 @@ onUnmounted(() => {
 /* WebSocket Status Indicator */
 .ws-status-indicator {
   position: fixed;
-  bottom: 16px;
+  top: 16px;
   right: 16px;
   z-index: 1001;
   background: rgba(0, 0, 0, 0.6);
@@ -280,7 +280,7 @@ onUnmounted(() => {
   }
 
   .ws-status-indicator {
-    bottom: 12px;
+    top: 12px;
     right: 12px;
   }
 }
