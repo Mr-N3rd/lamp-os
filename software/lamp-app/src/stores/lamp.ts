@@ -38,9 +38,6 @@ interface KnockoutPixel {
 interface LampSettings {
   name?: string
   brightness?: number
-  homeMode?: boolean
-  homeModeSSID?: string
-  homeModeBrightness?: number
   password?: string
   advancedEnabled?: boolean
 }
@@ -151,59 +148,51 @@ export const useLampStore = defineStore('lamp', () => {
     state.value.lamp.password = password
   }
 
+  // Coalescing write throttle. Slider drags fire updates at ~60 Hz; sending
+  // every one as a BLE write floods the lamp's NimBLE host task and starves
+  // its loop task, eventually crashing the lamp. We update state.value
+  // immediately (UI stays snappy) but rate-limit the actual BLE write to
+  // ~16 Hz, latest-value-wins.
+  const WRITE_THROTTLE_MS = 60
+  type Pending = { value: unknown; flushAt: number; timer: ReturnType<typeof setTimeout> | null }
+  const pendingWrites = new Map<string, Pending>()
+
+  const scheduleWrite = (key: string, value: unknown, doWrite: (v: unknown) => Promise<void>) => {
+    const existing = pendingWrites.get(key)
+    const now = Date.now()
+    if (existing) {
+      existing.value = value
+      return
+    }
+    const delay = WRITE_THROTTLE_MS
+    const entry: Pending = {
+      value,
+      flushAt: now + delay,
+      timer: setTimeout(async () => {
+        const e = pendingWrites.get(key)
+        if (!e) return
+        pendingWrites.delete(key)
+        try { await doWrite(e.value) } catch (err) {
+          console.warn(`[lamp] ${key} write failed:`, err)
+        }
+      }, delay),
+    }
+    pendingWrites.set(key, entry)
+  }
+
   const updateBrightness = async (brightness: number) => {
     if (!state.value.lamp) state.value.lamp = {}
     state.value.lamp.brightness = brightness
-    if (!state.value.lamp.homeMode && wsConnected.value) {
-      try {
-        await writeBrightness(deviceId(), brightness)
-      } catch (err) {
-        console.warn('[lamp] writeBrightness failed:', err)
-      }
-    }
-  }
-
-  const updateHomeMode = async (enabled: boolean) => {
-    if (!state.value.lamp) state.value.lamp = {}
-    state.value.lamp.homeMode = enabled
     if (wsConnected.value) {
-      try {
-        const v = enabled
-          ? (state.value.lamp.homeModeBrightness ?? 80)
-          : (state.value.lamp.brightness ?? 100)
-        await writeBrightness(deviceId(), v)
-      } catch (err) {
-        console.warn('[lamp] writeBrightness (homeMode) failed:', err)
-      }
+      scheduleWrite('brightness', brightness, (v) => writeBrightness(deviceId(), v as number))
     }
-  }
-
-  const updateHomeModeBrightness = async (brightness: number) => {
-    if (!state.value.lamp) state.value.lamp = {}
-    state.value.lamp.homeModeBrightness = brightness
-    if (state.value.lamp.homeMode && wsConnected.value) {
-      try {
-        await writeBrightness(deviceId(), brightness)
-      } catch (err) {
-        console.warn('[lamp] writeBrightness (homeModeBrightness) failed:', err)
-      }
-    }
-  }
-
-  const updateHomeModeSSID = (ssid: string) => {
-    if (!state.value.lamp) state.value.lamp = {}
-    state.value.lamp.homeModeSSID = ssid
   }
 
   const updateShadeColors = async (colors: string[]) => {
     if (!state.value.shade) state.value.shade = {}
     state.value.shade.colors = colors
     if (wsConnected.value) {
-      try {
-        await writeShadeColors(deviceId(), colors)
-      } catch (err) {
-        console.warn('[lamp] writeShadeColors failed:', err)
-      }
+      scheduleWrite('shadeColors', colors, (v) => writeShadeColors(deviceId(), v as string[]))
     }
   }
 
@@ -211,11 +200,7 @@ export const useLampStore = defineStore('lamp', () => {
     if (!state.value.base) state.value.base = {}
     state.value.base.colors = colors
     if (wsConnected.value) {
-      try {
-        await writeBaseColors(deviceId(), colors)
-      } catch (err) {
-        console.warn('[lamp] writeBaseColors failed:', err)
-      }
+      scheduleWrite('baseColors', colors, (v) => writeBaseColors(deviceId(), v as string[]))
     }
   }
 
@@ -546,9 +531,6 @@ export const useLampStore = defineStore('lamp', () => {
     updateLampName,
     updateLampPassword,
     updateBrightness,
-    updateHomeMode,
-    updateHomeModeBrightness,
-    updateHomeModeSSID,
 
     // Color update methods
     updateShadeColors,

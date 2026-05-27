@@ -6,9 +6,6 @@ interface KnockoutPixel {
 interface LampSettings {
   name?: string
   brightness?: number
-  homeMode?: boolean
-  homeModeSSID?: string
-  homeModeBrightness?: number
   password?: string
 }
 

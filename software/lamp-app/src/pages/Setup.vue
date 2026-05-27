@@ -46,45 +46,6 @@ const fields = computed<FieldDefinition[]>(() => [
     },
   },
   {
-    name: 'homeModeHeading',
-    type: 'group-heading',
-    label: 'At-Home Mode',
-  },
-  {
-    name: 'homeMode',
-    type: 'boolean',
-    label: 'Home Mode',
-    default: false,
-    optional: true,
-  },
-  {
-    name: 'homeModeBrightness',
-    type: 'brightness-slider',
-    label: 'Home Mode Brightness',
-    default: 80,
-    optional: true,
-    // show: (values: FormValues) => values.homeMode === true,
-    props: {
-      min: 0,
-      max: 100,
-      step: 1,
-      append: '%',
-    },
-  },
-  {
-    name: 'homeModeSSID',
-    type: 'text',
-    label: 'Home Network SSID',
-    help: 'When the lamp detects this WiFi network, it will automatically activate special home-only features and behaviors.',
-    default: '',
-    optional: true,
-    show: (values: FormValues) => values.homeMode === true,
-    props: {
-      placeholder: 'Enter your home WiFi name',
-      maxLength: 32,
-    },
-  },
-  {
     name: 'ledProfileHeading',
     type: 'group-heading',
     label: 'Lamp Base LED Profile',
@@ -148,9 +109,6 @@ const formValues = computed({
   get: () => ({
     name: lampStore.state.lamp?.name ?? '',
     password: lampStore.state.lamp?.password ?? '',
-    homeMode: lampStore.state.lamp?.homeMode ?? false,
-    homeModeBrightness: lampStore.state.lamp?.homeModeBrightness ?? 80,
-    homeModeSSID: lampStore.state.lamp?.homeModeSSID ?? '',
     basePx: lampStore.state.base?.px ?? 36,
     baseBpp: lampStore.state.base?.bpp ?? 4,
     shadeBpp: lampStore.state.shade?.bpp ?? 4,
@@ -167,15 +125,6 @@ const handleFormUpdate = (values: FormValues) => {
   }
   if (values.password !== undefined && values.password !== formValues.value.password) {
     lampStore.updateLampPassword(values.password as string)
-  }
-  if (values.homeMode !== undefined && values.homeMode !== formValues.value.homeMode) {
-    lampStore.updateHomeMode(values.homeMode as boolean)
-  }
-  if (values.homeModeBrightness !== undefined && values.homeModeBrightness !== formValues.value.homeModeBrightness) {
-    lampStore.updateHomeModeBrightness(values.homeModeBrightness as number)
-  }
-  if (values.homeModeSSID !== undefined && values.homeModeSSID !== formValues.value.homeModeSSID) {
-    lampStore.updateHomeModeSSID(values.homeModeSSID as string)
   }
   if (values.basePx !== undefined && values.basePx !== formValues.value.basePx) {
     lampStore.updateBasePxCount(values.basePx as number)
