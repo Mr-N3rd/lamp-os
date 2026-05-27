@@ -437,6 +437,25 @@ export const useLampStore = defineStore('lamp', () => {
       dlog(`requestConnectionPriority skipped: ${e instanceof Error ? e.message : String(e)}`)
     }
 
+    // Force fresh service discovery (Android caches services across sessions;
+    // if firmware changed, the cache may be stale).
+    try {
+      dlog('discoverServices…')
+      await BleClient.discoverServices(newTarget.deviceId)
+      dlog('discoverServices OK')
+    } catch (e) {
+      dlog(`discoverServices threw: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    // Log discovered services so we can see what the app actually knows about
+    try {
+      const services = await BleClient.getServices(newTarget.deviceId)
+      const uuids = services.map((s) => s.uuid)
+      dlog(`getServices: ${uuids.length} services [${uuids.join(', ')}]`)
+    } catch (e) {
+      dlog(`getServices threw: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
     // Read current settings
     try {
       dlog('readSettingsBlob…')
