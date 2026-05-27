@@ -29,6 +29,46 @@
 Adafruit_NeoPixel* shadeStrip = nullptr;
 Adafruit_NeoPixel* baseStrip = nullptr;
 Preferences prefs;
+
+// ── Cross-task action queue ─────────────────────────────────────────────────
+//
+// BLE GATT callbacks run on the NimBLE host task (Core 0). The render loop and
+// compositor.tick() run on the Arduino loop task (Core 1). They share LED
+// state (NeoPixel brightness, ConfiguratorBehavior colors, knockout pixels).
+// Mutating these from the BLE task while loop() reads them is a real data
+// race: vector reassignment under iteration crashes mid-frame.
+//
+// Solution: BLE callbacks deposit pending actions into these slots. Loop()
+// drains them at the top of each tick BEFORE rendering. Single-slot last-write-
+// wins is fine for slider-drag UX. Mutex-protected because vector copy isn't
+// atomic on dual-core ESP32.
+
+constexpr uint8_t MAX_PENDING_COLORS = 5;
+
+struct PendingColorUpdate {
+  bool valid = false;
+  uint8_t count = 0;
+  lamp::Color colors[MAX_PENDING_COLORS];
+};
+
+volatile int8_t pendingBrightness = -1;       // -1 = no pending change
+PendingColorUpdate pendingBaseColors;
+PendingColorUpdate pendingShadeColors;
+portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
+
+// Called from BLE callbacks (Core 0). Stores up to MAX_PENDING_COLORS colors
+// in the pending slot for the loop to apply.
+static void postPendingColors(PendingColorUpdate& slot, const std::vector<lamp::Color>& newColors) {
+  portENTER_CRITICAL(&pendingMux);
+  slot.count = newColors.size() < MAX_PENDING_COLORS ? newColors.size() : MAX_PENDING_COLORS;
+  for (uint8_t i = 0; i < slot.count; i++) slot.colors[i] = newColors[i];
+  slot.valid = true;
+  portEXIT_CRITICAL(&pendingMux);
+}
+
+void postPendingBaseColors(const std::vector<lamp::Color>& c) { postPendingColors(pendingBaseColors, c); }
+void postPendingShadeColors(const std::vector<lamp::Color>& c) { postPendingColors(pendingShadeColors, c); }
+void postPendingBrightness(int8_t level) { pendingBrightness = level; }
 uint32_t lastStageModeCheckTimeMs = 0;
 uint32_t lastDmxCheckTimeMs = 0;
 uint32_t lastArtnetFrameTimeMs = 0;
@@ -206,9 +246,10 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
   String action = String(doc["a"]);
   if (action == "bright") {
     int level = doc["v"] | 100;
-    // Apply immediately for real-time control
-    shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-    baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    // Defer to loop — see PendingColorUpdate notes above. Direct setBrightness
+    // from BLE task races with compositor.tick() rendering on Core 1.
+    config.lamp.brightness = level;
+    postPendingBrightness(static_cast<int8_t>(level & 0x7F));
   } else if (action == "knockout") {
     int pixelIndex = doc["p"];
     int percentage = doc["b"];
@@ -223,7 +264,10 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
       for (JsonVariant baseColor : baseColors) {
         updatedColors.push_back(lamp::hexStringToColor(baseColor));
       }
-      baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, updatedColors);
+      // Defer the buildGradient + assignment to loop — vector reassignment
+      // here would race with compositor.tick() reading the configurator's
+      // colors on the other core.
+      postPendingBaseColors(updatedColors);
     }
   } else if (action == "shade") {
     JsonArray shadeColors = doc["c"];
@@ -232,7 +276,7 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
       for (JsonVariant shadeColor : shadeColors) {
         updatedColors.push_back(lamp::hexStringToColor(shadeColor));
       }
-      shadeConfiguratorBehavior.colors = lamp::buildGradientWithStops(shade.pixelCount, updatedColors);
+      postPendingShadeColors(updatedColors);
     }
   } else if (action == "test_expression") {
     String type = String(doc["type"]);
@@ -304,6 +348,35 @@ void setup() {
 };
 
 void loop() {
+  // Drain pending BLE actions BEFORE the render. All mutations of behavior
+  // state and strip brightness must happen on this task to avoid racing the
+  // compositor / NeoPixel show() on Core 1.
+
+  if (pendingBrightness >= 0) {
+    uint8_t level = static_cast<uint8_t>(pendingBrightness);
+    if (shadeStrip) shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    if (baseStrip)  baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    pendingBrightness = -1;
+  }
+
+  if (pendingBaseColors.valid) {
+    std::vector<lamp::Color> colors;
+    portENTER_CRITICAL(&pendingMux);
+    for (uint8_t i = 0; i < pendingBaseColors.count; i++) colors.push_back(pendingBaseColors.colors[i]);
+    pendingBaseColors.valid = false;
+    portEXIT_CRITICAL(&pendingMux);
+    baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, colors);
+  }
+
+  if (pendingShadeColors.valid) {
+    std::vector<lamp::Color> colors;
+    portENTER_CRITICAL(&pendingMux);
+    for (uint8_t i = 0; i < pendingShadeColors.count; i++) colors.push_back(pendingShadeColors.colors[i]);
+    pendingShadeColors.valid = false;
+    portEXIT_CRITICAL(&pendingMux);
+    shadeConfiguratorBehavior.colors = lamp::buildGradientWithStops(shade.pixelCount, colors);
+  }
+
   handleStageMode();
   handleArtnet();
   handleWebSocket();
