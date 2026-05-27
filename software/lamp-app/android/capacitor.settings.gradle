@@ -10,6 +10,3 @@ project(':capacitor-app').projectDir = new File('../node_modules/@capacitor/app/
 
 include ':capacitor-preferences'
 project(':capacitor-preferences').projectDir = new File('../node_modules/@capacitor/preferences/android')
-
-include ':capacitor-zeroconf'
-project(':capacitor-zeroconf').projectDir = new File('../node_modules/capacitor-zeroconf/android')
