@@ -359,21 +359,31 @@ void loop() {
     pendingBrightness = -1;
   }
 
+  // Drain pending color updates. We must NOT allocate memory inside the
+  // critical section (push_back can call malloc, which on ESP32 can deadlock
+  // with interrupts disabled). Copy into a stack array first, exit the
+  // critical section, then build the std::vector outside.
   if (pendingBaseColors.valid) {
-    std::vector<lamp::Color> colors;
+    lamp::Color tmp[MAX_PENDING_COLORS];
+    uint8_t count;
     portENTER_CRITICAL(&pendingMux);
-    for (uint8_t i = 0; i < pendingBaseColors.count; i++) colors.push_back(pendingBaseColors.colors[i]);
+    count = pendingBaseColors.count;
+    for (uint8_t i = 0; i < count; i++) tmp[i] = pendingBaseColors.colors[i];
     pendingBaseColors.valid = false;
     portEXIT_CRITICAL(&pendingMux);
+    std::vector<lamp::Color> colors(tmp, tmp + count);
     baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, colors);
   }
 
   if (pendingShadeColors.valid) {
-    std::vector<lamp::Color> colors;
+    lamp::Color tmp[MAX_PENDING_COLORS];
+    uint8_t count;
     portENTER_CRITICAL(&pendingMux);
-    for (uint8_t i = 0; i < pendingShadeColors.count; i++) colors.push_back(pendingShadeColors.colors[i]);
+    count = pendingShadeColors.count;
+    for (uint8_t i = 0; i < count; i++) tmp[i] = pendingShadeColors.colors[i];
     pendingShadeColors.valid = false;
     portEXIT_CRITICAL(&pendingMux);
+    std::vector<lamp::Color> colors(tmp, tmp + count);
     shadeConfiguratorBehavior.colors = lamp::buildGradientWithStops(shade.pixelCount, colors);
   }
 
