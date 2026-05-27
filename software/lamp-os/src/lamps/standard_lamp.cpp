@@ -356,6 +356,13 @@ void loop() {
     uint8_t level = static_cast<uint8_t>(pendingBrightness);
     if (shadeStrip) shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
     if (baseStrip)  baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    // setBrightness scales the strip's pixel buffer IN PLACE with lossy integer
+    // math. When the configurator is in PAUSED state (idle after the ease-in),
+    // it isn't writing fresh pixels, so the scaled values stick — colors look
+    // damaged or "reset." Force the configurators to redraw at the new
+    // brightness so each frame writes fresh, un-scaled values.
+    shadeConfiguratorBehavior.playOnce();
+    baseConfiguratorBehavior.playOnce();
     pendingBrightness = -1;
   }
 
