@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import type { Ref } from 'vue'
+import { BleClient } from '@capacitor-community/bluetooth-le'
 import { initBle, scanForLamps } from '@/services/ble'
 import type { BleScanDebug } from '@/services/ble'
 import { useLampInventoryStore } from '@/stores/lampInventory'
@@ -86,6 +87,11 @@ export async function startScan(): Promise<{
 
   function stop() {
     bleStopped = true
+    // Actually halt the LE scan in the BLE stack so subsequent GATT connects
+    // don't fight with an active scan (Android in particular dislikes this).
+    void BleClient.stopLEScan().catch(() => {
+      // already stopped or never started — ignore
+    })
   }
 
   return {

@@ -382,14 +382,28 @@ export const useLampStore = defineStore('lamp', () => {
   const initialize = async (newTarget: LampTarget) => {
     target.value = newTarget
 
-    try {
-      await BleClient.connect(newTarget.deviceId, () => {
-        // Disconnect callback — lamp dropped connection
-        wsConnected.value = false
-        console.log('[lamp] BLE disconnected')
-      })
-    } catch (err) {
-      console.warn('[lamp] BleClient.connect failed:', err)
+    // Make sure no stray LE scan is fighting with our GATT connect
+    try { await BleClient.stopLEScan() } catch { /* ignore */ }
+
+    // Connect with one automatic retry on transient failure (Android in
+    // particular often needs a second attempt right after a scan).
+    let connected = false
+    let lastErr: unknown = null
+    for (let attempt = 1; attempt <= 2 && !connected; attempt++) {
+      try {
+        await BleClient.connect(newTarget.deviceId, () => {
+          wsConnected.value = false
+          console.log('[lamp] BLE disconnected')
+        })
+        connected = true
+      } catch (err) {
+        lastErr = err
+        console.warn(`[lamp] BleClient.connect attempt ${attempt} failed:`, err)
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+    if (!connected) {
+      console.warn('[lamp] BleClient.connect gave up:', lastErr)
       loaded.value = true
       return
     }
