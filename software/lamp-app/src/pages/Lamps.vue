@@ -1,12 +1,37 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useLampInventoryStore } from '@/stores/lampInventory'
+import { useLampStore } from '@/stores/lamp'
 import { initBle, scanForLamps } from '@/services/ble'
 import { BleClient } from '@capacitor-community/bluetooth-le'
+import LampIcon from '@/components/LampIcon.vue'
 
 const router = useRouter()
 const inventory = useLampInventoryStore()
+// nearbyLamps is populated whenever the user is (or recently was) BLE-paired
+// to a lamp. Pinia keeps it across navigation, so after one connect the
+// gallery can flag which inventory lamps are reachable + surface lamps not
+// yet in inventory.
+const lampStore = useLampStore()
+
+// Per-name lookup so we can badge inventory rows with via* flags.
+const nearbyByName = computed(() => {
+  const m = new Map<string, { viaBle: boolean; viaEspNow: boolean }>()
+  for (const l of lampStore.nearbyLamps) {
+    m.set(l.name, { viaBle: l.viaBle, viaEspNow: l.viaEspNow })
+  }
+  return m
+})
+
+const isInGrid = (name: string) => !!nearbyByName.value.get(name)?.viaEspNow
+
+// Lamps reachable nearby that aren't in inventory yet — surfaces undiscovered
+// peers with the same badges as inventory rows.
+const unknownNearby = computed(() => {
+  const inv = new Set(inventory.lamps.map((l) => l.name))
+  return lampStore.nearbyLamps.filter((l) => !inv.has(l.name))
+})
 
 async function pollOnce() {
   const knownIds = new Set(inventory.lamps.map((l) => l.id))
@@ -52,10 +77,18 @@ const isOnline = (lamp: { lastSeen?: number }) => {
   return Date.now() - lamp.lastSeen < 30_000
 }
 
-const swatchStyle = (color?: [number, number, number]) => {
-  if (!color) return { background: 'var(--brand-slate-grey)' }
-  return { background: `rgb(${color[0]}, ${color[1]}, ${color[2]})` }
+const statusDotClass = (lamp: { name: string; lastSeen?: number }) => {
+  if (!isOnline(lamp)) return ''       // grey (default)
+  if (isInGrid(lamp.name)) return 'status-dot--mesh'  // bright green
+  return 'status-dot--bt'                                // dim green
 }
+
+const statusTitle = (lamp: { name: string; lastSeen?: number }) => {
+  if (!isOnline(lamp)) return 'Offline'
+  if (isInGrid(lamp.name)) return 'Online · on the mesh'
+  return 'Online · legacy BLE only'
+}
+
 </script>
 
 <template>
@@ -74,19 +107,49 @@ const swatchStyle = (color?: [number, number, number]) => {
             class="lamp-row"
             @click="openLamp(lamp.id)"
           >
-            <span class="status-dot" :class="{ online: isOnline(lamp) }"></span>
+            <span
+              class="status-dot"
+              :class="statusDotClass(lamp)"
+              :title="statusTitle(lamp)"
+            ></span>
             <div class="lamp-info">
               <span class="lamp-name">{{ lamp.name }}</span>
             </div>
-            <div class="lamp-colors" :class="{ offline: !isOnline(lamp) }">
-              <span class="swatch" :style="swatchStyle(lamp.lastShadeColor)"></span>
-              <span class="swatch" :style="swatchStyle(lamp.lastBaseColor)"></span>
-            </div>
+            <LampIcon
+              :shade="lamp.lastShadeColor ?? [60, 60, 60]"
+              :base="lamp.lastBaseColor ?? [60, 60, 60]"
+              :size="26"
+              :class="{ 'lamp-icon--offline': !isOnline(lamp) }"
+            />
             <span class="lamp-chevron">›</span>
           </li>
         </ul>
 
         <p v-else class="empty">No lamps yet. Tap "Add a lamp" to get started.</p>
+
+        <!-- Nearby lamps not in inventory — reachable via BLE adv or grid,
+             but the user hasn't added them. Read-only here; full add flow
+             is the existing Add Lamp page. -->
+        <section v-if="unknownNearby.length" class="unknown-grid">
+          <h2 class="unknown-grid-title">Other nearby lamps</h2>
+          <ul class="lamp-list">
+            <li
+              v-for="lamp in unknownNearby"
+              :key="lamp.mac || lamp.name"
+              class="lamp-row lamp-row--unknown"
+            >
+              <span
+                class="status-dot"
+                :class="lamp.viaEspNow ? 'status-dot--mesh' : 'status-dot--bt'"
+                :title="lamp.viaEspNow ? 'Online · on the mesh' : 'Online · legacy BLE only'"
+              ></span>
+              <div class="lamp-info">
+                <span class="lamp-name">{{ lamp.name || '(unnamed)' }}</span>
+              </div>
+              <LampIcon :shade="lamp.shade" :base="lamp.base" :size="26" />
+            </li>
+          </ul>
+        </section>
       </div>
     </div>
   </div>
@@ -182,7 +245,10 @@ const swatchStyle = (color?: [number, number, number]) => {
   background: rgba(253, 253, 253, 0.06);
 }
 
-/* Status dot */
+/* Status dot — three states:
+   - default: grey (offline)
+   - .status-dot--bt: dim green (online, legacy BLE only)
+   - .status-dot--mesh: bright glowing green (online + reachable via mesh) */
 .status-dot {
   flex-shrink: 0;
   width: 10px;
@@ -191,16 +257,18 @@ const swatchStyle = (color?: [number, number, number]) => {
   background: var(--brand-slate-grey);
   transition: all 0.3s ease;
 }
-
-.status-dot.online {
+.status-dot--bt {
+  background: #4d6f53;
+  box-shadow: 0 0 4px rgba(77, 111, 83, 0.4);
+}
+.status-dot--mesh {
   background: var(--color-success);
   box-shadow: 0 0 8px rgba(141, 205, 166, 0.6);
   animation: pulse 2s ease-in-out infinite;
 }
-
 @keyframes pulse {
   0%, 100% { box-shadow: 0 0 6px rgba(141, 205, 166, 0.5); }
-  50% { box-shadow: 0 0 12px rgba(141, 205, 166, 0.8); }
+  50%      { box-shadow: 0 0 12px rgba(141, 205, 166, 0.85); }
 }
 
 /* Lamp info */
@@ -217,25 +285,26 @@ const swatchStyle = (color?: [number, number, number]) => {
   font-size: 1rem;
 }
 
-.lamp-colors {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-  opacity: 1;
-  transition: opacity 0.3s ease;
-}
+.lamp-icon--offline { opacity: 0.35; }
 
-.lamp-colors.offline {
-  opacity: 0.35;
+/* Unknown grid peers section */
+.unknown-grid {
+  margin-top: 24px;
 }
-
-.swatch {
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
-  border: 1px solid rgba(253, 253, 253, 0.15);
-  box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.3);
-  transition: background 0.3s ease;
+.unknown-grid-title {
+  color: var(--brand-fog-grey);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 8px 4px;
+}
+.lamp-row--unknown {
+  opacity: 0.9;
+  cursor: default;
+}
+.lamp-row--unknown:active {
+  background: var(--color-background-mute);
 }
 
 .lamp-chevron {

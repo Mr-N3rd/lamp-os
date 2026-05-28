@@ -118,5 +118,26 @@ class HomeModeSettings {
   uint8_t brightness = 60;
 };
 
+/**
+ * @brief Smart-home MQTT integration. Only runs while WiFi STA is connected
+ *        (which means: home mode is configured AND BLE isn't holding the radio).
+ *        Compiled in unconditionally; behavior fully gated by `enabled`.
+ * @property enabled       master on/off
+ * @property brokerHost    broker hostname or IP
+ * @property brokerPort    broker port (default 1883)
+ * @property username      optional broker auth user
+ * @property password      optional broker auth password
+ * @property topicPrefix   topic root; empty defaults to "homeassistant"
+ */
+class MqttSettings {
+ public:
+  bool enabled = false;
+  std::string brokerHost = "";
+  uint16_t brokerPort = 1883;
+  std::string username = "";
+  std::string password = "";
+  std::string topicPrefix = "";
+};
+
 }  // namespace lamp
 #endif

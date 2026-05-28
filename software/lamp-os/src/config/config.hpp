@@ -24,6 +24,7 @@ class Config {
   ShadeSettings shade;
   ExpressionSettings expressions;
   HomeModeSettings homeMode;
+  MqttSettings mqtt;
 
   Config() {};
 
@@ -47,6 +48,7 @@ class Config {
   String asShadeJson();
   String asExpressionsJson();
   String asHomeModeJson();
+  String asMqttJson();
 };
 }  // namespace lamp
 

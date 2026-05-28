@@ -4,7 +4,6 @@
 #include <string>
 
 #include "../../config/config.hpp"
-#include "./bluetooth_pool.hpp"
 
 // Lamp manufacturer identifier
 #define BLE_LAMP_MAGIC_NUMBER 42069
@@ -59,19 +58,6 @@ class BluetoothComponent {
    * active when ble_gatts_add_svcs runs (silent service registration drop).
    */
   void activateGattServices(Config* cfg, Preferences* prefs);
-
-  /**
-   * @brief get a snapshot of nearby lamps. Returns a COPY taken under the
-   * pool's mutex so callers can iterate without racing the BLE scan task.
-   */
-  std::vector<BluetoothLampRecord> getLamps();
-
-  /**
-   * @brief mark a lamp in the live pool as acknowledged, identified by name.
-   * Used by SocialBehavior to persist its iteration-time write back to the
-   * live pool under the lock.
-   */
-  void acknowledgeLamp(const std::string& name);
 };
 }  // namespace lamp
 #endif

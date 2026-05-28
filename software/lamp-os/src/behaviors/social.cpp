@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-#include "../components/network/bluetooth.hpp"
+#include "../components/network/nearby_lamps.hpp"
 #include "../util/color.hpp"
 #include "../util/fade.hpp"
 
@@ -22,10 +22,11 @@ void SocialBehavior::draw() {
 };
 
 void SocialBehavior::control() {
-  // Snapshot the pool under the BluetoothPool mutex. Iterating a live
-  // pool while the NimBLE scan task mutates it on Core 0 was the cause of
-  // _invalid_pc_placeholder crashes (vector iterator invalidation).
-  std::vector<BluetoothLampRecord> foundLamps = bt->getLamps();
+  // Greet only lamps we've actually heard within BLE-adv range — ESP-NOW-only
+  // (potentially 200 m away) shouldn't trigger the close-range social fade.
+  // Snapshot is taken under nearbyLamps' mutex so iterating is safe against
+  // the NimBLE scan task and the ESP-NOW recv task both writing.
+  std::vector<NearbyLamp> foundLamps = nearbyLamps.getReachableViaBle(LAMP_PRUNE_TIME_MS);
 
   if (animationState == STOPPED && millis() > nextAcknowledgeTimeMs) {
     for (auto it = foundLamps.rbegin(); it != foundLamps.rend(); ++it) {
@@ -33,9 +34,8 @@ void SocialBehavior::control() {
 #ifdef LAMP_DEBUG
         Serial.printf("Acknowledging %s\n", it->name.c_str());
 #endif
-        // Persist the acknowledgement back to the live pool through the
-        // locked API; the local `it` is just a snapshot copy.
-        bt->acknowledgeLamp(it->name);
+        // Persist back to the live store; the local `it` is just a copy.
+        nearbyLamps.acknowledge(it->name);
         foundLampColor = it->baseColor;
         nextAcknowledgeTimeMs = millis() + LAMP_TIME_BETWEEN_ACKNOWLEDGEMENT_MS;
 
@@ -46,7 +46,4 @@ void SocialBehavior::control() {
   }
 };
 
-void SocialBehavior::setBluetoothComponent(BluetoothComponent* inBt) {
-  bt = inBt;
-};
 }  // namespace lamp

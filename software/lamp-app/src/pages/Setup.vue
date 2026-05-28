@@ -1,14 +1,48 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import ComponentForm from '@/components/Form.vue'
 import BrightnessSlider from '@/components/BrightnessSlider.vue'
 import HomeNetworkSheet from '@/components/HomeNetworkSheet.vue'
 import type { FieldDefinition, FormValues } from '@/types'
 import { useLampStore, MAX_LEDS_BASE } from '@/stores/lamp'
+import type { MqttConfig } from '@/services/bleControl'
 
 const lampStore = useLampStore()
 
 const homeSheetOpen = ref(false)
+
+// ── Smart Home (MQTT) — appears under Home Mode once a network is configured ─
+const mqttForm = ref<MqttConfig>({
+  enabled: false,
+  brokerHost: '',
+  brokerPort: 1883,
+  username: '',
+  password: '',
+  topicPrefix: '',
+})
+const mqttSaving = ref(false)
+const mqttMsg = ref<string | null>(null)
+
+const syncMqttForm = () => {
+  const c = lampStore.mqttConfig
+  if (!c) return
+  mqttForm.value = { ...c }
+}
+syncMqttForm()
+watch(() => lampStore.mqttConfig, syncMqttForm)
+
+const onMqttSave = async () => {
+  mqttSaving.value = true
+  mqttMsg.value = null
+  try {
+    await lampStore.updateMqttConfig({ ...mqttForm.value })
+    mqttMsg.value = 'Saved'
+  } catch (err) {
+    mqttMsg.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    mqttSaving.value = false
+  }
+}
 
 const homeMode = computed(() => lampStore.state.homeMode ?? {})
 const homeSsid = computed(() => homeMode.value.ssid ?? '')
@@ -244,19 +278,101 @@ const ledCount = computed(() => lampStore.state.base?.px ?? 36)
         </div>
       </div>
 
-      <div class="home-mode-brightness">
-        <span class="home-mode-label">Home Mode Brightness</span>
-        <BrightnessSlider
-          :model-value="homeBrightness"
-          @update:model-value="onHomeBrightnessInput"
-          @change="onHomeBrightnessChange"
-          id="home-mode-brightness"
-          :min="0"
-          :max="100"
-          append="%"
-          :disabled="lampStore.disabled"
-        />
-      </div>
+      <template v-if="homeSsid">
+        <div class="home-mode-brightness">
+          <span class="home-mode-label">Home Mode Brightness</span>
+          <BrightnessSlider
+            :model-value="homeBrightness"
+            @update:model-value="onHomeBrightnessInput"
+            @change="onHomeBrightnessChange"
+            id="home-mode-brightness"
+            :min="0"
+            :max="100"
+            append="%"
+            :disabled="lampStore.disabled"
+          />
+        </div>
+
+        <!-- Smart Home / Home Assistant MQTT — same section as brightness,
+             only visible once a home network has been configured. -->
+        <div class="smart-home-section">
+          <h4 class="smart-home-heading">Smart Home (Home Assistant)</h4>
+
+          <label class="mqtt-row mqtt-row--toggle">
+            <input type="checkbox" v-model="mqttForm.enabled" :disabled="lampStore.disabled" />
+            <span>Enable MQTT</span>
+          </label>
+
+          <label class="mqtt-row">
+            <span class="mqtt-label">Broker host</span>
+            <input
+              v-model="mqttForm.brokerHost"
+              class="net-input"
+              placeholder="e.g. homeassistant.local"
+              autocomplete="off"
+              :disabled="lampStore.disabled"
+            />
+          </label>
+
+          <label class="mqtt-row">
+            <span class="mqtt-label">Port</span>
+            <input
+              v-model.number="mqttForm.brokerPort"
+              class="net-input"
+              type="number"
+              min="1"
+              max="65535"
+              placeholder="1883"
+              :disabled="lampStore.disabled"
+            />
+          </label>
+
+          <label class="mqtt-row">
+            <span class="mqtt-label">Username (optional)</span>
+            <input
+              v-model="mqttForm.username"
+              class="net-input"
+              autocomplete="off"
+              :disabled="lampStore.disabled"
+            />
+          </label>
+
+          <label class="mqtt-row">
+            <span class="mqtt-label">Password (optional)</span>
+            <input
+              v-model="mqttForm.password"
+              class="net-input"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="mqttForm.password === '********' ? 'Unchanged' : ''"
+              :disabled="lampStore.disabled"
+            />
+          </label>
+
+          <label class="mqtt-row">
+            <span class="mqtt-label">Topic prefix (optional)</span>
+            <input
+              v-model="mqttForm.topicPrefix"
+              class="net-input"
+              placeholder="homeassistant"
+              autocomplete="off"
+              :disabled="lampStore.disabled"
+            />
+          </label>
+
+          <div class="mqtt-actions">
+            <button
+              class="smart-home-btn"
+              :disabled="lampStore.disabled || mqttSaving"
+              @click="onMqttSave"
+            >
+              {{ mqttSaving ? 'Saving…' : 'Save Smart Home' }}
+            </button>
+          </div>
+
+          <p v-if="mqttMsg" class="mqtt-msg">{{ mqttMsg }}</p>
+        </div>
+      </template>
     </section>
 
     <HomeNetworkSheet :open="homeSheetOpen" @close="homeSheetOpen = false" />
@@ -296,7 +412,7 @@ const ledCount = computed(() => lampStore.state.base?.px ?? 36)
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 8px;
+  padding: 12px 40px 12px 8px;
   background: rgba(253, 253, 253, 0.02);
 }
 
@@ -408,6 +524,64 @@ const ledCount = computed(() => lampStore.state.base?.px ?? 36)
 .home-mode-btn--danger {
   border-color: rgba(255, 107, 107, 0.5);
   color: #ff6b6b;
+}
+
+/* Smart Home (MQTT) — appears under home-mode brightness when a home
+   network has been configured. */
+.smart-home-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.smart-home-heading {
+  color: var(--brand-lamp-white);
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0;
+}
+.mqtt-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mqtt-row--toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.mqtt-label {
+  font-size: 0.85rem;
+  color: var(--brand-fog-grey);
+  font-weight: 600;
+}
+.net-input {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+  color: var(--brand-lamp-white);
+  font-size: 0.95rem;
+}
+.net-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.mqtt-actions { margin-top: 4px; }
+.smart-home-btn {
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, var(--brand-aurora-blue), var(--brand-glow-pink));
+  color: var(--brand-lamp-white);
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.smart-home-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.mqtt-msg {
+  font-size: 0.85rem;
+  color: var(--brand-fog-grey);
+  margin: 4px 0 0;
 }
 
 .home-mode-brightness {

@@ -136,6 +136,17 @@ Config::Config(Preferences* inPrefs) {
     homeMode.brightness = homeModeNode["brightness"] | 60;
   }
 
+  // Load MQTT (smart-home / Home Assistant) config
+  JsonObject mqttNode = doc["mqtt"];
+  if (mqttNode) {
+    mqtt.enabled = mqttNode["enabled"] | false;
+    mqtt.brokerHost = std::string(mqttNode["brokerHost"] | "");
+    mqtt.brokerPort = mqttNode["brokerPort"] | 1883;
+    mqtt.username = std::string(mqttNode["username"] | "");
+    mqtt.password = std::string(mqttNode["password"] | "");
+    mqtt.topicPrefix = std::string(mqttNode["topicPrefix"] | "");
+  }
+
   // Ensure both color vectors have at least one entry. Empty NVS (or NVS
   // erased / corrupted) returns "{}" with no colors arrays; downstream code
   // (e.g. bt.begin in standard_lamp.cpp uses base.colors[ac] and shade.colors[0])
@@ -225,6 +236,14 @@ JsonDocument Config::asJsonDocument() {
   }
   homeModeNode["brightness"] = homeMode.brightness;
 
+  JsonObject mqttNode = doc["mqtt"].to<JsonObject>();
+  mqttNode["enabled"] = mqtt.enabled;
+  mqttNode["brokerHost"] = mqtt.brokerHost;
+  mqttNode["brokerPort"] = mqtt.brokerPort;
+  mqttNode["username"] = mqtt.username;
+  mqttNode["password"] = mqtt.password;
+  mqttNode["topicPrefix"] = mqtt.topicPrefix;
+
   return doc;
 };
 
@@ -302,10 +321,30 @@ String Config::asExpressionsJson() {
 String Config::asHomeModeJson() {
   JsonDocument doc;
   doc["ssid"] = homeMode.ssid;
+  // Mask the password — the app only needs to know "is one set". User who
+  // wants to change it must type a new one. BLE link is encrypted post-pair,
+  // but defense-in-depth: app memory should not hold a round-trippable copy.
   if (!homeMode.password.empty()) {
-    doc["password"] = homeMode.password;
+    doc["password"] = "********";
   }
   doc["brightness"] = homeMode.brightness;
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+String Config::asMqttJson() {
+  JsonDocument doc;
+  doc["enabled"] = mqtt.enabled;
+  doc["brokerHost"] = mqtt.brokerHost;
+  doc["brokerPort"] = mqtt.brokerPort;
+  doc["username"] = mqtt.username;
+  // Mask broker password — same rationale as home mode above. App must
+  // send the literal sentinel back on update to indicate "leave unchanged".
+  if (!mqtt.password.empty()) {
+    doc["password"] = "********";
+  }
+  doc["topicPrefix"] = mqtt.topicPrefix;
   String out;
   serializeJson(doc, out);
   return out;

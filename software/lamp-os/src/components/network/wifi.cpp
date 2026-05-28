@@ -2,6 +2,14 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
+
+// Default channel used when not associated to a home AP. All grid lamps
+// must agree on this for ESP-NOW broadcasts to be heard. Channel 1 is the
+// standard pick for hobbyist projects (least overlap with most APs).
+#ifndef LAMP_ESPNOW_CHANNEL
+#define LAMP_ESPNOW_CHANNEL 1
+#endif
 
 namespace wifi {
 
@@ -17,10 +25,16 @@ static constexpr uint32_t CONNECT_TIMEOUT_MS = 15000;
 
 static void setState(State next) {
   if (s_state == next) return;
+  State prev = s_state;
   s_state = next;
 #ifdef LAMP_DEBUG
   Serial.printf("[wifi] state -> %d (%s)\n", (int)next, s_lastError.c_str());
 #endif
+  // If we just left CONNECTED (AP gone / dropped), re-pin the radio to the
+  // grid channel so ESP-NOW stays usable across peers.
+  if (prev == CONNECTED && next != CONNECTED) {
+    esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  }
   if (s_cb) s_cb();
 }
 
@@ -73,6 +87,14 @@ std::vector<ScanResult> consumeScanResults() {
 }
 
 void setStateChangeCallback(StateChangeCallback cb) { s_cb = cb; }
+
+void ensureGridChannel() {
+  // If we're associated to a home AP, leave the channel alone — that AP's
+  // channel wins and ESP-NOW rides on it. If not associated, pin the radio
+  // to LAMP_ESPNOW_CHANNEL so all unconnected grid lamps line up.
+  if (s_state == CONNECTED && WiFi.status() == WL_CONNECTED) return;
+  esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+}
 
 void tick() {
   if (s_state == SCANNING) {

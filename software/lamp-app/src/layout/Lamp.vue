@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TopNavigation from '@/components/TopNavigation.vue'
 import { useLampStore, tabs } from '@/stores/lamp'
@@ -51,6 +51,13 @@ const handleTabChange = (tabId: string) => {
   router.push({ name: `lamp-${tabId}`, params: { id: route.params.id } })
 }
 
+const remoteTargetName = computed(() => {
+  const m = lampStore.targetMac
+  if (m === 'self') return ''
+  const peer = lampStore.nearbyLamps.find((p) => p.mac === m)
+  return peer?.name || m
+})
+
 function goBackToLamps() {
   void lampStore.cleanup()
   void router.push({ name: 'lamps' })
@@ -90,6 +97,18 @@ watch(
     >
       <div class="ws-status-dot"></div>
       <span v-if="lampStore.reconnecting" class="ws-status-label">Reconnecting…</span>
+    </div>
+
+    <!-- Remote-target banner: visible whenever app writes are being routed
+         through the local lamp to a grid peer. Self = no banner. -->
+    <div
+      v-if="lampStore.loaded && lampStore.targetMac !== 'self'"
+      class="remote-target-banner"
+    >
+      <span class="remote-target-text">
+        Editing <strong>{{ remoteTargetName }}</strong> via <strong>{{ lampStore.state.lamp?.name || 'this lamp' }}</strong>
+      </span>
+      <button class="remote-target-back" @click="lampStore.setTargetMac('self')">Back to local</button>
     </div>
 
     <div v-if="lampStore.loaded" class="container">
@@ -143,6 +162,33 @@ watch(
   background: var(--brand-midnight-black);
   padding: 0 0 10px 0;
   width: 100%;
+}
+
+/* Remote-target banner */
+.remote-target-banner {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, rgba(225, 164, 74, 0.95), rgba(204, 0, 53, 0.9));
+  color: var(--brand-lamp-white);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.remote-target-text { font-size: 0.85rem; }
+.remote-target-back {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--brand-lamp-white);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .container {

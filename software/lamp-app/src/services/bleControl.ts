@@ -26,6 +26,10 @@ export const CHAR_BASE_SECTION         = '5f64f4dd-d6d9-4a44-9b3f-3a8d6f7e6b40'
 export const CHAR_SHADE_SECTION        = '5f64f4de-d6d9-4a44-9b3f-3a8d6f7e6b40'
 export const CHAR_EXPR_SECTION         = '5f64f4df-d6d9-4a44-9b3f-3a8d6f7e6b40'
 export const CHAR_HOME_SECTION         = '5f64f4e0-d6d9-4a44-9b3f-3a8d6f7e6b40'
+export const CHAR_MQTT_SECTION         = '5f64f4e1-d6d9-4a44-9b3f-3a8d6f7e6b40'
+export const CHAR_MQTT_OP              = '5f64f4e2-d6d9-4a44-9b3f-3a8d6f7e6b40'
+export const CHAR_NEARBY_LAMPS         = '5f64f4e3-d6d9-4a44-9b3f-3a8d6f7e6b40'
+export const CHAR_REMOTE_OP            = '5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b40'
 
 export interface WifiScanResult { ssid: string; rssi: number; encrypted: boolean }
 export interface WifiState {
@@ -35,6 +39,57 @@ export interface WifiState {
   lastError?: string  // 'auth' | 'noap' | 'scan' | 'timeout' | other
   scanResults?: WifiScanResult[]
 }
+
+/**
+ * Smart-home / Home Assistant MQTT broker config. `password` is `'********'`
+ * when the firmware has a value stored — UI should treat that as "unchanged"
+ * and only send back a real string when the user types a new password.
+ */
+export interface MqttConfig {
+  enabled: boolean
+  brokerHost: string
+  brokerPort: number
+  username: string
+  password: string  // may be '********' from firmware (= stored, unchanged)
+  topicPrefix: string
+}
+
+/**
+ * One lamp the locally-paired lamp can hear, via either transport.
+ *
+ * - `viaBle`     — heard via legacy BLE manufacturer-data scan within
+ *                  LAMP_TRANSPORT_RECENCY_MS. Triggers SocialBehavior on
+ *                  the lamp.
+ * - `viaEspNow`  — heard via ESP-NOW HELLO within the same window. Means
+ *                  it's a new-firmware lamp and is remote-configurable.
+ * - `mac`        — present only when `viaEspNow` has been true at some
+ *                  point. Legacy lamps never set this.
+ * - `lastSeenMs` — lamp-side `millis()` at most recent sighting on either
+ *                  transport. Use only for relative freshness comparisons
+ *                  between entries from the same lamp, not against
+ *                  Date.now().
+ */
+export interface NearbyLamp {
+  name: string
+  shade: [number, number, number, number]  // RGBW
+  base:  [number, number, number, number]  // RGBW
+  lastSeenMs: number
+  viaBle: boolean
+  viaEspNow: boolean
+  mac?: string
+}
+
+/**
+ * Payload shapes by `char` field, mirroring local BLE writes. The `targetMac`
+ * is added by writeRemoteOp.
+ */
+export type RemoteOpPayload =
+  | { char: 'brightness'; value: number }
+  | { char: 'shadeColors'; colors: string[] }
+  | { char: 'baseColors'; colors: string[] }
+  | { char: 'knockout'; pixel: number; brightness: number }
+  | { char: 'expressionOp'; op: 'upsert' | 'remove'; entry?: unknown; type?: string; target?: number }
+  | { char: 'mqtt'; op: 'update'; enabled?: boolean; brokerHost?: string; brokerPort?: number; username?: string; password?: string; topicPrefix?: string }
 
 // Firmware negotiates up to 512 — request the same on the app side.
 export const TARGET_MTU = 512
@@ -56,6 +111,30 @@ function twoU8ToDataView(a: number, b: number): DataView {
   return new DataView(buf.buffer)
 }
 
+// ── Encrypted-write retry helper ──────────────────────────────────────────────
+
+/**
+ * Writes to characteristics marked WRITE_ENC (CHAR_AUTH, CHAR_WIFI_OP,
+ * CHAR_SETTINGS_BLOB) trigger an OS-mediated BLE pair on first use. On
+ * Android the OS dialog can race the write — the first attempt fails with
+ * `GATT_INSUFFICIENT_AUTHENTICATION` while the user is still tapping
+ * "Pair". One retry after a short delay covers it; iOS typically pairs
+ * silently and the first attempt succeeds.
+ */
+async function writeEncryptedWithRetry(fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn()
+    return
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (!/auth/i.test(msg) && !/insufficient/i.test(msg) && !/encrypt/i.test(msg)) {
+      throw err
+    }
+    await new Promise((r) => setTimeout(r, 800))
+    await fn()
+  }
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -68,9 +147,14 @@ function twoU8ToDataView(a: number, b: number): DataView {
  * writes). The caller can tell auth failed only by trying a subsequent write
  * and seeing no effect, or by reading settings_blob first to know whether a
  * password field is set.
+ *
+ * AUTH is marked WRITE_ENC on the lamp — the first call also triggers BLE
+ * pairing so the password is never sent in cleartext.
  */
 export async function authConnection(deviceId: string, password: string): Promise<void> {
-  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_AUTH, textToDataView(password))
+  await writeEncryptedWithRetry(() =>
+    BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_AUTH, textToDataView(password)),
+  )
 }
 
 // ── Control writes ────────────────────────────────────────────────────────────
@@ -129,8 +213,12 @@ export async function writeWifiScan(deviceId: string): Promise<void> {
 }
 
 export async function writeWifiConnect(deviceId: string, ssid: string, password: string): Promise<void> {
-  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_WIFI_OP,
-    textToDataView(JSON.stringify({ op: 'connect', ssid, password })))
+  // WRITE_ENC on the lamp side — first call triggers BLE pairing so the
+  // home WiFi password is sent over an encrypted link.
+  await writeEncryptedWithRetry(() =>
+    BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_WIFI_OP,
+      textToDataView(JSON.stringify({ op: 'connect', ssid, password }))),
+  )
 }
 
 export async function writeWifiForget(deviceId: string): Promise<void> {
@@ -179,7 +267,11 @@ export async function unsubscribeWifiState(deviceId: string): Promise<void> {
  */
 export async function writeSettingsBlob(deviceId: string, config: unknown): Promise<void> {
   const json = JSON.stringify(config)
-  await BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_SETTINGS_BLOB, textToDataView(json))
+  // WRITE_ENC on the lamp side — full config save includes the lamp
+  // password, so this write rides the encrypted/bonded link.
+  await writeEncryptedWithRetry(() =>
+    BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_SETTINGS_BLOB, textToDataView(json)),
+  )
 }
 
 function parseSection<T>(dv: DataView, label: string, fallback: T): T {
@@ -218,6 +310,64 @@ export async function readExprSection(deviceId: string): Promise<unknown[]> {
 export async function readHomeSection(deviceId: string): Promise<Record<string, unknown>> {
   return readSection(deviceId, CHAR_HOME_SECTION, 'home-mode section', {})
 }
+export async function readMqttSection(deviceId: string): Promise<MqttConfig> {
+  const raw = await readSection<Partial<MqttConfig>>(deviceId, CHAR_MQTT_SECTION, 'mqtt section', {})
+  return {
+    enabled: raw.enabled ?? false,
+    brokerHost: raw.brokerHost ?? '',
+    brokerPort: raw.brokerPort ?? 1883,
+    username: raw.username ?? '',
+    password: raw.password ?? '',
+    topicPrefix: raw.topicPrefix ?? '',
+  }
+}
+
+/**
+ * Write a full MQTT config update. WRITE_ENC on the lamp side — first
+ * call after pairing triggers the OS pair flow; the retry wrapper handles
+ * the brief INSUFFICIENT_AUTHENTICATION race.
+ *
+ * If `cfg.password` is the literal `'********'`, the firmware preserves the
+ * stored password rather than overwriting. Pass a real string only when the
+ * user has actually typed a new password.
+ */
+export async function writeMqttConfig(deviceId: string, cfg: MqttConfig): Promise<void> {
+  const payload = JSON.stringify({ op: 'update', ...cfg })
+  await writeEncryptedWithRetry(() =>
+    BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_MQTT_OP, textToDataView(payload)),
+  )
+}
+
+// ── Grid (ESP-NOW mesh) ──────────────────────────────────────────────────────
+
+export async function readNearbyLamps(deviceId: string): Promise<NearbyLamp[]> {
+  const dv = await BleClient.read(deviceId, CONTROL_SERVICE_UUID, CHAR_NEARBY_LAMPS)
+  const text = new TextDecoder().decode(dv).trim()
+  if (!text) return []
+  try {
+    return JSON.parse(text) as NearbyLamp[]
+  } catch (err) {
+    console.warn('[ble] nearby lamps parse failed:', err, 'payload:', text)
+    return []
+  }
+}
+
+/**
+ * Forward a control write to a peer lamp via the local BLE-paired lamp.
+ * `targetMac` is the destination ("AA:BB:..."), or the string "broadcast"
+ * to fan out to every reachable grid peer. WRITE_ENC — uses the same
+ * retry wrapper as other sensitive writes.
+ */
+export async function writeRemoteOp(
+  deviceId: string,
+  targetMac: string,
+  payload: RemoteOpPayload,
+): Promise<void> {
+  const body = JSON.stringify({ targetMac, ...payload })
+  await writeEncryptedWithRetry(() =>
+    BleClient.write(deviceId, CONTROL_SERVICE_UUID, CHAR_REMOTE_OP, textToDataView(body)),
+  )
+}
 
 // ── Per-section notifications ─────────────────────────────────────────────────
 
@@ -227,6 +377,8 @@ export interface SectionCallbacks {
   onShade?: (data: Record<string, unknown>) => void
   onExpressions?: (data: unknown[]) => void
   onHomeMode?: (data: Record<string, unknown>) => void
+  onMqtt?: (data: MqttConfig) => void
+  onNearbyLamps?: (lamps: NearbyLamp[]) => void
 }
 
 async function subscribe<T>(
@@ -252,6 +404,10 @@ export async function subscribeSectionNotifies(
     subscribe(deviceId, CHAR_SHADE_SECTION, 'shade section',       {}, callbacks.onShade),
     subscribe(deviceId, CHAR_EXPR_SECTION,  'expressions section', [] as unknown[], callbacks.onExpressions),
     subscribe(deviceId, CHAR_HOME_SECTION,  'home-mode section',   {}, callbacks.onHomeMode),
+    subscribe(deviceId, CHAR_MQTT_SECTION,  'mqtt section',
+      { enabled: false, brokerHost: '', brokerPort: 1883, username: '', password: '', topicPrefix: '' } as MqttConfig,
+      callbacks.onMqtt),
+    subscribe(deviceId, CHAR_NEARBY_LAMPS,  'nearby lamps',        [] as NearbyLamp[], callbacks.onNearbyLamps),
   ])
 }
 
@@ -262,6 +418,8 @@ export async function unsubscribeSectionNotifies(deviceId: string): Promise<void
     CHAR_SHADE_SECTION,
     CHAR_EXPR_SECTION,
     CHAR_HOME_SECTION,
+    CHAR_MQTT_SECTION,
+    CHAR_NEARBY_LAMPS,
   ].map(async (uuid) => {
     try { await BleClient.stopNotifications(deviceId, CONTROL_SERVICE_UUID, uuid) }
     catch { /* not subscribed or disconnected */ }

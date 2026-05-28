@@ -13,10 +13,9 @@
 #include "../../util/color.hpp"
 #include "./ble_control.hpp"
 #include "./ble_setup.hpp"
-#include "./bluetooth_pool.hpp"
+#include "./nearby_lamps.hpp"
 
 namespace lamp {
-BluetoothPool lampBluetoothPool;
 
 // Set true by ble_control on GATT connect; suppresses scan-restart in
 // onScanEnd. Cleared on disconnect.
@@ -35,16 +34,14 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     std::string data = advertisedDevice->getManufacturerData();
     if (!isLamp(data)) return;
 
-    auto lamp = BluetoothLampRecord(
+    nearbyLamps.addOrUpdateFromBle(
         advertisedDevice->getName(),
         Color(data[2], data[3], data[4], 0),
-        Color(data[5], data[6], data[7], 0),
-        millis());
-    lampBluetoothPool.addOrUpdateLamp(lamp);
+        Color(data[5], data[6], data[7], 0));
   };
 
   void onScanEnd(const NimBLEScanResults &results, int reason) override {
-    lampBluetoothPool.pruneLamps();
+    nearbyLamps.prune(LAMP_PRUNE_TIME_MS);
     // Skip restart while a phone is using the GATT control service.
     // ble_control resumes the scan on disconnect.
     if (!scanPausedForGattClient) {
@@ -62,6 +59,16 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
 #endif
   NimBLEDevice::init(name.substr(0, 12));
   NimBLEDevice::setPower(BLE_POWER_LEVEL);
+
+  // Enable LE Secure Connections + bonding (Just-Works pairing). Sensitive
+  // GATT writes (CHAR_AUTH, CHAR_WIFI_OP, CHAR_SETTINGS_BLOB) are marked
+  // WRITE_ENC; the first such write triggers an OS-mediated pair, after
+  // which the whole link is encrypted at the BLE link layer. Bond persists
+  // in NVS, so subsequent connections re-encrypt silently.
+  NimBLEDevice::setSecurityAuth(/*bonding=*/true,
+                                /*mitm=*/false,
+                                /*sc=*/true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
   NimBLEScan *pScan = NimBLEDevice::getScan();
   pScan->setScanCallbacks(&scanCallbacks);
@@ -119,11 +126,4 @@ void BluetoothComponent::activateGattServices(Config* cfg, Preferences* prefs) {
   }
 }
 
-std::vector<BluetoothLampRecord> BluetoothComponent::getLamps() {
-  return lampBluetoothPool.getLamps();
-};
-
-void BluetoothComponent::acknowledgeLamp(const std::string& name) {
-  lampBluetoothPool.acknowledgeLamp(name);
-};
 }  // namespace lamp

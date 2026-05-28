@@ -1,14 +1,14 @@
 #ifndef LAMP_BEHAVIORS_SOCIAL_H
 #define LAMP_BEHAVIORS_SOCIAL_H
 
-#include "../components/network/bluetooth.hpp"
 #include "../core/animated_behavior.hpp"
 #include "../util/color.hpp"
 
 #define LAMP_TIME_BETWEEN_ACKNOWLEDGEMENT_MS 30000
 
 /**
- * @brief social color exchange
+ * @brief social color exchange — reads the unified nearbyLamps store directly,
+ *        gated on lastSeenViaBleMs so only short-range peers trigger greetings.
  */
 namespace lamp {
 class SocialBehavior : public AnimatedBehavior {
@@ -20,12 +20,8 @@ class SocialBehavior : public AnimatedBehavior {
   uint32_t easeFrames = 120;
   uint32_t nextAcknowledgeTimeMs = 0;
   Color foundLampColor;
-  BluetoothComponent* bt;
   void draw() override;
-
   void control() override;
-
-  void setBluetoothComponent(BluetoothComponent* inBt);
 };
 }  // namespace lamp
 #endif

@@ -33,4 +33,11 @@ void setStateChangeCallback(StateChangeCallback cb);
 
 void tick();
 
+// Channel coordination for ESP-NOW grid.
+// When not associated to a home AP, pin the radio to LAMP_ESPNOW_CHANNEL
+// so all grid peers share a channel. When associated, the AP's channel
+// wins — peers on different home APs / channels can't see each other,
+// which is acceptable for v1 (events deploy with home mode off).
+void ensureGridChannel();
+
 }  // namespace wifi

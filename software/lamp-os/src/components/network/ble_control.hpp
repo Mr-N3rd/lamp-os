@@ -42,6 +42,26 @@ constexpr const char* CHAR_BASE_SECTION    = "5f64f4dd-d6d9-4a44-9b3f-3a8d6f7e6b
 constexpr const char* CHAR_SHADE_SECTION   = "5f64f4de-d6d9-4a44-9b3f-3a8d6f7e6b40";
 constexpr const char* CHAR_EXPR_SECTION    = "5f64f4df-d6d9-4a44-9b3f-3a8d6f7e6b40";
 constexpr const char* CHAR_HOME_SECTION    = "5f64f4e0-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// mqtt_section (read + notify): smart-home / Home Assistant config snapshot,
+// with password masked as "********".
+constexpr const char* CHAR_MQTT_SECTION    = "5f64f4e1-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// mqtt_op (write-with-response, encrypted): update the smart-home config
+//   {"op":"update","enabled":bool,"brokerHost":"...","brokerPort":n,
+//    "username":"...","password":"... or ********","topicPrefix":"..."}
+// Password "********" sentinel means "preserve stored value".
+constexpr const char* CHAR_MQTT_OP         = "5f64f4e2-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// nearby_lamps (read + notify): JSON array of every lamp this lamp has
+// heard via either transport (BLE manufacturer-data adv or ESP-NOW HELLO).
+// Each entry carries name, shade/base RGBW, lastSeenMs (firmware millis),
+// per-transport viaBle/viaEspNow flags, and (when known via HELLO) mac.
+// Capped to fit MTU.
+constexpr const char* CHAR_NEARBY_LAMPS    = "5f64f4e3-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// remote_op (write-with-response, encrypted): forward a BLE control write
+// to a far lamp via ESP-NOW.
+//   {"targetMac":"AA:BB:CC:DD:EE:FF" | "broadcast",
+//    "char":"brightness",      // names a local pending-slot post function
+//    ...payload-shape varies per char...}
+constexpr const char* CHAR_REMOTE_OP       = "5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b40";
 
 /**
  * @brief Start the BLE GATT control service.
@@ -74,5 +94,24 @@ void notifyStateChange();
  *        wifi::tick() whenever the WiFi state machine transitions.
  */
 void notifyWifiState();
+
+/**
+ * @brief Notify subscribers that the MQTT config section changed. Called
+ *        after a CHAR_MQTT_OP drain so the app's reactive state updates.
+ */
+void notifyMqttSection();
+
+/**
+ * @brief Notify subscribers that the lamp section changed (e.g. brightness
+ *        set by an external source like MQTT from Home Assistant).
+ */
+void notifyLampSection();
+
+/**
+ * @brief Notify subscribers that the nearby-lamp list changed (new BLE adv
+ *        sighting, new HELLO, peer pruned). May be called by either
+ *        transport's ingest path on a meaningful update.
+ */
+void notifyNearbyLamps();
 
 }  // namespace ble_control

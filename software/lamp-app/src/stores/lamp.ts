@@ -30,9 +30,16 @@ import {
   readShadeSection,
   readExprSection,
   readHomeSection,
+  readMqttSection,
+  writeMqttConfig,
+  readNearbyLamps,
+  writeRemoteOp,
   subscribeSectionNotifies,
   unsubscribeSectionNotifies,
   type WifiState,
+  type MqttConfig,
+  type NearbyLamp,
+  type RemoteOpPayload,
 } from '@/services/bleControl'
 
 export const MAX_LEDS_BASE = 50
@@ -200,7 +207,11 @@ export const useLampStore = defineStore('lamp', () => {
     if (!state.value.lamp) state.value.lamp = {}
     state.value.lamp.brightness = brightness
     if (wsConnected.value) {
-      scheduleWrite('brightness', brightness, (v) => writeBrightness(deviceId(), v as number))
+      scheduleWrite('brightness', brightness, (v) =>
+        writeOrForward({ char: 'brightness', value: v as number }, () =>
+          writeBrightness(deviceId(), v as number),
+        ),
+      )
     }
   }
 
@@ -208,7 +219,11 @@ export const useLampStore = defineStore('lamp', () => {
     if (!state.value.shade) state.value.shade = {}
     state.value.shade.colors = colors
     if (wsConnected.value) {
-      scheduleWrite('shadeColors', colors, (v) => writeShadeColors(deviceId(), v as string[]))
+      scheduleWrite('shadeColors', colors, (v) =>
+        writeOrForward({ char: 'shadeColors', colors: v as string[] }, () =>
+          writeShadeColors(deviceId(), v as string[]),
+        ),
+      )
     }
   }
 
@@ -216,7 +231,11 @@ export const useLampStore = defineStore('lamp', () => {
     if (!state.value.base) state.value.base = {}
     state.value.base.colors = colors
     if (wsConnected.value) {
-      scheduleWrite('baseColors', colors, (v) => writeBaseColors(deviceId(), v as string[]))
+      scheduleWrite('baseColors', colors, (v) =>
+        writeOrForward({ char: 'baseColors', colors: v as string[] }, () =>
+          writeBaseColors(deviceId(), v as string[]),
+        ),
+      )
     }
   }
 
@@ -265,7 +284,10 @@ export const useLampStore = defineStore('lamp', () => {
 
     if (wsConnected.value) {
       try {
-        await writeBaseKnockout(deviceId(), ledIndex, brightness)
+        await writeOrForward(
+          { char: 'knockout', pixel: ledIndex, brightness },
+          () => writeBaseKnockout(deviceId(), ledIndex, brightness),
+        )
       } catch (err) {
         console.warn('[lamp] writeBaseKnockout failed:', err)
       }
@@ -301,7 +323,11 @@ export const useLampStore = defineStore('lamp', () => {
 
   const addExpression = async (entry: ExpressionSettings) => {
     if (!wsConnected.value) throw new Error('Not connected')
-    await writeExpressionUpsert(deviceId(), cleanExpressionForWire(entry))
+    const cleaned = cleanExpressionForWire(entry)
+    await writeOrForward(
+      { char: 'expressionOp', op: 'upsert', entry: cleaned },
+      () => writeExpressionUpsert(deviceId(), cleaned),
+    )
     state.value.expressions = [...(state.value.expressions ?? []), entry]
   }
 
@@ -311,9 +337,16 @@ export const useLampStore = defineStore('lamp', () => {
   ) => {
     if (!wsConnected.value) throw new Error('Not connected')
     if (prevKey.type !== entry.type || prevKey.target !== entry.target) {
-      await writeExpressionRemove(deviceId(), prevKey.type, prevKey.target)
+      await writeOrForward(
+        { char: 'expressionOp', op: 'remove', type: prevKey.type, target: prevKey.target },
+        () => writeExpressionRemove(deviceId(), prevKey.type, prevKey.target),
+      )
     }
-    await writeExpressionUpsert(deviceId(), cleanExpressionForWire(entry))
+    const cleaned = cleanExpressionForWire(entry)
+    await writeOrForward(
+      { char: 'expressionOp', op: 'upsert', entry: cleaned },
+      () => writeExpressionUpsert(deviceId(), cleaned),
+    )
     const next = (state.value.expressions ?? []).filter(
       (e) => !(e.type === prevKey.type && e.target === prevKey.target),
     )
@@ -323,7 +356,10 @@ export const useLampStore = defineStore('lamp', () => {
 
   const removeExpression = async (type: string, target: number) => {
     if (!wsConnected.value) throw new Error('Not connected')
-    await writeExpressionRemove(deviceId(), type, target)
+    await writeOrForward(
+      { char: 'expressionOp', op: 'remove', type, target },
+      () => writeExpressionRemove(deviceId(), type, target),
+    )
     state.value.expressions = (state.value.expressions ?? []).filter(
       (e) => !(e.type === type && e.target === target),
     )
@@ -343,10 +379,18 @@ export const useLampStore = defineStore('lamp', () => {
   const previewExpressionColor = (color: string, previewTarget: number) => {
     if (!wsConnected.value) return
     if (previewTarget === 1 || previewTarget === 3) {
-      scheduleWrite('shadeColors', [color], (v) => writeShadeColors(deviceId(), v as string[]))
+      scheduleWrite('shadeColors', [color], (v) =>
+        writeOrForward({ char: 'shadeColors', colors: v as string[] }, () =>
+          writeShadeColors(deviceId(), v as string[]),
+        ),
+      )
     }
     if (previewTarget === 2 || previewTarget === 3) {
-      scheduleWrite('baseColors', [color], (v) => writeBaseColors(deviceId(), v as string[]))
+      scheduleWrite('baseColors', [color], (v) =>
+        writeOrForward({ char: 'baseColors', colors: v as string[] }, () =>
+          writeBaseColors(deviceId(), v as string[]),
+        ),
+      )
     }
   }
 
@@ -375,6 +419,56 @@ export const useLampStore = defineStore('lamp', () => {
     await writeWifiForget(deviceId())
   }
 
+  // ── MQTT / Home Assistant config ────────────────────────────────────────────
+  // Hydrated from the firmware on connect via readMqttSection. The lamp masks
+  // `password` as '********' when one is stored — the UI should keep that
+  // sentinel until the user types a new password, then send the real string.
+  // updateMqttConfig sends the whole config; firmware preserves the stored
+  // password if it receives '********'.
+  const mqttConfig = ref<MqttConfig | null>(null)
+
+  const updateMqttConfig = async (cfg: MqttConfig) => {
+    if (!wsConnected.value) throw new Error('Not connected')
+    mqttConfig.value = { ...cfg }  // optimistic
+    await writeOrForward({ char: 'mqtt', op: 'update', ...cfg }, () =>
+      writeMqttConfig(deviceId(), cfg),
+    )
+  }
+
+  // ── Nearby lamps / remote target ────────────────────────────────────────────
+  // nearbyLamps: every lamp the locally-paired lamp can hear via either
+  // BLE manufacturer-data adv or ESP-NOW HELLO. Each entry carries per-
+  // transport viaBle / viaEspNow flags so consumers can filter.
+  // targetMac: which lamp subsequent control writes apply to. 'self' = the
+  // locally-paired lamp (direct BLE writes). Any other MAC routes through
+  // CHAR_REMOTE_OP so the local lamp forwards via ESP-NOW — and is only
+  // settable for entries with `viaEspNow` (and therefore `mac`).
+  const nearbyLamps = ref<NearbyLamp[]>([])
+  const gridReachableLamps = computed(() =>
+    nearbyLamps.value.filter((l) => l.viaEspNow && l.mac),
+  )
+  const targetMac = ref<string>('self')
+
+  const setTargetMac = (mac: string) => {
+    targetMac.value = mac
+  }
+
+  /**
+   * Single chokepoint for every control write that has a remote-op
+   * equivalent. If targeting self, run the direct BLE write; otherwise
+   * package up the payload and send via writeRemoteOp.
+   */
+  const writeOrForward = async (
+    payload: RemoteOpPayload,
+    directWrite: () => Promise<void>,
+  ): Promise<void> => {
+    if (targetMac.value === 'self') {
+      await directWrite()
+      return
+    }
+    await writeRemoteOp(deviceId(), targetMac.value, payload)
+  }
+
   // Preview the home-mode brightness while the user is dragging the slider.
   // The lamp is in regular brightness (because BLE is connected = WiFi paused),
   // so this just writes the previewed level via the existing throttle. When
@@ -382,13 +476,21 @@ export const useLampStore = defineStore('lamp', () => {
   // lamp.brightness back.
   const previewHomeBrightness = (level: number) => {
     if (!wsConnected.value) return
-    scheduleWrite('brightness', level, (v) => writeBrightness(deviceId(), v as number))
+    scheduleWrite('brightness', level, (v) =>
+      writeOrForward({ char: 'brightness', value: v as number }, () =>
+        writeBrightness(deviceId(), v as number),
+      ),
+    )
   }
 
   const restoreBrightness = () => {
     if (!wsConnected.value) return
     const level = state.value.lamp?.brightness ?? 100
-    scheduleWrite('brightness', level, (v) => writeBrightness(deviceId(), v as number))
+    scheduleWrite('brightness', level, (v) =>
+      writeOrForward({ char: 'brightness', value: v as number }, () =>
+        writeBrightness(deviceId(), v as number),
+      ),
+    )
   }
 
   const updateHomeModeBrightness = (level: number) => {
@@ -541,6 +643,8 @@ export const useLampStore = defineStore('lamp', () => {
     Promise.all([
       readExprSection(t.deviceId).then((d) => applySection('expressions', d as ExpressionSettings[])),
       readHomeSection(t.deviceId).then((d) => applySection('homeMode', d as HomeModeSettings)),
+      readMqttSection(t.deviceId).then((cfg) => { mqttConfig.value = cfg }),
+      readNearbyLamps(t.deviceId).then((lamps) => { nearbyLamps.value = lamps }),
     ])
       .then(() => dlog('lazy sections OK'))
       .catch((err) => dlog(`lazy sections failed: ${err instanceof Error ? err.message : String(err)}`))
@@ -551,6 +655,8 @@ export const useLampStore = defineStore('lamp', () => {
       onShade:       (d) => applySection('shade',       d as ShadeSettings),
       onExpressions: (d) => applySection('expressions', d as ExpressionSettings[]),
       onHomeMode:    (d) => applySection('homeMode',    d as HomeModeSettings),
+      onMqtt:        (cfg) => { mqttConfig.value = cfg },
+      onNearbyLamps: (lamps) => { nearbyLamps.value = lamps },
     })
       .then(() => dlog('subscribeSectionNotifies OK'))
       .catch((err) => dlog(`subscribeSectionNotifies failed: ${err instanceof Error ? err.message : String(err)}`))
@@ -723,6 +829,16 @@ export const useLampStore = defineStore('lamp', () => {
     previewHomeBrightness,
     restoreBrightness,
     updateHomeModeBrightness,
+
+    // Smart Home / MQTT
+    mqttConfig,
+    updateMqttConfig,
+
+    // Grid (ESP-NOW mesh)
+    nearbyLamps,
+    gridReachableLamps,
+    targetMac,
+    setTargetMac,
 
     // Navigation
     setActiveTab,
