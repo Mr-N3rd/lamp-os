@@ -54,7 +54,11 @@ class AddLampNotifier extends _$AddLampNotifier {
         password: state.password,
       );
       await ref.read(inventoryNotifierProvider.notifier).add(
-            InventoryLamp(id: state.deviceId, name: state.name),
+            InventoryLamp(
+              id: state.deviceId,
+              name: state.name,
+              controlPassword: state.password,
+            ),
           );
       await ref
           .read(activeLampNotifierProvider.notifier)

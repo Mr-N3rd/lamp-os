@@ -59,6 +59,7 @@ void main() {
 
     final inventory = await c.read(inventoryNotifierProvider.future);
     expect(inventory.map((l) => l.id).toList(), ['dev1']);
+    expect(inventory.first.controlPassword, 'secret');
 
     final active = await c.read(activeLampNotifierProvider.future);
     expect(active, 'dev1');
