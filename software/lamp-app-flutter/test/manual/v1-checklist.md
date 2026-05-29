@@ -156,3 +156,26 @@ Hardware verification for things automated tests can't cover. Walk through this 
 - [ ] Tap it → Advanced section appears with base bpp / shade bpp segmented controls + Advanced-enabled switch.
 - [ ] Flip base bpp to RGB (3) → save → reopen base color picker → Warm White slider is gone.
 - [ ] Disable the Advanced switch → Advanced section retracts; Save still enabled while you have unsaved changes.
+
+## Phase 4 — Expressions
+
+### List view
+
+- [ ] Empty state on a fresh lamp: "No expressions yet — tap + to add a Glitch, Pulse, Breath or Shift effect."
+- [ ] After adding via the editor, the new expression appears in the list with its type, target ("shade"/"base"/"both"), interval range, and enable toggle.
+- [ ] Toggle the Enabled switch → the change writes immediately to the lamp (no Save), and the expression starts/stops within its next interval window.
+- [ ] Swipe a tile left → red delete background appears; release → the expression is removed and the lamp stops it.
+- [ ] Tap a tile → editor opens pre-populated with that expression.
+
+### Editor
+
+- [ ] "+ Add expression" FAB opens the editor for a new expression with default `breathing` type.
+- [ ] Type dropdown shows breathing / pulse / shifty / glitchy.
+- [ ] Target SegmentedButton (Shade / Base / Both) updates the draft.
+- [ ] Enabled switch toggles the draft state.
+- [ ] Tap "+ Add color" → color picker opens; pick a color → swatch added to the row. Tap an existing swatch to edit it. Long-press to remove.
+- [ ] Two interval sliders enforce `min <= max` automatically.
+- [ ] Parameters JSON field accepts a JSON object with numeric values; invalid JSON shows an error and disables Save / Test.
+- [ ] Tap **Test** → lamp runs the configured expression once.
+- [ ] Tap **Save** → editor pops; list reflects the new entry; persists across power-cycle.
+- [ ] On existing-entry edit, Delete button appears and removes the expression.
