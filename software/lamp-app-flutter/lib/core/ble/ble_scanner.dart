@@ -2,7 +2,10 @@ import 'dart:async';
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 
-import 'uuids.dart';
+/// BLE Manufacturer ID the firmware advertises (0xA455). The 6 bytes after
+/// the company-ID prefix carry base RGB + shade RGB. See firmware:
+/// software/lamp-os/src/components/network/bluetooth.cpp:83-93.
+const _lampMfgId = 0xA455;
 
 class BleAdvertisement {
   const BleAdvertisement({
@@ -19,8 +22,9 @@ class BleAdvertisement {
 }
 
 abstract class BleScanner {
-  /// Stream of scan results. Implementations must filter to lamp services
-  /// (control + setup) so callers don't see unrelated BLE advertisements.
+  /// Stream of scan results. Implementations must filter to lamp
+  /// advertisements (manufacturer-data magic 0xA455) so callers don't see
+  /// unrelated BLE traffic.
   Stream<BleAdvertisement> results();
 
   /// Begin scanning. Must be called once before [results] yields anything
@@ -45,24 +49,23 @@ class FbpBleScanner implements BleScanner {
     _running = true;
     _sub = fbp.FlutterBluePlus.scanResults.listen((results) {
       for (final r in results) {
-        final uuids = r.advertisementData.serviceUuids
-            .map((g) => g.str128.toLowerCase())
-            .toList();
-        const wanted = {BleUuids.controlService, BleUuids.setupService};
-        if (!uuids.any(wanted.contains)) continue;
+        // Firmware only puts the lamp magic + colors in manufacturer data;
+        // 128-bit service UUIDs are NOT in the advertisement (would overflow
+        // the 31-byte adv limit — see firmware ble_control.cpp:640-644).
+        final mfg = r.advertisementData.manufacturerData[_lampMfgId];
+        if (mfg == null || mfg.length < 6) continue;
         _ctrl.add(BleAdvertisement(
           id: r.device.remoteId.str,
           name: r.advertisementData.advName.isNotEmpty
               ? r.advertisementData.advName
               : r.device.platformName,
-          serviceUuids: uuids,
+          serviceUuids: r.advertisementData.serviceUuids
+              .map((g) => g.str128.toLowerCase())
+              .toList(),
           rssi: r.rssi,
         ));
       }
     });
-    // No withServices filter — Android can miss matches when the service
-    // UUID is in the scan response rather than the main advertisement.
-    // The callback above already filters to our two service UUIDs.
     await fbp.FlutterBluePlus.startScan(
       timeout: const Duration(minutes: 5),
       continuousUpdates: true,
