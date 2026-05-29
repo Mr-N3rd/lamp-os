@@ -23,10 +23,16 @@ class OnboardingPlaceholder extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const Text(
-              '+ Add a lamp (coming in Phase 1b)',
+              'Tap below to set up your first lamp.',
               style: TextStyle(color: BrandColors.fogGrey),
             ),
             const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: () => context.go('/onboarding/add'),
+              icon: const Icon(Icons.add),
+              label: const Text('Add a lamp'),
+            ),
+            const SizedBox(height: 12),
             TextButton(
               onPressed: () => context.go('/devices'),
               child: const Text('Live scan (debug)'),
