@@ -66,5 +66,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Lamplit needs Bluetooth to discover and control your lamps.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Lamplit needs Bluetooth to discover and control your lamps.</string>
 </dict>
 </plist>
