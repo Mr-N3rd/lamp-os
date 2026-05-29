@@ -110,6 +110,82 @@ void main() {
     expect(ble.isConnected(_devId), isFalse);
   });
 
+  test('isDirty flips on setBrightness and clears on save() round-trip',
+      () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    // ALSO seed the settings blob (save() needs it).
+    await ble.connect(_devId);
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
+          '"base":{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"],"knockout":[]},'
+          '"shade":{"px":38,"bpp":4,"colors":["#000000FF"]}}',
+        )));
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    expect(n.isDirty, isFalse);
+
+    await n.setBrightness(80);
+    expect(n.isDirty, isTrue);
+  });
+
+  test('save() merges local state into the full settings blob', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    await ble.connect(_devId);
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
+          '"base":{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"],"knockout":[]},'
+          '"shade":{"px":38,"bpp":4,"colors":["#000000FF"]},'
+          '"expressions":[{"type":"breathing","enabled":true}]}', // untouched field
+        )));
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    // Keep listener alive so BLE stays connected during save().
+    final sub = c.listen(controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.setBrightness(80);
+    await n.save();
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    final parsed =
+        jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect((parsed['lamp'] as Map)['brightness'], 80);
+    expect(parsed['expressions'], isNotNull); // unchanged field preserved
+  });
+
   test('setBrightness optimistically updates and writes after debounce',
       () async {
     final ble = InMemoryBleClient();
