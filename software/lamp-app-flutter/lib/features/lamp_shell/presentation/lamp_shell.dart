@@ -76,7 +76,11 @@ class _LampShellState extends ConsumerState<LampShell> {
           ),
         ),
         actions: [
-          if (_tab == LampTab.control) _SaveAction(lampId: widget.lampId),
+          // Save is visible on both Control and Setup — Setup edits (name,
+          // home WiFi, MQTT, advanced) ride the same isDirty + settings-blob
+          // save flow. Expressions has its own per-entry persistence via
+          // CHAR_EXPRESSION_OP so no global Save is needed there.
+          if (_tab != LampTab.expressions) _SaveAction(lampId: widget.lampId),
         ],
       ),
       body: body,

@@ -200,6 +200,19 @@ class _HomeFieldsState extends State<_HomeFields> {
       widget.home.password == '********' || widget.home.password.isNotEmpty;
 
   @override
+  void didUpdateWidget(_HomeFields old) {
+    super.didUpdateWidget(old);
+    // Reflect external state changes (e.g. post-save section reload) into
+    // the controllers without clobbering a focused user mid-typing.
+    if (old.home.ssid != widget.home.ssid && !_ssid.value.composing.isValid) {
+      _ssid.text = widget.home.ssid;
+    }
+    if (old.home.brightness != widget.home.brightness) {
+      _brightness.text = '${widget.home.brightness}';
+    }
+  }
+
+  @override
   void dispose() {
     _ssid.dispose();
     _password.dispose();
@@ -289,6 +302,26 @@ class _MqttFieldsState extends State<_MqttFields> {
   late final _user = TextEditingController(text: widget.mqtt.username);
   late final _password = TextEditingController();
   late final _topic = TextEditingController(text: widget.mqtt.topicPrefix);
+
+  @override
+  void didUpdateWidget(_MqttFields old) {
+    super.didUpdateWidget(old);
+    if (old.mqtt.brokerHost != widget.mqtt.brokerHost &&
+        !_host.value.composing.isValid) {
+      _host.text = widget.mqtt.brokerHost;
+    }
+    if (old.mqtt.brokerPort != widget.mqtt.brokerPort) {
+      _port.text = '${widget.mqtt.brokerPort}';
+    }
+    if (old.mqtt.username != widget.mqtt.username &&
+        !_user.value.composing.isValid) {
+      _user.text = widget.mqtt.username;
+    }
+    if (old.mqtt.topicPrefix != widget.mqtt.topicPrefix &&
+        !_topic.value.composing.isValid) {
+      _topic.text = widget.mqtt.topicPrefix;
+    }
+  }
 
   @override
   void dispose() {
