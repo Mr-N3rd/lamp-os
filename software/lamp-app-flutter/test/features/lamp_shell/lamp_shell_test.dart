@@ -7,6 +7,7 @@ import 'package:lamp_app/core/ble/ble_scanner.dart';
 import 'package:lamp_app/core/widgets/lamp_chip.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
+import 'package:lamp_app/features/lamp_shell/presentation/expressions_screen.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/lamp_shell.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/setup_screen.dart';
 import 'package:lamp_app/features/nearby/application/nearby_lamps_notifier.dart';
@@ -59,15 +60,15 @@ void main() {
     // 'Expressions' label is inside a NavigationDestination tile.
     await tester.tap(find.byIcon(Icons.auto_awesome));
     await _settle(tester);
-    expect(find.text('Expressions · lamp-1'), findsOneWidget);
+    expect(find.byType(ExpressionsScreen), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.settings));
     await _settle(tester);
     // SetupScreen is now the Setup tab; it renders either ConnectingView
     // (loading) or the error view depending on BLE state. Either way the
-    // scaffold is present and the Expressions placeholder is not.
+    // scaffold is present and the Expressions screen is not.
     expect(find.byType(SetupScreen), findsOneWidget);
-    expect(find.text('Expressions · lamp-1'), findsNothing);
+    expect(find.byType(ExpressionsScreen), findsNothing);
   });
 
   testWidgets('AppBar shows a LampChip with the inventory name',

@@ -7,8 +7,8 @@ abstract class AppRoutes {
   static String lamp(String id) => '/lamp/$id';
   static String control(String id) => '/lamp/$id/control';
   static String expressions(String id) => '/lamp/$id/expressions';
-  static String expressionEditor(String id, String expressionId) =>
-      '/lamp/$id/expressions/$expressionId';
+  static String expressionEditor(String id, String type, int target) =>
+      '/lamp/$id/expressions/$type/$target';
   static String knockout(String id) => '/lamp/$id/control/knockout';
   static String setup(String id) => '/lamp/$id/setup';
 }

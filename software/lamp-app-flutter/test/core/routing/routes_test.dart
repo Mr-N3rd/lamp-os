@@ -14,8 +14,8 @@ void main() {
       expect(AppRoutes.lamp('abc'), '/lamp/abc');
       expect(AppRoutes.control('abc'), '/lamp/abc/control');
       expect(AppRoutes.expressions('abc'), '/lamp/abc/expressions');
-      expect(AppRoutes.expressionEditor('abc', 'e1'),
-          '/lamp/abc/expressions/e1');
+      expect(AppRoutes.expressionEditor('abc', 'breathing', 3),
+          '/lamp/abc/expressions/breathing/3');
       expect(AppRoutes.knockout('abc'), '/lamp/abc/control/knockout');
       expect(AppRoutes.setup('abc'), '/lamp/abc/setup');
     });

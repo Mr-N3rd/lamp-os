@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../features/control/presentation/knockout_screen.dart';
+import '../../features/lamp_shell/presentation/expression_editor_screen.dart';
 import '../../features/inventory/application/active_lamp_notifier.dart';
 import '../../features/inventory/application/inventory_notifier.dart';
 import '../../features/lamp_shell/presentation/lamp_shell.dart';
@@ -71,6 +72,14 @@ GoRouter appRouter(Ref ref) {
         path: '/lamp/:id/control/knockout',
         builder: (_, state) =>
             KnockoutScreen(lampId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/lamp/:id/expressions/:type/:target',
+        builder: (_, state) => ExpressionEditorScreen(
+          lampId: state.pathParameters['id']!,
+          typeKey: state.pathParameters['type']!,
+          targetKey: int.parse(state.pathParameters['target']!),
+        ),
       ),
     ],
   );
