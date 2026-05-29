@@ -56,19 +56,29 @@ class ControlNotifier extends _$ControlNotifier {
     final baseJson = await readJson(BleUuids.baseSection);
     final shadeJson = await readJson(BleUuids.shadeSection);
 
+    // Live-preview writes are fire-and-forget. Swallow errors here so a
+    // pending debounce timer that fires after the lamp disconnects (e.g.
+    // post-save reboot, or back-navigation tearing down the provider while
+    // a timer is in flight) doesn't crash the app. The next reconnect
+    // reloads state from the lamp anyway.
+    Future<void> safeWrite(String charUuid, Uint8List v) async {
+      try {
+        await ble.write(deviceId, BleUuids.controlService, charUuid, v);
+      } catch (_) {
+        // intentionally dropped
+      }
+    }
+
     _brightnessWriter = WriteCoalescer(
-      onWrite: (v) =>
-          ble.write(deviceId, BleUuids.controlService, BleUuids.brightness, v),
+      onWrite: (v) => safeWrite(BleUuids.brightness, v),
       debounce: _writeDebounce,
     );
     _shadeColorsWriter = WriteCoalescer(
-      onWrite: (v) =>
-          ble.write(deviceId, BleUuids.controlService, BleUuids.shadeColors, v),
+      onWrite: (v) => safeWrite(BleUuids.shadeColors, v),
       debounce: _writeDebounce,
     );
     _baseColorsWriter = WriteCoalescer(
-      onWrite: (v) =>
-          ble.write(deviceId, BleUuids.controlService, BleUuids.baseColors, v),
+      onWrite: (v) => safeWrite(BleUuids.baseColors, v),
       debounce: _writeDebounce,
     );
 

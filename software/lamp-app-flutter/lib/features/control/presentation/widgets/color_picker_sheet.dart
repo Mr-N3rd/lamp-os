@@ -5,8 +5,10 @@ import '../../../../core/theme/brand_colors.dart';
 import '../../domain/lamp_color.dart';
 
 /// Opens a modal bottom sheet to pick a color, returning the chosen
-/// [LampColor] or null if cancelled. The W byte of [initial] is carried
-/// through untouched — the picker only edits R/G/B.
+/// [LampColor] or null if cancelled. The picker controls R/G/B only and
+/// emits results with W = 0, so the strip's separate white LED doesn't
+/// wash out the chosen color (the shade default of #000000FF has W=255
+/// which would otherwise dominate visually).
 ///
 /// If [onLive] is provided it is called on every drag tick with the
 /// current color so callers can stream realtime previews to the hardware.
@@ -49,10 +51,11 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
   void _onColorChanged(Color c) {
     setState(() => _picked = c);
     widget.onLive?.call(
-      widget.initial.withRgb(
+      LampColor(
         r: (_picked.r * 255).round(),
         g: (_picked.g * 255).round(),
         b: (_picked.b * 255).round(),
+        w: 0,
       ),
     );
   }
