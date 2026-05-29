@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'control_placeholder.dart';
+import '../../../features/control/presentation/control_screen.dart';
 import 'expressions_placeholder.dart';
 import 'setup_placeholder.dart';
 
@@ -26,7 +26,7 @@ class _LampShellState extends State<LampShell> {
   @override
   Widget build(BuildContext context) {
     final body = switch (_tab) {
-      LampTab.control => ControlPlaceholder(lampId: widget.lampId),
+      LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsPlaceholder(lampId: widget.lampId),
       LampTab.setup => SetupPlaceholder(lampId: widget.lampId),
     };
