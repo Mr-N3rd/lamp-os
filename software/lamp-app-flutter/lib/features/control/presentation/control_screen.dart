@@ -6,6 +6,7 @@ import '../application/control_notifier.dart';
 import '../domain/lamp_color.dart';
 import 'widgets/base_card.dart';
 import 'widgets/base_editor_sheet.dart';
+import 'widgets/knockout_entry.dart';
 import 'widgets/brightness_card.dart';
 import 'widgets/connecting_view.dart';
 import 'widgets/connection_banner.dart';
@@ -70,6 +71,10 @@ class ControlScreen extends ConsumerWidget {
                     activeIndex: state.base.ac,
                     onTap: () =>
                         showBaseEditorSheet(context, lampId: lampId),
+                  ),
+                  KnockoutEntry(
+                    lampId: lampId,
+                    editedCount: state.base.knockout.length,
                   ),
                 ],
               ),

@@ -1,6 +1,7 @@
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../features/control/presentation/knockout_screen.dart';
 import '../../features/inventory/application/active_lamp_notifier.dart';
 import '../../features/inventory/application/inventory_notifier.dart';
 import '../../features/lamp_shell/presentation/lamp_shell.dart';
@@ -65,6 +66,11 @@ GoRouter appRouter(Ref ref) {
       GoRoute(
         path: '/devices',
         builder: (_, state) => const NearbyLampsScreen(),
+      ),
+      GoRoute(
+        path: '/lamp/:id/control/knockout',
+        builder: (_, state) =>
+            KnockoutScreen(lampId: state.pathParameters['id']!),
       ),
     ],
   );
