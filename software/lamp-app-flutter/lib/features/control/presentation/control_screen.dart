@@ -8,6 +8,7 @@ import 'widgets/base_card.dart';
 import 'widgets/base_editor_sheet.dart';
 import 'widgets/brightness_card.dart';
 import 'widgets/connecting_view.dart';
+import 'widgets/connection_banner.dart';
 import 'widgets/lamp_preview.dart';
 import 'widgets/shade_card.dart';
 
@@ -37,32 +38,41 @@ class ControlScreen extends ConsumerWidget {
         final shade = state.shade.colors.isEmpty
             ? _blackShade
             : state.shade.colors.single;
-        return ListView(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+        return Column(
           children: [
-            BrightnessCard(
-              value: state.lamp.brightness,
-              onChanged: notifier.setBrightness,
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Center(
-                child: LampPreview(
-                  deviceId: lampId,
-                  shade: shade,
-                  baseColors: state.base.colors,
-                ),
+            if (!state.connected)
+              ConnectionBanner(attempt: state.reconnectAttempt),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  BrightnessCard(
+                    value: state.lamp.brightness,
+                    onChanged: notifier.setBrightness,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Center(
+                      child: LampPreview(
+                        deviceId: lampId,
+                        shade: shade,
+                        baseColors: state.base.colors,
+                      ),
+                    ),
+                  ),
+                  ShadeCard(
+                    color: shade,
+                    bpp: state.shade.bpp,
+                    onChanged: notifier.setShadeColor,
+                  ),
+                  BaseCard(
+                    colors: state.base.colors,
+                    activeIndex: state.base.ac,
+                    onTap: () =>
+                        showBaseEditorSheet(context, lampId: lampId),
+                  ),
+                ],
               ),
-            ),
-            ShadeCard(
-              color: shade,
-              bpp: state.shade.bpp,
-              onChanged: notifier.setShadeColor,
-            ),
-            BaseCard(
-              colors: state.base.colors,
-              activeIndex: state.base.ac,
-              onTap: () => showBaseEditorSheet(context, lampId: lampId),
             ),
           ],
         );
