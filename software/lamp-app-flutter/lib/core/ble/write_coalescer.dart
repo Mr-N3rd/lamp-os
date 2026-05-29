@@ -4,6 +4,9 @@ import 'dart:typed_data';
 /// Coalesces a stream of [schedule] calls into a single trailing write after
 /// [debounce] has elapsed since the last call. Used to keep slider drags from
 /// firing dozens of BLE writes per second.
+///
+/// Errors from [onWrite] are intentionally dropped — this is a fire-and-forget
+/// debouncer; a failed mid-stream slider write should not crash the UI.
 class WriteCoalescer {
   WriteCoalescer({required this.onWrite, required this.debounce});
 
@@ -22,6 +25,7 @@ class WriteCoalescer {
   }
 
   Future<void> flush() async {
+    if (_disposed) return;
     _timer?.cancel();
     await _drain();
   }
