@@ -262,6 +262,7 @@ class ControlNotifier extends _$ControlNotifier {
         ac: cur.base.ac.clamp(0, colors.isEmpty ? 0 : colors.length - 1),
         bpp: cur.base.bpp,
         colors: colors,
+        knockout: cur.base.knockout,
       ),
     ));
     _baseColorsWriter.schedule(_encodeColors(colors));
@@ -282,6 +283,7 @@ class ControlNotifier extends _$ControlNotifier {
         ac: clamped,
         bpp: cur.base.bpp,
         colors: cur.base.colors,
+        knockout: cur.base.knockout,
       ),
     ));
     // ac is part of the base settings blob, not its own characteristic; the

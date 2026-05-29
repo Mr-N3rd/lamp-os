@@ -24,6 +24,20 @@ void main() {
     expect(s.colors[1].w, 0xAA);
   });
 
+  test('BaseSection.knockout is empty when the JSON omits it', () {
+    final s = BaseSection.fromJson(jsonDecode(
+      '{"px":35,"ac":0,"bpp":4,"colors":[]}',
+    ) as Map<String, dynamic>);
+    expect(s.knockout, isEmpty);
+  });
+
+  test('BaseSection.knockout folds entries into a map', () {
+    final s = BaseSection.fromJson(jsonDecode(
+      '{"px":35,"ac":0,"bpp":4,"colors":[],"knockout":[{"p":3,"b":50},{"p":7,"b":25}]}',
+    ) as Map<String, dynamic>);
+    expect(s.knockout, {3: 50, 7: 25});
+  });
+
   test('ShadeSection parses single color', () {
     final s = ShadeSection.fromJson(jsonDecode(
       '{"px":38,"bpp":4,"colors":["#000000FF"]}',

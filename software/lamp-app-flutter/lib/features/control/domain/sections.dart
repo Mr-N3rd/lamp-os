@@ -26,6 +26,7 @@ class BaseSection {
     required this.ac,
     required this.bpp,
     required this.colors,
+    required this.knockout,
   });
 
   final int px;
@@ -33,14 +34,28 @@ class BaseSection {
   final int bpp;
   final List<LampColor> colors;
 
-  factory BaseSection.fromJson(Map<String, dynamic> json) => BaseSection(
-        px: (json['px'] as num?)?.toInt() ?? 35,
-        ac: (json['ac'] as num?)?.toInt() ?? 0,
-        bpp: (json['bpp'] as num?)?.toInt() ?? 4,
-        colors: ((json['colors'] as List?) ?? const [])
-            .map((e) => LampColor.fromHex(e as String))
-            .toList(),
-      );
+  /// Per-LED brightness overrides (0..100). Indices absent from the map use
+  /// the default 100 %. Empty map = all LEDs at full brightness. Stored as a
+  /// `Map<int, int>` rather than a list for O(1) lookup and small memory.
+  final Map<int, int> knockout;
+
+  factory BaseSection.fromJson(Map<String, dynamic> json) {
+    final knockoutList = (json['knockout'] as List?) ?? const [];
+    final knockoutMap = <int, int>{
+      for (final entry in knockoutList.cast<Map<String, dynamic>>())
+        if (entry['p'] is num && entry['b'] is num)
+          (entry['p'] as num).toInt(): (entry['b'] as num).toInt(),
+    };
+    return BaseSection(
+      px: (json['px'] as num?)?.toInt() ?? 35,
+      ac: (json['ac'] as num?)?.toInt() ?? 0,
+      bpp: (json['bpp'] as num?)?.toInt() ?? 4,
+      colors: ((json['colors'] as List?) ?? const [])
+          .map((e) => LampColor.fromHex(e as String))
+          .toList(),
+      knockout: knockoutMap,
+    );
+  }
 }
 
 /// CHAR_SHADE_SECTION payload, see firmware Config::asShadeJson.
