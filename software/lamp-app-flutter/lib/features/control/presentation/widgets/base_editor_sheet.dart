@@ -1,63 +1,63 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../application/control_notifier.dart';
 import '../../domain/lamp_color.dart';
 import 'color_picker_sheet.dart';
 
-class BaseEditorSheet extends StatelessWidget {
-  const BaseEditorSheet({
-    super.key,
-    required this.colors,
-    required this.activeIndex,
-    required this.onColorsChanged,
-    required this.onActiveChanged,
-  });
+class BaseEditorSheet extends ConsumerWidget {
+  const BaseEditorSheet({super.key, required this.lampId});
 
-  final List<LampColor> colors;
-  final int activeIndex;
-  final ValueChanged<List<LampColor>> onColorsChanged;
-  final ValueChanged<int> onActiveChanged;
-
-  Future<void> _editStop(BuildContext context, int i) async {
-    final picked = await showColorPickerSheet(
-      context,
-      initial: colors[i],
-      title: 'Stop ${i + 1}',
-    );
-    if (picked != null) {
-      final next = [...colors];
-      next[i] = picked;
-      onColorsChanged(next);
-    }
-  }
-
-  void _removeStop(int i) {
-    if (colors.length <= 1) return;
-    final next = [...colors]..removeAt(i);
-    onColorsChanged(next);
-    if (activeIndex >= next.length) onActiveChanged(next.length - 1);
-  }
-
-  void _addStop() {
-    if (colors.length >= 5) return;
-    onColorsChanged([
-      ...colors,
-      const LampColor(r: 0xFF, g: 0xFF, b: 0xFF, w: 0),
-    ]);
-  }
-
-  void _reorder(int oldIndex, int newIndex) {
-    final next = [...colors];
-    final picked = next.removeAt(oldIndex);
-    next.insert(newIndex, picked);
-    onColorsChanged(next);
-    if (activeIndex == oldIndex) {
-      onActiveChanged(newIndex);
-    }
-  }
+  final String lampId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(controlNotifierProvider(lampId)).value;
+    if (state == null) return const SizedBox.shrink();
+
+    final colors = state.base.colors;
+    final activeIndex = state.base.ac;
+    final notifier = ref.read(controlNotifierProvider(lampId).notifier);
+
+    Future<void> editStop(int i) async {
+      final picked = await showColorPickerSheet(
+        context,
+        initial: colors[i],
+        title: 'Stop ${i + 1}',
+      );
+      if (picked != null) {
+        final next = [...colors];
+        next[i] = picked;
+        notifier.setBaseColors(next);
+      }
+    }
+
+    void removeStop(int i) {
+      if (colors.length <= 1) return;
+      final next = [...colors]..removeAt(i);
+      notifier.setBaseColors(next);
+      if (activeIndex >= next.length) notifier.setBaseAc(next.length - 1);
+    }
+
+    void addStop() {
+      if (colors.length >= 5) return;
+      notifier.setBaseColors([
+        ...colors,
+        const LampColor(r: 0xFF, g: 0xFF, b: 0xFF, w: 0),
+      ]);
+    }
+
+    void reorder(int oldIndex, int newIndex) {
+      final next = [...colors];
+      final picked = next.removeAt(oldIndex);
+      next.insert(newIndex, picked);
+      notifier.setBaseColors(next);
+      if (activeIndex == oldIndex) {
+        notifier.setBaseAc(newIndex);
+      }
+    }
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -80,13 +80,13 @@ class BaseEditorSheet extends StatelessWidget {
             Expanded(
               child: ReorderableListView.builder(
                 itemCount: colors.length,
-                onReorderItem: _reorder,
+                onReorderItem: reorder,
                 buildDefaultDragHandles: false,
                 itemBuilder: (ctx, i) {
                   final stop = colors[i];
                   return ListTile(
                     key: ValueKey('stop-$i'),
-                    onTap: () => onActiveChanged(i),
+                    onTap: () => notifier.setBaseAc(i),
                     leading: ReorderableDragStartListener(
                       index: i,
                       child: const Icon(Icons.drag_indicator,
@@ -95,7 +95,7 @@ class BaseEditorSheet extends StatelessWidget {
                     title: Row(
                       children: [
                         GestureDetector(
-                          onTap: () => _editStop(context, i),
+                          onTap: () => editStop(i),
                           child: Container(
                             width: 28,
                             height: 28,
@@ -125,9 +125,8 @@ class BaseEditorSheet extends StatelessWidget {
                     trailing: IconButton(
                       icon: const Icon(Icons.close,
                           color: BrandColors.slateGrey),
-                      onPressed: colors.length <= 1
-                          ? null
-                          : () => _removeStop(i),
+                      onPressed:
+                          colors.length <= 1 ? null : () => removeStop(i),
                     ),
                   );
                 },
@@ -135,7 +134,7 @@ class BaseEditorSheet extends StatelessWidget {
             ),
             if (colors.length < 5)
               TextButton(
-                onPressed: _addStop,
+                onPressed: addStop,
                 child: const Text('+ Add stop'),
               ),
           ],
@@ -147,10 +146,7 @@ class BaseEditorSheet extends StatelessWidget {
 
 Future<void> showBaseEditorSheet(
   BuildContext context, {
-  required List<LampColor> colors,
-  required int activeIndex,
-  required ValueChanged<List<LampColor>> onColorsChanged,
-  required ValueChanged<int> onActiveChanged,
+  required String lampId,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -161,12 +157,7 @@ Future<void> showBaseEditorSheet(
     ),
     builder: (ctx) => FractionallySizedBox(
       heightFactor: 0.9,
-      child: BaseEditorSheet(
-        colors: colors,
-        activeIndex: activeIndex,
-        onColorsChanged: onColorsChanged,
-        onActiveChanged: onActiveChanged,
-      ),
+      child: BaseEditorSheet(lampId: lampId),
     ),
   );
 }

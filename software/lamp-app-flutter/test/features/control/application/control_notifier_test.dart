@@ -7,6 +7,7 @@ import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/control/application/control_notifier.dart';
+import 'package:lamp_app/features/control/application/control_state.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -59,6 +60,54 @@ void main() {
 
     final auth = await ble.read(_devId, BleUuids.controlService, BleUuids.auth);
     expect(utf8.decode(auth), 'secret');
+  });
+
+  test('disconnect is called when build() throws after connect', () async {
+    // Seed inventory but no section chars — connect + auth succeed, then the
+    // first section read throws BleNotFound, simulating a partial build failure.
+    final ble = InMemoryBleClient();
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    // NOTE: do NOT addTearDown(c.dispose) here — we call c.dispose() manually
+    // below and need to verify the BLE state immediately after.
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: '', // empty password → auth is a no-op write
+        ));
+
+    // Hold a subscription so the auto-dispose timer doesn't fire before we
+    // inspect state.
+    final states = <AsyncValue<ControlState>>[];
+    final sub = c.listen<AsyncValue<ControlState>>(
+      controlNotifierProvider(_devId),
+      (_, next) => states.add(next),
+      fireImmediately: true,
+    );
+    addTearDown(sub.close);
+
+    // Wait until the provider settles into an error state.
+    await Future.doWhile(() async {
+      await Future<void>.delayed(Duration.zero);
+      return c
+              .read(controlNotifierProvider(_devId))
+              .hasError ==
+          false;
+    });
+
+    expect(c.read(controlNotifierProvider(_devId)).hasError, isTrue);
+    // Before dispose, the lamp was connected (connect succeeded).
+    expect(ble.isConnected(_devId), isTrue);
+
+    sub.close();
+    c.dispose();
+
+    // After dispose, the early onDispose registration should have
+    // disconnected the lamp.
+    expect(ble.isConnected(_devId), isFalse);
   });
 
   test('setBrightness optimistically updates and writes after debounce',

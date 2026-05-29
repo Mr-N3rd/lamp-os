@@ -33,6 +33,9 @@ class ControlNotifier extends _$ControlNotifier {
     );
 
     await ble.connect(deviceId);
+    // Register disconnect immediately so a failure in auth or section reads
+    // still tears down the BLE connection on dispose.
+    ref.onDispose(() => ble.disconnect(deviceId));
     await AuthClient(ble: ble)
         .authenticate(deviceId: deviceId, password: lamp.controlPassword);
 
@@ -65,7 +68,8 @@ class ControlNotifier extends _$ControlNotifier {
       _brightnessWriter.dispose();
       _shadeColorsWriter.dispose();
       _baseColorsWriter.dispose();
-      ble.disconnect(deviceId);
+      // disconnect is handled by the earlier onDispose registered right after
+      // connect(), ensuring it always runs even if build() throws mid-way.
     });
 
     return ControlState(

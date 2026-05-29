@@ -49,13 +49,7 @@ class ControlScreen extends ConsumerWidget {
             BaseCard(
               colors: state.base.colors,
               activeIndex: state.base.ac,
-              onTap: () => showBaseEditorSheet(
-                context,
-                colors: state.base.colors,
-                activeIndex: state.base.ac,
-                onColorsChanged: notifier.setBaseColors,
-                onActiveChanged: notifier.setBaseAc,
-              ),
+              onTap: () => showBaseEditorSheet(context, lampId: lampId),
             ),
           ],
         );
