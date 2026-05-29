@@ -26,6 +26,7 @@ class BaseEditorSheet extends ConsumerWidget {
         context,
         initial: colors[i],
         title: 'Stop ${i + 1}',
+        bpp: state.base.bpp,
         onLive: (live) {
           // Latest colors come from the notifier — read fresh each tick so
           // concurrent state changes (e.g. another stop edited in parallel)

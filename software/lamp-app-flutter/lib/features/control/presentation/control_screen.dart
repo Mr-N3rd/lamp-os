@@ -56,6 +56,7 @@ class ControlScreen extends ConsumerWidget {
             ),
             ShadeCard(
               color: shade,
+              bpp: state.shade.bpp,
               onChanged: notifier.setShadeColor,
             ),
             BaseCard(

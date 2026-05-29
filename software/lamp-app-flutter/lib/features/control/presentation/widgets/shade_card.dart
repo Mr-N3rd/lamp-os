@@ -3,11 +3,22 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/brand_colors.dart';
 import '../../domain/lamp_color.dart';
 import 'color_picker_sheet.dart';
+import 'lamp_color_swatch.dart';
 
 class ShadeCard extends StatelessWidget {
-  const ShadeCard({super.key, required this.color, required this.onChanged});
+  const ShadeCard({
+    super.key,
+    required this.color,
+    required this.bpp,
+    required this.onChanged,
+  });
 
   final LampColor color;
+
+  /// 4 (RGBW) exposes Warm White in the picker; 3 (RGB-only) hides it
+  /// and trims the displayed hex to `#RRGGBB`.
+  final int bpp;
+
   final ValueChanged<LampColor> onChanged;
 
   Future<void> _onTap(BuildContext context) async {
@@ -16,6 +27,7 @@ class ShadeCard extends StatelessWidget {
       context,
       initial: color,
       title: 'Pick a shade color',
+      bpp: bpp,
       onLive: onChanged, // every drag tick streams to the notifier
     );
     if (picked == null) {
@@ -25,6 +37,11 @@ class ShadeCard extends StatelessWidget {
       // Save tap: commit the final color (idempotent with last live update).
       onChanged(picked);
     }
+  }
+
+  String get _displayHex {
+    final full = color.toHex(); // '#RRGGBBWW'
+    return bpp == 4 ? full : full.substring(0, 7);
   }
 
   @override
@@ -42,15 +59,7 @@ class ShadeCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: color.toSwatch(),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-              ),
-            ),
+            LampColorSwatch(color: color, size: 36),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
@@ -67,7 +76,7 @@ class ShadeCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    color.toHex(),
+                    _displayHex,
                     style: const TextStyle(
                       color: BrandColors.fogGrey,
                       fontSize: 12,
