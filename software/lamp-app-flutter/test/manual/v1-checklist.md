@@ -81,3 +81,37 @@ Hardware verification for things automated tests can't cover. Walk through this 
 - [ ] Walk back into range → banner clears within a few seconds; the lamp catches up to the last local values without losing the user's session.
 - [ ] After reconnect, any unsaved edits from before the drop are still present and Save re-enables.
 - [ ] Power-cycle the lamp manually → banner appears on the immediate disconnect, persists through the ~5 s boot, then clears once the lamp re-advertises.
+
+## Phase 1c — Multi-lamp switching
+
+### AppBar lamp chip
+
+- [ ] AppBar shows the lamp's friendly name as a tappable chip with a status dot to its left.
+- [ ] The status dot pulses green when connected; dim-green when in BLE range but not the current lamp; grey when out of range.
+- [ ] Switching from Control → Expressions → back to Control no longer flashes the ConnectingView — the BLE link is held across tab switches.
+
+### Picker contents
+
+- [ ] Tap the chip → modal bottom sheet slides up showing "Your lamps".
+- [ ] Each inventory row shows: status dot, lamp icon tinted by the lamp's last-seen colors, name.
+- [ ] The currently-active lamp's row carries an "active" pill (no chevron).
+- [ ] Inventory lamps currently within BLE range show a green/bluetooth status dot; others show grey.
+- [ ] Power-cycle another lamp in the room → after ~30 s its status dot in the sheet transitions from green to grey (BLE adv staleness window).
+
+### Switching lamps
+
+- [ ] Tap a different inventory row → sheet pops, app navigates to that lamp's Control screen.
+- [ ] After switching, the AppBar chip and ControlScreen reflect the new lamp.
+- [ ] Switch back → previous lamp's Control state is loaded fresh (a new connect+section read; we don't currently cache other lamps' state).
+
+### Other nearby lamps
+
+- [ ] Bring an unconfigured ("standard") lamp near the phone → it appears under "Other nearby lamps" within seconds with an amber "adopt" pill.
+- [ ] Tap it → AddLamp wizard opens (factory-default path; sheet pops).
+- [ ] Bring a friend's already-configured lamp near the phone → it appears under "Other nearby lamps" with a green "add" pill.
+- [ ] Tap → confirmation dialog → "Add" → lamp lands in inventory + becomes the active lamp. Sheet pops.
+- [ ] Tap "+ Add a lamp" in the footer → onboarding shell opens.
+
+### Live color cache
+
+- [ ] After editing shade or base on a lamp and backing out without saving, re-opening the picker shows the inventory tile tinted by the *edited* colors (InventoryLamp.lastShadeColor / lastBaseColor cached on every live write).
