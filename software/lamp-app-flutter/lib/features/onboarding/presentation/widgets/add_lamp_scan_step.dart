@@ -37,11 +37,11 @@ class _LampRow extends ConsumerWidget {
     if (lamp.isFactoryDefault) {
       await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
     } else {
-      final name = await _askAddName(context, lamp.name);
-      if (name != null && name.isNotEmpty) {
+      final confirmed = await _confirmAdd(context, lamp.name);
+      if (confirmed) {
         await ref
             .read(addLampNotifierProvider.notifier)
-            .add(deviceId: lamp.id, name: name);
+            .add(deviceId: lamp.id, name: lamp.name);
       }
     }
   }
@@ -116,27 +116,23 @@ class _Pill extends StatelessWidget {
   }
 }
 
-Future<String?> _askAddName(BuildContext context, String suggested) async {
-  final controller = TextEditingController(text: suggested);
-  return showDialog<String>(
+Future<bool> _confirmAdd(BuildContext context, String name) async {
+  final displayName = name.isEmpty ? 'this lamp' : '"$name"';
+  final result = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Add this lamp?'),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        decoration: const InputDecoration(labelText: 'Name'),
-      ),
+      title: Text('Add $displayName to your lamps?'),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(ctx),
+          onPressed: () => Navigator.pop(ctx, false),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+          onPressed: () => Navigator.pop(ctx, true),
           child: const Text('Add'),
         ),
       ],
     ),
   );
+  return result ?? false;
 }
