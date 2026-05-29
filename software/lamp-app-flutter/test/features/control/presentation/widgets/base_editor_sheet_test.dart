@@ -106,6 +106,33 @@ void main() {
     expect(find.byIcon(Icons.drag_indicator), findsNWidgets(2));
   });
 
+  testWidgets('Close button pops the route', (tester) async {
+    final ble = InMemoryBleClient();
+    final c = await _buildContainer(ble, stopCount: 2);
+    addTearDown(c.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: MaterialApp(
+        home: Builder(
+          builder: (ctx) => Scaffold(
+            body: TextButton(
+              onPressed: () => showBaseEditorSheet(ctx, lampId: _devId),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Base gradient'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(find.text('Base gradient'), findsNothing);
+  });
+
   testWidgets('hides add-stop CTA at 5 stops', (tester) async {
     final ble = InMemoryBleClient();
     final c = await _buildContainer(ble, stopCount: 5);

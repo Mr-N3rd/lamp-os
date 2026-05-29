@@ -21,16 +21,30 @@ class BaseEditorSheet extends ConsumerWidget {
     final notifier = ref.read(controlNotifierProvider(lampId).notifier);
 
     Future<void> editStop(int i) async {
+      final original = [...colors];
       final picked = await showColorPickerSheet(
         context,
         initial: colors[i],
         title: 'Stop ${i + 1}',
+        onLive: (live) {
+          // Latest colors come from the notifier — read fresh each tick so
+          // concurrent state changes (e.g. another stop edited in parallel)
+          // don't get clobbered. In practice the picker is modal so this is
+          // belt-and-suspenders, but it matches the realtime contract.
+          final current = ref.read(controlNotifierProvider(lampId)).value;
+          if (current == null) return;
+          final next = [...current.base.colors];
+          if (i >= next.length) return; // stop removed while picker open
+          next[i] = live;
+          notifier.setBaseColors(next);
+        },
       );
-      if (picked != null) {
-        final next = [...colors];
-        next[i] = picked;
-        notifier.setBaseColors(next);
+      if (picked == null) {
+        // Cancelled — restore the snapshot we took before the picker opened.
+        notifier.setBaseColors(original);
       }
+      // Save case: the last onLive tick already wrote the correct color; no
+      // further action needed.
     }
 
     void removeStop(int i) {
@@ -63,9 +77,9 @@ class BaseEditorSheet extends ConsumerWidget {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            const Row(
+            Row(
               children: [
-                Text(
+                const Text(
                   'Base gradient',
                   style: TextStyle(
                     color: BrandColors.lampWhite,
@@ -73,7 +87,12 @@ class BaseEditorSheet extends ConsumerWidget {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                Spacer(),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close, color: BrandColors.slateGrey),
+                  onPressed: () => Navigator.pop(context),
+                  tooltip: 'Close',
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -156,7 +175,7 @@ Future<void> showBaseEditorSheet(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
     builder: (ctx) => FractionallySizedBox(
-      heightFactor: 0.9,
+      heightFactor: 0.6,
       child: BaseEditorSheet(lampId: lampId),
     ),
   );
