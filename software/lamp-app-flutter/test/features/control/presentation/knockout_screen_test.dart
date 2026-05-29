@@ -30,6 +30,15 @@ Future<void> _seed(InMemoryBleClient ble) async {
       Uint8List.fromList(utf8.encode(
         '{"px":38,"bpp":4,"colors":["#000000FF"]}',
       )));
+  await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
+      Uint8List.fromList(utf8.encode(
+        '{"ssid":"","brightness":60}',
+      )));
+  await ble.write(_devId, BleUuids.controlService, BleUuids.mqttSection,
+      Uint8List.fromList(utf8.encode(
+        '{"enabled":false,"brokerHost":"","brokerPort":1883,'
+        '"username":"","topicPrefix":""}',
+      )));
   await ble.disconnect(_devId);
 }
 

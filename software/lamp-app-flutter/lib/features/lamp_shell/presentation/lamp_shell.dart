@@ -10,7 +10,7 @@ import '../../inventory/presentation/widgets/lamp_picker_sheet.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
 import '../application/lamp_status.dart';
 import 'expressions_placeholder.dart';
-import 'setup_placeholder.dart';
+import 'setup_screen.dart';
 
 enum LampTab { control, expressions, setup }
 
@@ -44,7 +44,7 @@ class _LampShellState extends ConsumerState<LampShell> {
     final body = switch (_tab) {
       LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsPlaceholder(lampId: widget.lampId),
-      LampTab.setup => SetupPlaceholder(lampId: widget.lampId),
+      LampTab.setup => SetupScreen(lampId: widget.lampId),
     };
 
     final inventory = ref.watch(inventoryNotifierProvider).value;
