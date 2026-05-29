@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,10 +5,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
-import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/setup_screen.dart';
+
+import '../../_support/seed.dart';
 
 const _devId = 'lamp-x';
 
@@ -19,34 +17,13 @@ Future<void> _seed(
   InMemoryBleClient ble, {
   String homeSsid = '',
   bool advancedEnabled = false,
-}) async {
-  await ble.connect(_devId);
-  await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-      Uint8List.fromList(utf8.encode(
-        '{"name":"jacko","brightness":50,'
-        '"advancedEnabled":$advancedEnabled}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.baseSection,
-      Uint8List.fromList(utf8.encode(
-        '{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"],"knockout":[]}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.shadeSection,
-      Uint8List.fromList(utf8.encode(
-        '{"px":38,"bpp":4,"colors":["#000000FF"]}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
-      Uint8List.fromList(utf8.encode(
-        '{"ssid":"$homeSsid","brightness":60}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.mqttSection,
-      Uint8List.fromList(utf8.encode(
-        '{"enabled":false,"brokerHost":"","brokerPort":1883,'
-        '"username":"","topicPrefix":""}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.exprSection,
-      Uint8List.fromList(utf8.encode('[]')));
-  await ble.disconnect(_devId);
-}
+}) =>
+    seedControlBle(
+      ble,
+      deviceId: _devId,
+      homeSsid: homeSsid,
+      advancedEnabled: advancedEnabled,
+    );
 
 /// Build a container with BLE seeded and inventory populated.
 /// The controlNotifier is NOT pre-primed here — pre-priming via

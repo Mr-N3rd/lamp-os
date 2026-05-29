@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,10 +5,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
-import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/expression_editor_screen.dart';
+
+import '../../_support/seed.dart';
 
 const _devId = 'lamp-x';
 
@@ -22,28 +20,7 @@ const _devId = 'lamp-x';
 Future<ProviderContainer> _withEmptyState() async {
   SharedPreferences.setMockInitialValues({});
   final ble = InMemoryBleClient();
-  await ble.connect(_devId);
-  await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-      Uint8List.fromList(utf8.encode(
-          '{"name":"test","brightness":50,"advancedEnabled":false}')));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.baseSection,
-      Uint8List.fromList(utf8.encode(
-          '{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"],"knockout":[]}')));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.shadeSection,
-      Uint8List.fromList(
-          utf8.encode('{"px":38,"bpp":4,"colors":["#000000FF"]}')));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
-      Uint8List.fromList(utf8.encode('{"ssid":"","brightness":60}')));
-  await ble.write(
-      _devId,
-      BleUuids.controlService,
-      BleUuids.mqttSection,
-      Uint8List.fromList(utf8.encode('{"enabled":false,"brokerHost":"",'
-          '"brokerPort":1883,"username":"","topicPrefix":""}')));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.exprSection,
-      Uint8List.fromList(utf8.encode('[]')));
-  await ble.disconnect(_devId);
-
+  await seedControlBle(ble, deviceId: _devId, name: 'test');
   final c = ProviderContainer(
     overrides: [bleClientProvider.overrideWithValue(ble)],
   );

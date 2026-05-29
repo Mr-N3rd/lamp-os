@@ -14,38 +14,12 @@ import 'package:lamp_app/features/inventory/application/inventory_notifier.dart'
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../_support/seed.dart';
+
 const _devId = 'dev1';
 
-Future<void> _seed(InMemoryBleClient ble) async {
-  // Pretend the lamp's sections are already published. Seed by writing
-  // through the client while "connected" — the test acts as the firmware
-  // here. The notifier will then read these back.
-  await ble.connect(_devId);
-  await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-      Uint8List.fromList(utf8.encode(
-        '{"name":"jacko","brightness":42,"advancedEnabled":false}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.baseSection,
-      Uint8List.fromList(utf8.encode(
-        '{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"],"knockout":[]}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.shadeSection,
-      Uint8List.fromList(utf8.encode(
-        '{"px":38,"bpp":4,"colors":["#000000FF"]}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
-      Uint8List.fromList(utf8.encode(
-        '{"ssid":"","brightness":60}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.mqttSection,
-      Uint8List.fromList(utf8.encode(
-        '{"enabled":false,"brokerHost":"","brokerPort":1883,'
-        '"username":"","topicPrefix":""}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.exprSection,
-      Uint8List.fromList(utf8.encode('[]')));
-  await ble.disconnect(_devId);
-}
+Future<void> _seed(InMemoryBleClient ble) =>
+    seedControlBle(ble, deviceId: _devId, brightness: 42);
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));

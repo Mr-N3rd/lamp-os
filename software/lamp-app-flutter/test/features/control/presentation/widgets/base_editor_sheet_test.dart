@@ -1,17 +1,15 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
-import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/control/application/control_notifier.dart';
 import 'package:lamp_app/features/control/presentation/widgets/base_editor_sheet.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../../../_support/seed.dart';
 
 // Test strategy: BaseEditorSheet is now a ConsumerWidget that reads live state
 // from controlNotifierProvider. Tests create a ProviderContainer, seed
@@ -20,38 +18,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const _devId = 'lamp-x';
 
-Future<void> _seedBle(InMemoryBleClient ble, {int stopCount = 2}) async {
-  String hex(int v) =>
-      v.toRadixString(16).padLeft(6, '0').toUpperCase();
+Future<void> _seedBle(InMemoryBleClient ble, {int stopCount = 2}) {
+  String hex(int v) => v.toRadixString(16).padLeft(6, '0').toUpperCase();
   final colors = List.generate(
     stopCount,
     (i) => '"#${hex(((i + 1) * 0x300783) & 0xFFFFFF)}FF"',
   ).join(',');
-  await ble.connect(_devId);
-  await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-      Uint8List.fromList(utf8.encode(
-        '{"name":"test","brightness":50,"advancedEnabled":false}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.baseSection,
-      Uint8List.fromList(utf8.encode(
-        '{"px":35,"ac":0,"bpp":4,"colors":[$colors],"knockout":[]}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.shadeSection,
-      Uint8List.fromList(utf8.encode(
-        '{"px":38,"bpp":4,"colors":["#000000FF"]}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
-      Uint8List.fromList(utf8.encode(
-        '{"ssid":"","brightness":60}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.mqttSection,
-      Uint8List.fromList(utf8.encode(
-        '{"enabled":false,"brokerHost":"","brokerPort":1883,'
-        '"username":"","topicPrefix":""}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.exprSection,
-      Uint8List.fromList(utf8.encode('[]')));
-  await ble.disconnect(_devId);
+  return seedControlBle(
+    ble,
+    deviceId: _devId,
+    name: 'test',
+    baseColorsJson: '[$colors]',
+  );
 }
 
 /// Build a container, seed the inventory lamp, and await the control notifier
