@@ -11,12 +11,20 @@ class ShadeCard extends StatelessWidget {
   final ValueChanged<LampColor> onChanged;
 
   Future<void> _onTap(BuildContext context) async {
+    final original = color;
     final picked = await showColorPickerSheet(
       context,
       initial: color,
       title: 'Pick a shade color',
+      onLive: onChanged, // every drag tick streams to the notifier
     );
-    if (picked != null) onChanged(picked);
+    if (picked == null) {
+      // User cancelled — revert the lamp to the color before picker opened.
+      onChanged(original);
+    } else {
+      // Save tap: commit the final color (idempotent with last live update).
+      onChanged(picked);
+    }
   }
 
   @override

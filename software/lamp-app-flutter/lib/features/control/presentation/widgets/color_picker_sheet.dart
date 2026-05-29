@@ -7,10 +7,15 @@ import '../../domain/lamp_color.dart';
 /// Opens a modal bottom sheet to pick a color, returning the chosen
 /// [LampColor] or null if cancelled. The W byte of [initial] is carried
 /// through untouched — the picker only edits R/G/B.
+///
+/// If [onLive] is provided it is called on every drag tick with the
+/// current color so callers can stream realtime previews to the hardware.
+/// Cancel still returns null; Save still returns the final color.
 Future<LampColor?> showColorPickerSheet(
   BuildContext context, {
   required LampColor initial,
   String title = 'Pick a color',
+  ValueChanged<LampColor>? onLive,
 }) {
   return showModalBottomSheet<LampColor>(
     context: context,
@@ -19,14 +24,20 @@ Future<LampColor?> showColorPickerSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
-    builder: (ctx) => _ColorPickerSheet(initial: initial, title: title),
+    builder: (ctx) =>
+        _ColorPickerSheet(initial: initial, title: title, onLive: onLive),
   );
 }
 
 class _ColorPickerSheet extends StatefulWidget {
-  const _ColorPickerSheet({required this.initial, required this.title});
+  const _ColorPickerSheet({
+    required this.initial,
+    required this.title,
+    this.onLive,
+  });
   final LampColor initial;
   final String title;
+  final ValueChanged<LampColor>? onLive;
 
   @override
   State<_ColorPickerSheet> createState() => _ColorPickerSheetState();
@@ -34,6 +45,17 @@ class _ColorPickerSheet extends StatefulWidget {
 
 class _ColorPickerSheetState extends State<_ColorPickerSheet> {
   late Color _picked = widget.initial.toSwatch();
+
+  void _onColorChanged(Color c) {
+    setState(() => _picked = c);
+    widget.onLive?.call(
+      widget.initial.withRgb(
+        r: (_picked.r * 255).round(),
+        g: (_picked.g * 255).round(),
+        b: (_picked.b * 255).round(),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +81,7 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
               const SizedBox(height: 12),
               ColorPicker(
                 pickerColor: _picked,
-                onColorChanged: (c) => setState(() => _picked = c),
+                onColorChanged: _onColorChanged,
                 pickerAreaHeightPercent: 0.6,
                 enableAlpha: false,
                 labelTypes: const [],
