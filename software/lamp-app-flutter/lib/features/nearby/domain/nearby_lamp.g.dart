@@ -13,6 +13,8 @@ _NearbyLamp _$NearbyLampFromJson(Map<String, dynamic> json) => _NearbyLamp(
   serviceUuids: (json['serviceUuids'] as List<dynamic>)
       .map((e) => e as String)
       .toList(),
+  baseRgb: (json['baseRgb'] as num).toInt(),
+  shadeRgb: (json['shadeRgb'] as num).toInt(),
   lastSeenEpochMs: (json['lastSeenEpochMs'] as num).toInt(),
 );
 
@@ -22,5 +24,7 @@ Map<String, dynamic> _$NearbyLampToJson(_NearbyLamp instance) =>
       'name': instance.name,
       'rssi': instance.rssi,
       'serviceUuids': instance.serviceUuids,
+      'baseRgb': instance.baseRgb,
+      'shadeRgb': instance.shadeRgb,
       'lastSeenEpochMs': instance.lastSeenEpochMs,
     };

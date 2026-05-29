@@ -21,6 +21,8 @@ void main() {
       id: 'aa',
       name: 'jacko',
       serviceUuids: ['5f64f4d0-d6d9-4a44-9b3f-3a8d6f7e6b40'],
+      baseRgb: 0x300783,
+      shadeRgb: 0x000000,
       rssi: -55,
     ));
     await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -31,6 +33,8 @@ void main() {
       id: 'aa',
       name: 'jacko',
       serviceUuids: ['5f64f4d0-d6d9-4a44-9b3f-3a8d6f7e6b40'],
+      baseRgb: 0x300783,
+      shadeRgb: 0x000000,
       rssi: -50,
     ));
     await Future<void>.delayed(const Duration(milliseconds: 10));

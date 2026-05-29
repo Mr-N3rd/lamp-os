@@ -12,12 +12,18 @@ class BleAdvertisement {
     required this.id,
     required this.name,
     required this.serviceUuids,
+    required this.baseRgb,
+    required this.shadeRgb,
     required this.rssi,
   });
 
   final String id;
   final String name;
   final List<String> serviceUuids;
+  /// Base color in 0xRRGGBB form, parsed from the lamp manufacturer data.
+  final int baseRgb;
+  /// Shade color in 0xRRGGBB form, parsed from the lamp manufacturer data.
+  final int shadeRgb;
   final int rssi;
 }
 
@@ -54,6 +60,7 @@ class FbpBleScanner implements BleScanner {
         // the 31-byte adv limit — see firmware ble_control.cpp:640-644).
         final mfg = r.advertisementData.manufacturerData[_lampMfgId];
         if (mfg == null || mfg.length < 6) continue;
+        // mfg payload: [baseR, baseG, baseB, shadeR, shadeG, shadeB]
         _ctrl.add(BleAdvertisement(
           id: r.device.remoteId.str,
           name: r.advertisementData.advName.isNotEmpty
@@ -62,6 +69,8 @@ class FbpBleScanner implements BleScanner {
           serviceUuids: r.advertisementData.serviceUuids
               .map((g) => g.str128.toLowerCase())
               .toList(),
+          baseRgb: (mfg[0] << 16) | (mfg[1] << 8) | mfg[2],
+          shadeRgb: (mfg[3] << 16) | (mfg[4] << 8) | mfg[5],
           rssi: r.rssi,
         ));
       }

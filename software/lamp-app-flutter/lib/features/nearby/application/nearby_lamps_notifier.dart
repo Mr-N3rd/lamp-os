@@ -35,6 +35,8 @@ class NearbyLampsNotifier extends _$NearbyLampsNotifier {
       name: ad.name,
       rssi: ad.rssi,
       serviceUuids: ad.serviceUuids,
+      baseRgb: ad.baseRgb,
+      shadeRgb: ad.shadeRgb,
       lastSeenEpochMs: now,
     );
     final next = [

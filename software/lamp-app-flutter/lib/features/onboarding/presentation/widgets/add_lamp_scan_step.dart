@@ -34,15 +34,15 @@ class _LampRow extends ConsumerWidget {
   final NearbyLamp lamp;
 
   Future<void> _onTap(BuildContext context, WidgetRef ref) async {
-    if (lamp.isConfigured) {
+    if (lamp.isFactoryDefault) {
+      await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
+    } else {
       final name = await _askAdoptName(context, lamp.name);
       if (name != null && name.isNotEmpty) {
         await ref
             .read(addLampNotifierProvider.notifier)
             .adopt(deviceId: lamp.id, name: name);
       }
-    } else {
-      await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
     }
   }
 
@@ -82,7 +82,7 @@ class _LampRow extends ConsumerWidget {
                 ],
               ),
             ),
-            _Pill(configured: lamp.isConfigured),
+            _Pill(factoryDefault: lamp.isFactoryDefault),
           ],
         ),
       ),
@@ -91,13 +91,13 @@ class _LampRow extends ConsumerWidget {
 }
 
 class _Pill extends StatelessWidget {
-  const _Pill({required this.configured});
-  final bool configured;
+  const _Pill({required this.factoryDefault});
+  final bool factoryDefault;
 
   @override
   Widget build(BuildContext context) {
     final base =
-        configured ? BrandColors.lumenGreen : BrandColors.amberGold;
+        factoryDefault ? BrandColors.amberGold : BrandColors.lumenGreen;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -105,7 +105,7 @@ class _Pill extends StatelessWidget {
         color: base.withValues(alpha: 0.18),
       ),
       child: Text(
-        configured ? 'adopt' : 'set up',
+        factoryDefault ? 'set up' : 'adopt',
         style: TextStyle(
           fontSize: 10,
           color: base,

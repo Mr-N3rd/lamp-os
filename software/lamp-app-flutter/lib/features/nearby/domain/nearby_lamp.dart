@@ -1,9 +1,13 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
-import '../../../core/ble/uuids.dart';
-
 part 'nearby_lamp.freezed.dart';
 part 'nearby_lamp.g.dart';
+
+/// Firmware defaults from config_types.hpp — used to detect a factory-state
+/// lamp from the BLE advertisement alone.
+const _defaultName = 'standard';
+const _defaultBaseRgb = 0x300783;
+const _defaultShadeRgb = 0x000000;
 
 @freezed
 abstract class NearbyLamp with _$NearbyLamp {
@@ -14,17 +18,21 @@ abstract class NearbyLamp with _$NearbyLamp {
     required String name,
     required int rssi,
     required List<String> serviceUuids,
+    required int baseRgb,
+    required int shadeRgb,
     required int lastSeenEpochMs,
   }) = _NearbyLamp;
 
   factory NearbyLamp.fromJson(Map<String, dynamic> json) =>
       _$NearbyLampFromJson(json);
 
-  bool get isConfigured => serviceUuids
-      .map((u) => u.toLowerCase())
-      .contains(BleUuids.controlService);
-
-  bool get isUnconfigured => !isConfigured && serviceUuids
-      .map((u) => u.toLowerCase())
-      .contains(BleUuids.setupService);
+  /// True when the advertisement still carries the firmware defaults
+  /// (name `standard`, base purple `0x300783`, shade off `0x000000`). The
+  /// AddLamp flow uses this to decide between the setup wizard (factory
+  /// default → user must claim it) and adopt (anything else → already
+  /// configured, just add to inventory).
+  bool get isFactoryDefault =>
+      name == _defaultName &&
+      baseRgb == _defaultBaseRgb &&
+      shadeRgb == _defaultShadeRgb;
 }
