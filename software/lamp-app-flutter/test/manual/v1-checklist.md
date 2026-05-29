@@ -34,3 +34,28 @@ Hardware verification for things automated tests can't cover. Walk through this 
 
 - [ ] Same lamp shows the same critter on every reconnect.
 - [ ] Different lamps show different critters (within the set of 4).
+
+## Phase 2.1 — Polish + persistence
+
+### Realtime preview
+
+- [ ] Open shade picker, drag the hue ring → lamp shade changes live while dragging (no need to tap Save).
+- [ ] Tap Cancel in the shade picker → lamp reverts to the previous shade.
+- [ ] Open base editor, tap a stop, drag in the color picker → that stop on the lamp updates live.
+- [ ] Cancel in the per-stop picker → that stop reverts on the lamp.
+- [ ] LampPreview critter under the brightness slider mirrors the picker in realtime — its shade matches the chosen shade color, its body shows the base gradient.
+
+### Base editor polish
+
+- [ ] Close (×) icon in the top-right of the Base editor sheet pops the sheet.
+- [ ] Sheet height looks proportional to its content (≈60% screen, not full).
+
+### App bar + Save
+
+- [ ] App bar shows the lamp's friendly name (e.g. `jacko`), not the BLE device id.
+- [ ] Save icon in the app bar is disabled when no edits have been made.
+- [ ] After any change (brightness, shade, base), Save becomes enabled.
+- [ ] Tap Save → screen shows ConnectingView for ~5-8s while the lamp fades out, reboots, and re-loads.
+- [ ] After Save completes, edits are reflected in the freshly loaded state and Save is back to disabled.
+- [ ] Power-cycle the lamp manually → all saved values persist (brightness, base colors, base active, shade).
+- [ ] Expressions / Setup tabs do NOT show the Save icon (Control-tab-only for now).

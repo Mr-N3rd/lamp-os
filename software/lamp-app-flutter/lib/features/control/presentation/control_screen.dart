@@ -8,6 +8,7 @@ import 'widgets/base_card.dart';
 import 'widgets/base_editor_sheet.dart';
 import 'widgets/brightness_card.dart';
 import 'widgets/connecting_view.dart';
+import 'widgets/lamp_preview.dart';
 import 'widgets/shade_card.dart';
 
 const _blackShade = LampColor(r: 0, g: 0, b: 0, w: 0);
@@ -33,6 +34,9 @@ class ControlScreen extends ConsumerWidget {
       ),
       data: (state) {
         final notifier = ref.read(controlNotifierProvider(lampId).notifier);
+        final shade = state.shade.colors.isEmpty
+            ? _blackShade
+            : state.shade.colors.single;
         return ListView(
           padding: const EdgeInsets.symmetric(vertical: 8),
           children: [
@@ -40,10 +44,17 @@ class ControlScreen extends ConsumerWidget {
               value: state.lamp.brightness,
               onChanged: notifier.setBrightness,
             ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Center(
+                child: LampPreview(
+                  shade: shade,
+                  baseColors: state.base.colors,
+                ),
+              ),
+            ),
             ShadeCard(
-              color: state.shade.colors.isEmpty
-                  ? _blackShade
-                  : state.shade.colors.single,
+              color: shade,
               onChanged: notifier.setShadeColor,
             ),
             BaseCard(
