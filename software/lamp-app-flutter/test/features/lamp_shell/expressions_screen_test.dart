@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
+import 'package:lamp_app/features/control/application/control_notifier.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/expressions_screen.dart';
@@ -99,5 +100,71 @@ void main() {
     await _pumpToData(tester, 'breathing');
     expect(find.text('breathing'), findsOneWidget);
     expect(find.text('glitchy'), findsOneWidget);
+  });
+
+  testWidgets('swipe-to-delete shows a confirm dialog; Cancel keeps the tile',
+      (tester) async {
+    final c = await _withState(
+        '[{"type":"breathing","enabled":true,"colors":[],'
+        '"intervalMin":10,"intervalMax":20,"target":1}]');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: ExpressionsScreen(lampId: _devId),
+      ),
+    ));
+    await _pumpToData(tester, 'breathing');
+
+    await tester.drag(find.text('breathing'), const Offset(-500, 0));
+    await tester.pump(); // open dialog
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('Delete the "breathing" expression?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // Tile is still there
+    expect(find.text('breathing'), findsOneWidget);
+  });
+
+  testWidgets('confirm delete removes the entry and surfaces an UNDO snackbar',
+      (tester) async {
+    final c = await _withState(
+        '[{"type":"breathing","enabled":true,"colors":[],'
+        '"intervalMin":10,"intervalMax":20,"target":1}]');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: ExpressionsScreen(lampId: _devId),
+      ),
+    ));
+    await _pumpToData(tester, 'breathing');
+
+    await tester.drag(find.text('breathing'), const Offset(-500, 0));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Delete'));
+    for (var i = 0; i < 30; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      if (find.text('UNDO').evaluate().isNotEmpty) break;
+    }
+
+    expect(find.text('breathing'), findsNothing);
+    expect(find.text('UNDO'), findsOneWidget);
+    expect(find.textContaining('Removed'), findsOneWidget);
+
+    // Notifier state is now empty — the delete actually landed.
+    expect(
+      c.read(controlNotifierProvider(_devId))
+          .value!.expressions.expressions,
+      isEmpty,
+    );
+
+    // The UNDO action's restore via notifier.upsertExpression is exercised
+    // directly by control_notifier_test.dart; here we only verify the
+    // snackbar plumbing.
   });
 }

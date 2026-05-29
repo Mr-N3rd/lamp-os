@@ -75,10 +75,26 @@ class ExpressionsScreen extends ConsumerWidget {
                     parameters: e.parameters,
                   ));
                 },
-                onDelete: () => notifier.removeExpression(
-                  type: e.type,
-                  target: e.target,
-                ),
+                onConfirmDelete: () =>
+                    _confirmDelete(context, e.type),
+                onDelete: () async {
+                  await notifier.removeExpression(
+                    type: e.type,
+                    target: e.target,
+                  );
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Removed "${e.type}"'),
+                      duration: const Duration(seconds: 4),
+                      action: SnackBarAction(
+                        label: 'UNDO',
+                        onPressed: () =>
+                            notifier.upsertExpression(e),
+                      ),
+                    ),
+                  );
+                },
               );
             },
           );
@@ -95,18 +111,48 @@ class ExpressionsScreen extends ConsumerWidget {
   }
 }
 
+/// Shows the confirmation dialog for deleting an expression. Returns `true`
+/// if the user confirmed the delete.
+Future<bool> _confirmDelete(BuildContext context, String type) async {
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(type.isEmpty
+          ? 'Delete this expression?'
+          : 'Delete the "$type" expression?'),
+      content: const Text(
+        'You can undo this from the snackbar that appears after deleting.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  return result ?? false;
+}
+
 class _ExpressionTile extends StatelessWidget {
   const _ExpressionTile({
     required this.lampId,
     required this.expression,
     required this.onToggle,
+    required this.onConfirmDelete,
     required this.onDelete,
   });
 
   final String lampId;
   final ExpressionConfig expression;
   final ValueChanged<bool> onToggle;
-  final VoidCallback onDelete;
+  final Future<bool> Function() onConfirmDelete;
+  final Future<void> Function() onDelete;
 
   String get _targetLabel => switch (expression.target) {
         1 => 'shade',
@@ -126,6 +172,7 @@ class _ExpressionTile extends StatelessWidget {
         color: Colors.redAccent.withValues(alpha: 0.3),
         child: const Icon(Icons.delete, color: Colors.redAccent),
       ),
+      confirmDismiss: (_) => onConfirmDelete(),
       onDismissed: (_) => onDelete(),
       child: InkWell(
         onTap: () => GoRouter.maybeOf(context)?.go(
