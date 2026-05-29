@@ -244,9 +244,21 @@ class _HomeFieldsState extends State<_HomeFields> {
             hintText: _hasExistingPassword
                 ? '(unchanged — type to replace)'
                 : null,
+            suffixIcon: _hasExistingPassword && _password.text.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.only(right: 8),
+                    child: Tooltip(
+                      message:
+                          'A password is set; leaving this blank keeps it.',
+                      child: Icon(Icons.lock,
+                          size: 16, color: BrandColors.lumenGreen),
+                    ),
+                  )
+                : null,
             border: const OutlineInputBorder(),
           ),
           onChanged: (v) {
+            setState(() {}); // refresh suffixIcon
             // Empty input → keep the sentinel; the save merge will strip it.
             widget.notifier.setHomePassword(v.isEmpty ? '********' : v);
           },
@@ -390,9 +402,23 @@ class _MqttFieldsState extends State<_MqttFields> {
                     widget.mqtt.password.isNotEmpty)
                 ? '(unchanged — type to replace)'
                 : null,
+            suffixIcon: (widget.mqtt.password == '********' ||
+                        widget.mqtt.password.isNotEmpty) &&
+                    _password.text.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.only(right: 8),
+                    child: Tooltip(
+                      message:
+                          'A password is set; leaving this blank keeps it.',
+                      child: Icon(Icons.lock,
+                          size: 16, color: BrandColors.lumenGreen),
+                    ),
+                  )
+                : null,
             border: const OutlineInputBorder(),
           ),
           onChanged: (v) {
+            setState(() {}); // refresh suffixIcon
             widget.notifier.setMqttPassword(v.isEmpty ? '********' : v);
           },
         ),

@@ -160,6 +160,13 @@ class ControlNotifier extends _$ControlNotifier {
   // ---------------------------------------------------------------------------
 
   /// True when the current state differs from the snapshot loaded at build().
+  ///
+  /// Note: `expressions` is intentionally NOT included. Expressions persist
+  /// independently of the settings-blob save flow — `upsertExpression` and
+  /// `removeExpression` write to `CHAR_EXPRESSION_OP` which the firmware
+  /// persists to NVS immediately. Adding expressions to isDirty would
+  /// double-fire Save semantics and surface a Save button on the expressions
+  /// tab where there's nothing left to save.
   bool get isDirty {
     final cur = state.value;
     if (cur == null) return false;
