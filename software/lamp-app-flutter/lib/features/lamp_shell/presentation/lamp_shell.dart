@@ -29,6 +29,14 @@ class _LampShellState extends ConsumerState<LampShell> {
 
   @override
   Widget build(BuildContext context) {
+    // Keep the control connection alive across tab switches. Without this
+    // watch, switching to Expressions or Setup unmounts ControlScreen, drops
+    // the only listener on controlNotifierProvider, and the provider
+    // auto-disposes (incl. ble.disconnect). LampShell unmounting (back to
+    // inventory, swap to another lamp) still cleans up because this watch
+    // is released with the shell.
+    ref.watch(controlNotifierProvider(widget.lampId));
+
     final body = switch (_tab) {
       LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsPlaceholder(lampId: widget.lampId),
