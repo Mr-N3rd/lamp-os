@@ -1,0 +1,21 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lamp_app/features/lamp_shell/presentation/lamp_shell.dart';
+
+void main() {
+  testWidgets('renders Control by default, switches to Expressions on tap',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: LampShell(lampId: 'lamp-1', initialTab: LampTab.control),
+    ));
+    expect(find.text('Control · lamp-1'), findsOneWidget);
+
+    await tester.tap(find.text('Expressions'));
+    await tester.pumpAndSettle();
+    expect(find.text('Expressions · lamp-1'), findsOneWidget);
+
+    await tester.tap(find.text('Setup'));
+    await tester.pumpAndSettle();
+    expect(find.text('Setup · lamp-1'), findsOneWidget);
+  });
+}
