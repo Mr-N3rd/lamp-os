@@ -7,7 +7,6 @@ void main() {
     expect(s.step, AddLampStep.scan);
     expect(s.deviceId, '');
     expect(s.name, '');
-    expect(s.ssid, '');
     expect(s.password, '');
     expect(s.status, AddLampStatus.idle);
   });

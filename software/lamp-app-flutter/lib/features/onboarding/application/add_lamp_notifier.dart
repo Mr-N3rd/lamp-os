@@ -24,14 +24,13 @@ class AddLampNotifier extends _$AddLampNotifier {
   }
 
   void setName(String n) => state = state.copyWith(name: n);
-  void setSsid(String s) => state = state.copyWith(ssid: s);
   void setPassword(String p) => state = state.copyWith(password: p);
 
   void next() {
     state = state.copyWith(step: switch (state.step) {
       AddLampStep.scan => AddLampStep.name,
-      AddLampStep.name => AddLampStep.wifi,
-      AddLampStep.wifi => AddLampStep.done,
+      AddLampStep.name => AddLampStep.password,
+      AddLampStep.password => AddLampStep.done,
       AddLampStep.done => AddLampStep.done,
     });
   }
@@ -40,8 +39,8 @@ class AddLampNotifier extends _$AddLampNotifier {
     state = state.copyWith(step: switch (state.step) {
       AddLampStep.scan => AddLampStep.scan,
       AddLampStep.name => AddLampStep.scan,
-      AddLampStep.wifi => AddLampStep.name,
-      AddLampStep.done => AddLampStep.wifi,
+      AddLampStep.password => AddLampStep.name,
+      AddLampStep.done => AddLampStep.password,
     });
   }
 
@@ -52,7 +51,6 @@ class AddLampNotifier extends _$AddLampNotifier {
       await SetupClient(ble: ble).claim(
         deviceId: state.deviceId,
         name: state.name,
-        ssid: state.ssid,
         password: state.password,
       );
       await ref.read(inventoryNotifierProvider.notifier).add(

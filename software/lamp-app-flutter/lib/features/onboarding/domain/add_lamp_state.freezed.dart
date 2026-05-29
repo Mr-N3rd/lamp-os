@@ -15,7 +15,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$AddLampState {
 
- AddLampStep get step; String get deviceId; String get name; String get ssid; String get password; AddLampStatus get status; String? get errorMessage;
+ AddLampStep get step; String get deviceId; String get name; String get password; AddLampStatus get status; String? get errorMessage;
 /// Create a copy of AddLampState
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -28,16 +28,16 @@ $AddLampStateCopyWith<AddLampState> get copyWith => _$AddLampStateCopyWithImpl<A
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is AddLampState&&(identical(other.step, step) || other.step == step)&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.name, name) || other.name == name)&&(identical(other.ssid, ssid) || other.ssid == ssid)&&(identical(other.password, password) || other.password == password)&&(identical(other.status, status) || other.status == status)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AddLampState&&(identical(other.step, step) || other.step == step)&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.name, name) || other.name == name)&&(identical(other.password, password) || other.password == password)&&(identical(other.status, status) || other.status == status)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,step,deviceId,name,ssid,password,status,errorMessage);
+int get hashCode => Object.hash(runtimeType,step,deviceId,name,password,status,errorMessage);
 
 @override
 String toString() {
-  return 'AddLampState(step: $step, deviceId: $deviceId, name: $name, ssid: $ssid, password: $password, status: $status, errorMessage: $errorMessage)';
+  return 'AddLampState(step: $step, deviceId: $deviceId, name: $name, password: $password, status: $status, errorMessage: $errorMessage)';
 }
 
 
@@ -48,7 +48,7 @@ abstract mixin class $AddLampStateCopyWith<$Res>  {
   factory $AddLampStateCopyWith(AddLampState value, $Res Function(AddLampState) _then) = _$AddLampStateCopyWithImpl;
 @useResult
 $Res call({
- AddLampStep step, String deviceId, String name, String ssid, String password, AddLampStatus status, String? errorMessage
+ AddLampStep step, String deviceId, String name, String password, AddLampStatus status, String? errorMessage
 });
 
 
@@ -65,12 +65,11 @@ class _$AddLampStateCopyWithImpl<$Res>
 
 /// Create a copy of AddLampState
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? step = null,Object? deviceId = null,Object? name = null,Object? ssid = null,Object? password = null,Object? status = null,Object? errorMessage = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? step = null,Object? deviceId = null,Object? name = null,Object? password = null,Object? status = null,Object? errorMessage = freezed,}) {
   return _then(_self.copyWith(
 step: null == step ? _self.step : step // ignore: cast_nullable_to_non_nullable
 as AddLampStep,deviceId: null == deviceId ? _self.deviceId : deviceId // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
-as String,ssid: null == ssid ? _self.ssid : ssid // ignore: cast_nullable_to_non_nullable
 as String,password: null == password ? _self.password : password // ignore: cast_nullable_to_non_nullable
 as String,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
 as AddLampStatus,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
@@ -159,10 +158,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AddLampStep step,  String deviceId,  String name,  String ssid,  String password,  AddLampStatus status,  String? errorMessage)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AddLampStep step,  String deviceId,  String name,  String password,  AddLampStatus status,  String? errorMessage)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _AddLampState() when $default != null:
-return $default(_that.step,_that.deviceId,_that.name,_that.ssid,_that.password,_that.status,_that.errorMessage);case _:
+return $default(_that.step,_that.deviceId,_that.name,_that.password,_that.status,_that.errorMessage);case _:
   return orElse();
 
 }
@@ -180,10 +179,10 @@ return $default(_that.step,_that.deviceId,_that.name,_that.ssid,_that.password,_
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AddLampStep step,  String deviceId,  String name,  String ssid,  String password,  AddLampStatus status,  String? errorMessage)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AddLampStep step,  String deviceId,  String name,  String password,  AddLampStatus status,  String? errorMessage)  $default,) {final _that = this;
 switch (_that) {
 case _AddLampState():
-return $default(_that.step,_that.deviceId,_that.name,_that.ssid,_that.password,_that.status,_that.errorMessage);case _:
+return $default(_that.step,_that.deviceId,_that.name,_that.password,_that.status,_that.errorMessage);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -200,10 +199,10 @@ return $default(_that.step,_that.deviceId,_that.name,_that.ssid,_that.password,_
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AddLampStep step,  String deviceId,  String name,  String ssid,  String password,  AddLampStatus status,  String? errorMessage)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AddLampStep step,  String deviceId,  String name,  String password,  AddLampStatus status,  String? errorMessage)?  $default,) {final _that = this;
 switch (_that) {
 case _AddLampState() when $default != null:
-return $default(_that.step,_that.deviceId,_that.name,_that.ssid,_that.password,_that.status,_that.errorMessage);case _:
+return $default(_that.step,_that.deviceId,_that.name,_that.password,_that.status,_that.errorMessage);case _:
   return null;
 
 }
@@ -215,13 +214,12 @@ return $default(_that.step,_that.deviceId,_that.name,_that.ssid,_that.password,_
 @JsonSerializable()
 
 class _AddLampState implements AddLampState {
-  const _AddLampState({this.step = AddLampStep.scan, this.deviceId = '', this.name = '', this.ssid = '', this.password = '', this.status = AddLampStatus.idle, this.errorMessage});
+  const _AddLampState({this.step = AddLampStep.scan, this.deviceId = '', this.name = '', this.password = '', this.status = AddLampStatus.idle, this.errorMessage});
   factory _AddLampState.fromJson(Map<String, dynamic> json) => _$AddLampStateFromJson(json);
 
 @override@JsonKey() final  AddLampStep step;
 @override@JsonKey() final  String deviceId;
 @override@JsonKey() final  String name;
-@override@JsonKey() final  String ssid;
 @override@JsonKey() final  String password;
 @override@JsonKey() final  AddLampStatus status;
 @override final  String? errorMessage;
@@ -239,16 +237,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AddLampState&&(identical(other.step, step) || other.step == step)&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.name, name) || other.name == name)&&(identical(other.ssid, ssid) || other.ssid == ssid)&&(identical(other.password, password) || other.password == password)&&(identical(other.status, status) || other.status == status)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AddLampState&&(identical(other.step, step) || other.step == step)&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.name, name) || other.name == name)&&(identical(other.password, password) || other.password == password)&&(identical(other.status, status) || other.status == status)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,step,deviceId,name,ssid,password,status,errorMessage);
+int get hashCode => Object.hash(runtimeType,step,deviceId,name,password,status,errorMessage);
 
 @override
 String toString() {
-  return 'AddLampState(step: $step, deviceId: $deviceId, name: $name, ssid: $ssid, password: $password, status: $status, errorMessage: $errorMessage)';
+  return 'AddLampState(step: $step, deviceId: $deviceId, name: $name, password: $password, status: $status, errorMessage: $errorMessage)';
 }
 
 
@@ -259,7 +257,7 @@ abstract mixin class _$AddLampStateCopyWith<$Res> implements $AddLampStateCopyWi
   factory _$AddLampStateCopyWith(_AddLampState value, $Res Function(_AddLampState) _then) = __$AddLampStateCopyWithImpl;
 @override @useResult
 $Res call({
- AddLampStep step, String deviceId, String name, String ssid, String password, AddLampStatus status, String? errorMessage
+ AddLampStep step, String deviceId, String name, String password, AddLampStatus status, String? errorMessage
 });
 
 
@@ -276,12 +274,11 @@ class __$AddLampStateCopyWithImpl<$Res>
 
 /// Create a copy of AddLampState
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? step = null,Object? deviceId = null,Object? name = null,Object? ssid = null,Object? password = null,Object? status = null,Object? errorMessage = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? step = null,Object? deviceId = null,Object? name = null,Object? password = null,Object? status = null,Object? errorMessage = freezed,}) {
   return _then(_AddLampState(
 step: null == step ? _self.step : step // ignore: cast_nullable_to_non_nullable
 as AddLampStep,deviceId: null == deviceId ? _self.deviceId : deviceId // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
-as String,ssid: null == ssid ? _self.ssid : ssid // ignore: cast_nullable_to_non_nullable
 as String,password: null == password ? _self.password : password // ignore: cast_nullable_to_non_nullable
 as String,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
 as AddLampStatus,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable

@@ -6,8 +6,8 @@ import '../application/add_lamp_notifier.dart';
 import '../domain/add_lamp_state.dart';
 import 'widgets/add_lamp_done_step.dart';
 import 'widgets/add_lamp_name_step.dart';
+import 'widgets/add_lamp_password_step.dart';
 import 'widgets/add_lamp_scan_step.dart';
-import 'widgets/add_lamp_wifi_step.dart';
 
 class AddLampShell extends ConsumerWidget {
   const AddLampShell({super.key});
@@ -18,7 +18,7 @@ class AddLampShell extends ConsumerWidget {
     final body = switch (step) {
       AddLampStep.scan => const AddLampScanStep(),
       AddLampStep.name => const AddLampNameStep(),
-      AddLampStep.wifi => const AddLampWifiStep(),
+      AddLampStep.password => const AddLampPasswordStep(),
       AddLampStep.done => const AddLampDoneStep(),
     };
     return Scaffold(

@@ -13,7 +13,6 @@ _AddLampState _$AddLampStateFromJson(Map<String, dynamic> json) =>
           AddLampStep.scan,
       deviceId: json['deviceId'] as String? ?? '',
       name: json['name'] as String? ?? '',
-      ssid: json['ssid'] as String? ?? '',
       password: json['password'] as String? ?? '',
       status:
           $enumDecodeNullable(_$AddLampStatusEnumMap, json['status']) ??
@@ -26,7 +25,6 @@ Map<String, dynamic> _$AddLampStateToJson(_AddLampState instance) =>
       'step': _$AddLampStepEnumMap[instance.step]!,
       'deviceId': instance.deviceId,
       'name': instance.name,
-      'ssid': instance.ssid,
       'password': instance.password,
       'status': _$AddLampStatusEnumMap[instance.status]!,
       'errorMessage': instance.errorMessage,
@@ -35,7 +33,7 @@ Map<String, dynamic> _$AddLampStateToJson(_AddLampState instance) =>
 const _$AddLampStepEnumMap = {
   AddLampStep.scan: 'scan',
   AddLampStep.name: 'name',
-  AddLampStep.wifi: 'wifi',
+  AddLampStep.password: 'password',
   AddLampStep.done: 'done',
 };
 

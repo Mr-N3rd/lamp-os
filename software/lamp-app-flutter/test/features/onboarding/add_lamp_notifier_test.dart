@@ -23,7 +23,7 @@ void main() {
     expect(s.step, AddLampStep.name);
   });
 
-  test('setName, setSsid, setPassword update fields', () {
+  test('setName and setPassword update fields', () {
     final ble = InMemoryBleClient();
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
@@ -31,11 +31,9 @@ void main() {
     addTearDown(c.dispose);
     final n = c.read(addLampNotifierProvider.notifier);
     n.setName('jacko');
-    n.setSsid('home');
     n.setPassword('secret');
     final s = c.read(addLampNotifierProvider);
     expect(s.name, 'jacko');
-    expect(s.ssid, 'home');
     expect(s.password, 'secret');
   });
 
@@ -52,7 +50,6 @@ void main() {
     final n = c.read(addLampNotifierProvider.notifier);
     await n.select('dev1');
     n.setName('jacko');
-    n.setSsid('home');
     n.setPassword('secret');
     await n.submit();
 
