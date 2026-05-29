@@ -158,7 +158,9 @@ class ControlNotifier extends _$ControlNotifier {
     if (cur == null) return false;
     return _isLampDirty(cur.lamp, _original.lamp) ||
         _isBaseDirty(cur.base, _original.base) ||
-        _isShadeDirty(cur.shade, _original.shade);
+        _isShadeDirty(cur.shade, _original.shade) ||
+        _isHomeDirty(cur.home, _original.home) ||
+        _isMqttDirty(cur.mqtt, _original.mqtt);
   }
 
   bool _isLampDirty(LampSection a, LampSection b) =>
@@ -167,15 +169,39 @@ class ControlNotifier extends _$ControlNotifier {
       a.advancedEnabled != b.advancedEnabled;
 
   bool _isBaseDirty(BaseSection a, BaseSection b) =>
-      a.ac != b.ac || !_colorsEqual(a.colors, b.colors);
+      a.ac != b.ac ||
+      a.bpp != b.bpp ||
+      !_colorsEqual(a.colors, b.colors) ||
+      !_knockoutEqual(a.knockout, b.knockout);
 
   bool _isShadeDirty(ShadeSection a, ShadeSection b) =>
-      !_colorsEqual(a.colors, b.colors);
+      a.bpp != b.bpp || !_colorsEqual(a.colors, b.colors);
+
+  bool _isHomeDirty(HomeSection a, HomeSection b) =>
+      a.ssid != b.ssid ||
+      a.password != b.password ||
+      a.brightness != b.brightness;
+
+  bool _isMqttDirty(MqttSection a, MqttSection b) =>
+      a.enabled != b.enabled ||
+      a.brokerHost != b.brokerHost ||
+      a.brokerPort != b.brokerPort ||
+      a.username != b.username ||
+      a.password != b.password ||
+      a.topicPrefix != b.topicPrefix;
 
   bool _colorsEqual(List<LampColor> a, List<LampColor> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  bool _knockoutEqual(Map<int, int> a, Map<int, int> b) {
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      if (b[e.key] != e.value) return false;
     }
     return true;
   }
@@ -205,11 +231,14 @@ class ControlNotifier extends _$ControlNotifier {
     final lampNode =
         (blob['lamp'] as Map<String, dynamic>?) ?? <String, dynamic>{};
     lampNode['brightness'] = cur.lamp.brightness;
+    lampNode['name'] = cur.lamp.name;
+    lampNode['advancedEnabled'] = cur.lamp.advancedEnabled;
     blob['lamp'] = lampNode;
 
     final baseNode =
         (blob['base'] as Map<String, dynamic>?) ?? <String, dynamic>{};
     baseNode['ac'] = cur.base.ac;
+    baseNode['bpp'] = cur.base.bpp;
     baseNode['colors'] = cur.base.colors.map((c) => c.toHex()).toList();
     baseNode['knockout'] = [
       for (final e in cur.base.knockout.entries) {'p': e.key, 'b': e.value},
@@ -218,8 +247,37 @@ class ControlNotifier extends _$ControlNotifier {
 
     final shadeNode =
         (blob['shade'] as Map<String, dynamic>?) ?? <String, dynamic>{};
+    shadeNode['bpp'] = cur.shade.bpp;
     shadeNode['colors'] = cur.shade.colors.map((c) => c.toHex()).toList();
     blob['shade'] = shadeNode;
+
+    final homeModeNode =
+        (blob['homeMode'] as Map<String, dynamic>?) ?? <String, dynamic>{};
+    homeModeNode['ssid'] = cur.home.ssid;
+    homeModeNode['brightness'] = cur.home.brightness;
+    // Only include password if the user actually typed a new one (i.e. it's
+    // not the firmware's read-time mask sentinel).
+    if (cur.home.password != '********' && cur.home.password.isNotEmpty) {
+      homeModeNode['password'] = cur.home.password;
+    } else {
+      // Strip the field so the firmware keeps the existing value.
+      homeModeNode.remove('password');
+    }
+    blob['homeMode'] = homeModeNode;
+
+    final mqttNode =
+        (blob['mqtt'] as Map<String, dynamic>?) ?? <String, dynamic>{};
+    mqttNode['enabled'] = cur.mqtt.enabled;
+    mqttNode['brokerHost'] = cur.mqtt.brokerHost;
+    mqttNode['brokerPort'] = cur.mqtt.brokerPort;
+    mqttNode['username'] = cur.mqtt.username;
+    mqttNode['topicPrefix'] = cur.mqtt.topicPrefix;
+    if (cur.mqtt.password != '********' && cur.mqtt.password.isNotEmpty) {
+      mqttNode['password'] = cur.mqtt.password;
+    } else {
+      mqttNode.remove('password');
+    }
+    blob['mqtt'] = mqttNode;
 
     // 3. Write the merged blob. The firmware will fade out + reboot.
     final payload =
@@ -353,6 +411,189 @@ class ControlNotifier extends _$ControlNotifier {
     } catch (_) {
       // intentionally dropped (same contract as the other live-preview writes)
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Setup-screen mutators (state-only; ride the global Save via settingsBlob)
+  // ---------------------------------------------------------------------------
+
+  Future<void> setLampName(String name) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      lamp: LampSection(
+        name: name,
+        brightness: cur.lamp.brightness,
+        advancedEnabled: cur.lamp.advancedEnabled,
+      ),
+    ));
+  }
+
+  Future<void> setLampAdvancedEnabled(bool v) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      lamp: LampSection(
+        name: cur.lamp.name,
+        brightness: cur.lamp.brightness,
+        advancedEnabled: v,
+      ),
+    ));
+  }
+
+  Future<void> setHomeSsid(String ssid) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      home: HomeSection(
+        ssid: ssid,
+        password: cur.home.password,
+        brightness: cur.home.brightness,
+      ),
+    ));
+  }
+
+  Future<void> setHomePassword(String password) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      home: HomeSection(
+        ssid: cur.home.ssid,
+        password: password,
+        brightness: cur.home.brightness,
+      ),
+    ));
+  }
+
+  Future<void> setHomeBrightness(int brightness) async {
+    final cur = state.value;
+    if (cur == null) return;
+    final clamped = brightness.clamp(0, 100);
+    state = AsyncData(cur.copyWith(
+      home: HomeSection(
+        ssid: cur.home.ssid,
+        password: cur.home.password,
+        brightness: clamped,
+      ),
+    ));
+  }
+
+  Future<void> setMqttEnabled(bool v) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      mqtt: MqttSection(
+        enabled: v,
+        brokerHost: cur.mqtt.brokerHost,
+        brokerPort: cur.mqtt.brokerPort,
+        username: cur.mqtt.username,
+        password: cur.mqtt.password,
+        topicPrefix: cur.mqtt.topicPrefix,
+      ),
+    ));
+  }
+
+  Future<void> setMqttBrokerHost(String host) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      mqtt: MqttSection(
+        enabled: cur.mqtt.enabled,
+        brokerHost: host,
+        brokerPort: cur.mqtt.brokerPort,
+        username: cur.mqtt.username,
+        password: cur.mqtt.password,
+        topicPrefix: cur.mqtt.topicPrefix,
+      ),
+    ));
+  }
+
+  Future<void> setMqttBrokerPort(int port) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      mqtt: MqttSection(
+        enabled: cur.mqtt.enabled,
+        brokerHost: cur.mqtt.brokerHost,
+        brokerPort: port,
+        username: cur.mqtt.username,
+        password: cur.mqtt.password,
+        topicPrefix: cur.mqtt.topicPrefix,
+      ),
+    ));
+  }
+
+  Future<void> setMqttUsername(String username) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      mqtt: MqttSection(
+        enabled: cur.mqtt.enabled,
+        brokerHost: cur.mqtt.brokerHost,
+        brokerPort: cur.mqtt.brokerPort,
+        username: username,
+        password: cur.mqtt.password,
+        topicPrefix: cur.mqtt.topicPrefix,
+      ),
+    ));
+  }
+
+  Future<void> setMqttPassword(String password) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      mqtt: MqttSection(
+        enabled: cur.mqtt.enabled,
+        brokerHost: cur.mqtt.brokerHost,
+        brokerPort: cur.mqtt.brokerPort,
+        username: cur.mqtt.username,
+        password: password,
+        topicPrefix: cur.mqtt.topicPrefix,
+      ),
+    ));
+  }
+
+  Future<void> setMqttTopicPrefix(String topicPrefix) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      mqtt: MqttSection(
+        enabled: cur.mqtt.enabled,
+        brokerHost: cur.mqtt.brokerHost,
+        brokerPort: cur.mqtt.brokerPort,
+        username: cur.mqtt.username,
+        password: cur.mqtt.password,
+        topicPrefix: topicPrefix,
+      ),
+    ));
+  }
+
+  Future<void> setBaseBpp(int bpp) async {
+    final cur = state.value;
+    if (cur == null) return;
+    final clamped = (bpp == 3 || bpp == 4) ? bpp : 4;
+    state = AsyncData(cur.copyWith(
+      base: BaseSection(
+        px: cur.base.px,
+        ac: cur.base.ac,
+        bpp: clamped,
+        colors: cur.base.colors,
+        knockout: cur.base.knockout,
+      ),
+    ));
+  }
+
+  Future<void> setShadeBpp(int bpp) async {
+    final cur = state.value;
+    if (cur == null) return;
+    final clamped = (bpp == 3 || bpp == 4) ? bpp : 4;
+    state = AsyncData(cur.copyWith(
+      shade: ShadeSection(
+        px: cur.shade.px,
+        bpp: clamped,
+        colors: cur.shade.colors,
+      ),
+    ));
   }
 
   Uint8List _encodeColors(List<LampColor> colors) {

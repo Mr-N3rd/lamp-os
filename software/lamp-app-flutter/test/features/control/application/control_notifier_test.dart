@@ -539,6 +539,115 @@ void main() {
     expect(state.mqtt.brokerPort, 1883);
   });
 
+  test('setLampName flips isDirty and lands in the blob on save', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    await ble.connect(_devId);
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
+          '"base":{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"]},'
+          '"shade":{"px":38,"bpp":4,"colors":["#000000FF"]},'
+          '"homeMode":{"ssid":"","brightness":60},'
+          '"mqtt":{"enabled":false,"brokerHost":"","brokerPort":1883}}',
+        )));
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    expect(n.isDirty, isFalse);
+
+    await n.setLampName('foyer');
+    expect(n.isDirty, isTrue);
+
+    await n.save();
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect((parsed['lamp'] as Map)['name'], 'foyer');
+  });
+
+  test('home + mqtt mutators flip isDirty', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    expect(n.isDirty, isFalse);
+
+    await n.setHomeSsid('WiFi');
+    expect(n.isDirty, isTrue);
+  });
+
+  test('save() omits home password when it is still the firmware sentinel',
+      () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    await ble.connect(_devId);
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
+          '"base":{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"]},'
+          '"shade":{"px":38,"bpp":4,"colors":["#000000FF"]},'
+          '"homeMode":{"ssid":"WiFi","password":"********","brightness":60},'
+          '"mqtt":{"enabled":false,"brokerHost":"","brokerPort":1883}}',
+        )));
+    // Seed home section so build() loads ssid/password
+    await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
+        Uint8List.fromList(utf8.encode(
+          '{"ssid":"WiFi","password":"********","brightness":60}',
+        )));
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.setHomeBrightness(80); // touch something other than password
+    await n.save();
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    final homeNode = parsed['homeMode'] as Map<String, dynamic>;
+    expect(homeNode['ssid'], 'WiFi');
+    expect(homeNode['brightness'], 80);
+    expect(homeNode.containsKey('password'), isFalse); // sentinel was stripped
+  });
+
   test('save() is a no-op while disconnected', () async {
     final ble = InMemoryBleClient();
     await _seed(ble);
