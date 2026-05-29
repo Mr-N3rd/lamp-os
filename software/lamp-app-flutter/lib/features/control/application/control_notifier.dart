@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../../core/ble/ble_client.dart';
 import '../../../core/ble/ble_client_provider.dart';
 import '../../../core/ble/uuids.dart';
 import '../../../core/ble/write_coalescer.dart';
@@ -22,6 +23,10 @@ class ControlNotifier extends _$ControlNotifier {
   late final WriteCoalescer _brightnessWriter;
   late final WriteCoalescer _shadeColorsWriter;
   late final WriteCoalescer _baseColorsWriter;
+
+  // Per-pixel knockout debounce: keyed by pixel index.
+  final Map<int, Timer?> _knockoutTimers = {};
+  final Map<int, int> _knockoutPending = {};
 
   StreamSubscription<bool>? _connSub;
   Timer? _reconnectTimer;
@@ -107,6 +112,11 @@ class ControlNotifier extends _$ControlNotifier {
       _brightnessWriter.dispose();
       _shadeColorsWriter.dispose();
       _baseColorsWriter.dispose();
+      for (final t in _knockoutTimers.values) {
+        t?.cancel();
+      }
+      _knockoutTimers.clear();
+      _knockoutPending.clear();
       // disconnect is handled by the earlier onDispose registered right after
       // connect(), ensuring it always runs even if build() throws mid-way.
     });
@@ -197,6 +207,9 @@ class ControlNotifier extends _$ControlNotifier {
         (blob['base'] as Map<String, dynamic>?) ?? <String, dynamic>{};
     baseNode['ac'] = cur.base.ac;
     baseNode['colors'] = cur.base.colors.map((c) => c.toHex()).toList();
+    baseNode['knockout'] = [
+      for (final e in cur.base.knockout.entries) {'p': e.key, 'b': e.value},
+    ];
     blob['base'] = baseNode;
 
     final shadeNode =
@@ -289,6 +302,53 @@ class ControlNotifier extends _$ControlNotifier {
     // ac is part of the base settings blob, not its own characteristic; the
     // firmware picks it up on the next CHAR_SETTINGS_BLOB save (Phase 5's
     // Setup screen). Updating locally is enough for the visible session.
+  }
+
+  Future<void> setKnockoutPixel(int index, int brightness) async {
+    final cur = state.value;
+    if (cur == null) return;
+    final clamped = brightness.clamp(0, 100);
+    final next = Map<int, int>.from(cur.base.knockout);
+    if (clamped == 100) {
+      next.remove(index); // default — drop the entry to keep the map small
+    } else {
+      next[index] = clamped;
+    }
+    state = AsyncData(cur.copyWith(
+      base: BaseSection(
+        px: cur.base.px,
+        ac: cur.base.ac,
+        bpp: cur.base.bpp,
+        colors: cur.base.colors,
+        knockout: next,
+      ),
+    ));
+    _scheduleKnockoutWrite(index, clamped);
+  }
+
+  void _scheduleKnockoutWrite(int index, int brightness) {
+    _knockoutPending[index] = brightness;
+    _knockoutTimers[index]?.cancel();
+    _knockoutTimers[index] = Timer(const Duration(milliseconds: 30), () {
+      final v = _knockoutPending.remove(index);
+      if (v == null) return;
+      final ble = ref.read(bleClientProvider);
+      unawaited(_safeWriteKnockout(ble, index, v));
+    });
+  }
+
+  Future<void> _safeWriteKnockout(
+      BleClient ble, int index, int brightness) async {
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.baseKnockout,
+        Uint8List.fromList([index, brightness]),
+      );
+    } catch (_) {
+      // intentionally dropped (same contract as the other live-preview writes)
+    }
   }
 
   Uint8List _encodeColors(List<LampColor> colors) {

@@ -393,6 +393,124 @@ void main() {
     expect(lamp.lastBaseColor, [0x11, 0x22, 0x33]);
   });
 
+  test('setKnockoutPixel adds the entry to local state', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    await c.read(controlNotifierProvider(_devId).notifier)
+        .setKnockoutPixel(3, 50);
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.base.knockout,
+      {3: 50},
+    );
+  });
+
+  test('setKnockoutPixel removes the entry when brightness is 100', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.setKnockoutPixel(3, 50);
+    await n.setKnockoutPixel(3, 100);
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.base.knockout,
+      isEmpty,
+    );
+  });
+
+  test('setKnockoutPixel writes [index, brightness] after debounce', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+    // Hold a subscription so the auto-dispose timer doesn't fire.
+    final sub = c.listen(controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
+
+    await c.read(controlNotifierProvider(_devId).notifier)
+        .setKnockoutPixel(3, 50);
+    // Drain the 30 ms debounce window.
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.baseKnockout);
+    expect(written, [3, 50]);
+  });
+
+  test('save() encodes knockout map into the settings blob', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    await ble.connect(_devId);
+    // Seed the blob shape — note absence of knockout in the blob; we want
+    // save() to inject it from local state.
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
+          '"base":{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"]},'
+          '"shade":{"px":38,"bpp":4,"colors":["#000000FF"]}}',
+        )));
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.setKnockoutPixel(3, 50);
+    await n.save();
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    final knockout = (parsed['base'] as Map)['knockout'] as List;
+    expect(knockout, [{'p': 3, 'b': 50}]);
+  });
+
   test('save() is a no-op while disconnected', () async {
     final ble = InMemoryBleClient();
     await _seed(ble);
