@@ -41,7 +41,7 @@ final class AddLampNotifierProvider
   }
 }
 
-String _$addLampNotifierHash() => r'444fa88e20fefbcce17dfdb08879b8fb03bf18a3';
+String _$addLampNotifierHash() => r'57bacb9a0eaf8df5c8be2200903408620e4f027b';
 
 abstract class _$AddLampNotifier extends $Notifier<AddLampState> {
   AddLampState build();

@@ -15,7 +15,7 @@ void main() {
   });
 
   test('toHex round-trips exactly, upper-case, with #', () {
-    final c = const LampColor(r: 0x30, g: 0x07, b: 0x83, w: 0xFF);
+    const c = LampColor(r: 0x30, g: 0x07, b: 0x83, w: 0xFF);
     expect(c.toHex(), '#300783FF');
   });
 
@@ -24,7 +24,7 @@ void main() {
   });
 
   test('withRgb keeps the W byte', () {
-    final c = const LampColor(r: 0x10, g: 0x20, b: 0x30, w: 0xAA);
+    const c = LampColor(r: 0x10, g: 0x20, b: 0x30, w: 0xAA);
     final next = c.withRgb(r: 0xFF, g: 0xFF, b: 0xFF);
     expect(next.w, 0xAA);
     expect(next.r, 0xFF);

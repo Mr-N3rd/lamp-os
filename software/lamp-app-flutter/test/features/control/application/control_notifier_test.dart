@@ -7,7 +7,6 @@ import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/control/application/control_notifier.dart';
-import 'package:lamp_app/features/control/domain/lamp_color.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -81,7 +80,7 @@ void main() {
 
     // Keep a listener alive so the auto-dispose provider doesn't disconnect
     // BLE before the debounce timer fires.
-    final sub = c.listen(controlNotifierProvider(_devId), (_, __) {});
+    final sub = c.listen(controlNotifierProvider(_devId), (_, _) {});
     addTearDown(sub.close);
 
     await c
