@@ -222,4 +222,141 @@ void main() {
         _devId, BleUuids.controlService, BleUuids.brightness);
     expect(written.single, 80);
   });
+
+  test('disconnect surfaces in state and schedules reconnect', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    // Keep a listener alive so the auto-dispose provider doesn't tear down.
+    final sub = c.listen(controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
+
+    await ble.disconnect(_devId);
+    // The watchConnected stream uses an async* generator; the false emission
+    // needs a couple of microtask hops to reach the listener.
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    final s = c.read(controlNotifierProvider(_devId)).value!;
+    expect(s.connected, isFalse);
+    expect(s.reconnectAttempt, 1);
+  });
+
+  test(
+      'local edits survive a disconnect/reconnect cycle and the lamp catches up',
+      () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+    final sub = c.listen(controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
+
+    // User edit locally.
+    await c
+        .read(controlNotifierProvider(_devId).notifier)
+        .setBrightness(80);
+    // Let the debounce coalescer fire so the BLE write lands before disconnect.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    // Link drops.
+    await ble.disconnect(_devId);
+    // Allow the async* watchConnected generator to propagate the false event.
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    // Local state should still hold 80.
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.lamp.brightness,
+      80,
+    );
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.connected,
+      isFalse,
+    );
+
+    // Simulate the lamp coming back up — connecting triggers watchConnected
+    // which fires _onConnectionChange(true) → _pushLocalState.
+    await ble.connect(_devId);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.lamp.brightness,
+      80,
+    );
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.connected,
+      isTrue,
+    );
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.brightness);
+    expect(written.single, 80); // catch-up push landed
+  });
+
+  test('save() is a no-op while disconnected', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+
+    // Seed the settings blob so save() would otherwise have something to read.
+    await ble.connect(_devId);
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"brightness":42},"base":{"colors":[]},"shade":{"colors":[]}}',
+        )));
+    // Snapshot the blob value BEFORE we proceed (values persist in
+    // InMemoryBleClient across disconnect cycles, but read() requires a live
+    // connection; take the snapshot now while still connected).
+    final before = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+    final sub = c.listen(controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
+
+    // Force disconnect so state.connected becomes false.
+    await ble.disconnect(_devId);
+    // Allow the async* watchConnected generator to propagate the false event.
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    // save() should be a no-op.
+    await c.read(controlNotifierProvider(_devId).notifier).save();
+
+    // Reconnect to snapshot the current settingsBlob value.
+    await ble.connect(_devId);
+    final after = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    expect(after, before); // save was a no-op
+  });
 }

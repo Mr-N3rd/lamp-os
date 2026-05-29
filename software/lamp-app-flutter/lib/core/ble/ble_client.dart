@@ -116,11 +116,22 @@ class InMemoryBleClient implements BleClient {
   }
 
   @override
-  Stream<bool> watchConnected(String deviceId) async* {
+  Stream<bool> watchConnected(String deviceId) {
     final ctrl = _ensureConnStream(deviceId);
+    // Subscribe to the broadcast stream BEFORE emitting the initial value so
+    // that no events are dropped between the seed yield and yield*. Using a
+    // StreamController lets us prepend the current state without the async*
+    // generator's subscription-before-yield race condition.
+    final out = StreamController<bool>();
+    final sub = ctrl.stream.listen(
+      out.add,
+      onError: out.addError,
+      onDone: out.close,
+    );
+    out.onCancel = sub.cancel;
     // Emit current state immediately so callers don't have to call isConnected
     // separately to seed their state.
-    yield isConnected(deviceId);
-    yield* ctrl.stream;
+    out.add(isConnected(deviceId));
+    return out.stream;
   }
 }

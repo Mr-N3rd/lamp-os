@@ -23,6 +23,10 @@ class ControlNotifier extends _$ControlNotifier {
   late final WriteCoalescer _shadeColorsWriter;
   late final WriteCoalescer _baseColorsWriter;
 
+  StreamSubscription<bool>? _connSub;
+  Timer? _reconnectTimer;
+  static const _reconnectDelays = [500, 1000, 2000, 4000, 8000]; // ms, capped
+
   // Snapshot of the state as loaded from the lamp. Used for isDirty checks.
   late ControlState _original;
 
@@ -90,6 +94,16 @@ class ControlNotifier extends _$ControlNotifier {
       // connect(), ensuring it always runs even if build() throws mid-way.
     });
 
+    // Subscribe to the connection stream so we can surface unsolicited
+    // disconnects and drive the reconnect loop. The first emission will be
+    // `true` (we just connected); _onConnectionChange(true) when already
+    // connected is a no-op.
+    _connSub = ble.watchConnected(deviceId).listen(_onConnectionChange);
+    ref.onDispose(() {
+      _connSub?.cancel();
+      _reconnectTimer?.cancel();
+    });
+
     final loaded = ControlState(
       lamp: LampSection.fromJson(lampJson),
       base: BaseSection.fromJson(baseJson),
@@ -142,6 +156,7 @@ class ControlNotifier extends _$ControlNotifier {
   Future<void> save() async {
     final cur = state.value;
     if (cur == null) return;
+    if (!cur.connected) return; // wait for reconnect; UI Save action is also disabled
 
     final ble = ref.read(bleClientProvider);
 
@@ -251,5 +266,64 @@ class ControlNotifier extends _$ControlNotifier {
   Uint8List _encodeColors(List<LampColor> colors) {
     final arr = colors.map((c) => c.toHex()).toList();
     return Uint8List.fromList(utf8.encode(jsonEncode(arr)));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Connection lifecycle
+  // ---------------------------------------------------------------------------
+
+  void _onConnectionChange(bool isConnected) {
+    final cur = state.value;
+    if (cur == null) return;
+    if (isConnected && !cur.connected) {
+      // Reconnect succeeded — clear flags + push local state to the lamp.
+      _reconnectTimer?.cancel();
+      state = AsyncData(cur.copyWith(connected: true, reconnectAttempt: 0));
+      _pushLocalState(cur);
+      return;
+    }
+    if (!isConnected && cur.connected) {
+      state = AsyncData(cur.copyWith(connected: false));
+      _scheduleReconnect();
+    }
+  }
+
+  void _scheduleReconnect() {
+    final cur = state.value;
+    if (cur == null) return;
+    final attempt = cur.reconnectAttempt;
+    final delayMs = _reconnectDelays[
+        attempt < _reconnectDelays.length ? attempt : _reconnectDelays.length - 1];
+    _reconnectTimer?.cancel();
+    _reconnectTimer =
+        Timer(Duration(milliseconds: delayMs), _tryReconnect);
+    state = AsyncData(cur.copyWith(reconnectAttempt: attempt + 1));
+  }
+
+  Future<void> _tryReconnect() async {
+    final ble = ref.read(bleClientProvider);
+    try {
+      await ble.connect(_deviceId);
+      // Re-auth so subsequent writes get past the firmware's auth gate.
+      final inv = await ref.read(inventoryNotifierProvider.future);
+      final lamp = inv.firstWhere(
+        (l) => l.id == _deviceId,
+        orElse: () => throw StateError('lamp $_deviceId not in inventory'),
+      );
+      await AuthClient(ble: ble)
+          .authenticate(deviceId: _deviceId, password: lamp.controlPassword);
+      // The watchConnected stream will fire `true` and _onConnectionChange
+      // handles clearing the banner + pushing local state.
+    } catch (_) {
+      // Connect or auth failed — schedule the next attempt.
+      _scheduleReconnect();
+    }
+  }
+
+  void _pushLocalState(ControlState cur) {
+    _brightnessWriter
+        .schedule(Uint8List.fromList([cur.lamp.brightness]));
+    _shadeColorsWriter.schedule(_encodeColors(cur.shade.colors));
+    _baseColorsWriter.schedule(_encodeColors(cur.base.colors));
   }
 }
