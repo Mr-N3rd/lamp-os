@@ -60,12 +60,11 @@ class FbpBleScanner implements BleScanner {
         ));
       }
     });
+    // No withServices filter — Android can miss matches when the service
+    // UUID is in the scan response rather than the main advertisement.
+    // The callback above already filters to our two service UUIDs.
     await fbp.FlutterBluePlus.startScan(
-      withServices: [
-        fbp.Guid(BleUuids.controlService),
-        fbp.Guid(BleUuids.setupService),
-      ],
-      timeout: const Duration(seconds: 10),
+      timeout: const Duration(minutes: 5),
       continuousUpdates: true,
     );
   }
