@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../features/inventory/application/active_lamp_notifier.dart';
 import '../../features/inventory/application/inventory_notifier.dart';
 import '../../features/lamp_shell/presentation/lamp_shell.dart';
+import '../../features/nearby/presentation/nearby_lamps_screen.dart';
 import '../../features/onboarding/presentation/onboarding_placeholder.dart';
 import 'routes.dart';
 
@@ -47,6 +48,10 @@ GoRouter appRouter(Ref ref) {
           lampId: state.pathParameters['id']!,
           initialTab: LampTab.setup,
         ),
+      ),
+      GoRoute(
+        path: '/devices',
+        builder: (_, state) => const NearbyLampsScreen(),
       ),
     ],
   );
