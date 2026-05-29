@@ -127,3 +127,32 @@ Hardware verification for things automated tests can't cover. Walk through this 
 - [ ] Footer left side updates to "N edited" as you change pixels.
 - [ ] Tap "Reset all" → every slider returns to 100%, footer reads "0 edited", lamp is fully bright.
 - [ ] Back, then tap global Save → power-cycle the lamp → knockout state persists.
+
+## Phase 5 — Setup screen (name, home WiFi, MQTT, advanced)
+
+### Lamp name
+
+- [ ] Setup tab shows the lamp's current name in a TextField, pre-populated.
+- [ ] Editing the name enables Save in the AppBar.
+- [ ] Save → reboot → AppBar chip on Control reflects the new name.
+
+### Home WiFi
+
+- [ ] SSID + Password + Brightness slider visible under "Home WiFi".
+- [ ] Password field shows the hint "(unchanged — type to replace)" when a password is set; typing replaces it. Leaving blank preserves the existing password across Save.
+- [ ] Setting an SSID + Save → after reboot the lamp connects to that network.
+- [ ] Brightness slider changes the home-mode brightness (the value the lamp uses while WiFi STA is connected) and persists across reboot.
+
+### Smart Home (MQTT)
+
+- [ ] MQTT section is hidden until a home SSID is set.
+- [ ] Once an SSID is set, MQTT section appears as a collapsible card.
+- [ ] Toggle Enabled, set Broker host:port, Save → lamp publishes to the broker (verify in Home Assistant or MQTT Explorer).
+- [ ] Password hint behaves the same as Home WiFi (sentinel preserved unless typed).
+
+### Advanced
+
+- [ ] Setup tab shows "Enable advanced settings" button (not the Advanced section) by default.
+- [ ] Tap it → Advanced section appears with base bpp / shade bpp segmented controls + Advanced-enabled switch.
+- [ ] Flip base bpp to RGB (3) → save → reopen base color picker → Warm White slider is gone.
+- [ ] Disable the Advanced switch → Advanced section retracts; Save still enabled while you have unsaved changes.
