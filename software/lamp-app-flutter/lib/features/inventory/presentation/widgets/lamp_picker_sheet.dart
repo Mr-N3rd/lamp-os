@@ -6,6 +6,7 @@ import '../../../../core/routing/routes.dart';
 import '../../../../core/theme/brand_colors.dart';
 import '../../../../core/widgets/lamp_icon.dart';
 import '../../../../core/widgets/status_dot.dart';
+import '../../../control/application/control_notifier.dart';
 import '../../../inventory/application/active_lamp_notifier.dart';
 import '../../../inventory/application/inventory_notifier.dart';
 import '../../../inventory/domain/inventory_lamp.dart';
@@ -150,10 +151,16 @@ class _InventoryLampTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // The currently-active lamp's row shows mesh when we're connected to
+    // it; every other row's connected flag is false from this screen's
+    // perspective (we only hold one BLE connection at a time).
+    final connected = isCurrent &&
+        (ref.watch(controlNotifierProvider(lamp.id)).value?.connected ??
+            false);
     final status = statusFor(
       lampId: lamp.id,
       nearby: nearby,
-      connected: false,
+      connected: connected,
     );
     return InkWell(
       borderRadius: BorderRadius.circular(12),
@@ -229,6 +236,7 @@ class _NearbyLampTile extends ConsumerWidget {
     } else {
       final confirmed = await confirmAddDialog(context, lamp.name);
       if (!confirmed) return;
+      if (!context.mounted) return;
       await ref
           .read(addLampNotifierProvider.notifier)
           .add(deviceId: lamp.id, name: lamp.name);
