@@ -5,6 +5,7 @@ import '../../../../core/theme/brand_colors.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../../nearby/domain/nearby_lamp.dart';
 import '../../application/add_lamp_notifier.dart';
+import 'confirm_add_dialog.dart';
 
 class AddLampScanStep extends ConsumerWidget {
   const AddLampScanStep({super.key});
@@ -37,7 +38,7 @@ class _LampRow extends ConsumerWidget {
     if (lamp.isFactoryDefault) {
       await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
     } else {
-      final confirmed = await _confirmAdd(context, lamp.name);
+      final confirmed = await confirmAddDialog(context, lamp.name);
       if (confirmed) {
         await ref
             .read(addLampNotifierProvider.notifier)
@@ -116,23 +117,3 @@ class _Pill extends StatelessWidget {
   }
 }
 
-Future<bool> _confirmAdd(BuildContext context, String name) async {
-  final displayName = name.isEmpty ? 'this lamp' : '"$name"';
-  final result = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text('Add $displayName to your lamps?'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Add'),
-        ),
-      ],
-    ),
-  );
-  return result ?? false;
-}
