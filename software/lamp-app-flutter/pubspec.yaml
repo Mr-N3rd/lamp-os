@@ -38,7 +38,6 @@ dependencies:
   go_router: ^17.2.3
   flutter_blue_plus: ^2.3.4
   shared_preferences: ^2.3.0
-  flutter_colorpicker: ^1.1.0
   flutter_svg: ^2.0.10
   collection: ^1.18.0
 
