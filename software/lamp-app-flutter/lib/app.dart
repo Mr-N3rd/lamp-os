@@ -28,14 +28,28 @@ class _LampAppState extends ConsumerState<LampApp> {
 
   void _retry() {
     setState(() {
-      _granted = _perms.request();
+      _granted = _requestOrOpenSettings();
     });
+  }
+
+  Future<bool> _requestOrOpenSettings() async {
+    final granted = await _perms.request();
+    if (granted) return true;
+    // Android marks the permission "permanently denied" after the user has
+    // dismissed the system prompt twice. From there, request() returns
+    // false immediately without showing anything — the only path forward
+    // is the app-settings screen.
+    if (await _perms.isPermanentlyDenied()) {
+      await _perms.openSettings();
+      return _perms.isGranted();
+    }
+    return false;
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Lamplit',
+      title: 'LampOS',
       theme: AppTheme.dark(),
       debugShowCheckedModeBanner: false,
       home: FutureBuilder<bool>(
@@ -62,7 +76,7 @@ class _LampAppState extends ConsumerState<LampApp> {
                     ),
                     const SizedBox(height: 12),
                     const Text(
-                      'Lamplit talks to your lamps over Bluetooth.',
+                      'LampOS talks to your lamps over Bluetooth.',
                       style: TextStyle(color: BrandColors.fogGrey),
                     ),
                     const SizedBox(height: 24),
@@ -77,7 +91,7 @@ class _LampAppState extends ConsumerState<LampApp> {
           }
           final router = ref.watch(appRouterProvider);
           return MaterialApp.router(
-            title: 'Lamplit',
+            title: 'LampOS',
             theme: AppTheme.dark(),
             routerConfig: router,
             debugShowCheckedModeBanner: false,

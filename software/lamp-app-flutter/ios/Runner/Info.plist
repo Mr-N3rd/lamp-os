@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Lamp App</string>
+	<string>LampOS</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>lamp_app</string>
+	<string>LampOS</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -67,8 +67,8 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Lamplit needs Bluetooth to discover and control your lamps.</string>
+	<string>LampOS needs Bluetooth to discover and control your lamps.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Lamplit needs Bluetooth to discover and control your lamps.</string>
+	<string>LampOS needs Bluetooth to discover and control your lamps.</string>
 </dict>
 </plist>

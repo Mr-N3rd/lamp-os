@@ -9,6 +9,10 @@ class _AlwaysGranted implements BlePermissions {
   Future<bool> request() async => true;
   @override
   Future<bool> isGranted() async => true;
+  @override
+  Future<bool> isPermanentlyDenied() async => false;
+  @override
+  Future<void> openSettings() async {}
 }
 
 void main() {

@@ -1,4 +1,4 @@
-# Lamplit Flutter app
+# LampOS Flutter app
 
 Flutter (Dart) rewrite of the Capacitor + Vue lamp control app.
 Lives in the `flutter-rewrite` worktree until parity is reached on a real device.
