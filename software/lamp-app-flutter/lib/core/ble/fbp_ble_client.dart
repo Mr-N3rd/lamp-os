@@ -92,4 +92,13 @@ class FbpBleClient implements BleClient {
     await ch.setNotifyValue(true);
     yield* ch.lastValueStream.map(Uint8List.fromList);
   }
+
+  @override
+  Stream<bool> watchConnected(String deviceId) {
+    final device = fbp.BluetoothDevice(
+      remoteId: fbp.DeviceIdentifier(deviceId),
+    );
+    return device.connectionState
+        .map((s) => s == fbp.BluetoothConnectionState.connected);
+  }
 }

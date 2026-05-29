@@ -69,4 +69,38 @@ void main() {
     await ble.write('dev1', 'svc', 'chr', Uint8List.fromList([1]));
     expect(await ble.read('dev1', 'svc', 'chr'), Uint8List.fromList([1]));
   });
+
+  group('InMemoryBleClient.watchConnected', () {
+    test('emits the current state immediately on subscription', () async {
+      final ble = InMemoryBleClient();
+      await ble.connect('dev1');
+      expect(await ble.watchConnected('dev1').first, isTrue);
+    });
+
+    test('emits true on connect after a disconnected start', () async {
+      final ble = InMemoryBleClient();
+      final events = <bool>[];
+      final sub = ble.watchConnected('dev1').listen(events.add);
+      // Initial seed: false (never connected)
+      await Future<void>.delayed(Duration.zero);
+      await ble.connect('dev1');
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+      expect(events, [false, true]);
+    });
+
+    test('emits false on disconnect, true on reconnect', () async {
+      final ble = InMemoryBleClient();
+      await ble.connect('dev1');
+      final events = <bool>[];
+      final sub = ble.watchConnected('dev1').listen(events.add);
+      await Future<void>.delayed(Duration.zero);
+      await ble.disconnect('dev1');
+      await Future<void>.delayed(Duration.zero);
+      await ble.connect('dev1');
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+      expect(events, [true, false, true]);
+    });
+  });
 }
