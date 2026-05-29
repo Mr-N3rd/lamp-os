@@ -8,6 +8,7 @@ import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/control/application/control_notifier.dart';
 import 'package:lamp_app/features/control/application/control_state.dart';
+import 'package:lamp_app/features/control/domain/lamp_color.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -311,6 +312,85 @@ void main() {
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.brightness);
     expect(written.single, 80); // catch-up push landed
+  });
+
+  test('initial load writes last-seen colors to inventory', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final inv = await c.read(inventoryNotifierProvider.future);
+    final lamp = inv.firstWhere((l) => l.id == _devId);
+    expect(lamp.lastShadeColor, [0x00, 0x00, 0x00]); // seeded shade
+    expect(lamp.lastBaseColor, [0x30, 0x07, 0x83]); // seeded base[0]
+  });
+
+  test('setShadeColor refreshes the inventory color cache', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    await c
+        .read(controlNotifierProvider(_devId).notifier)
+        .setShadeColor(const LampColor(r: 0xFF, g: 0x88, b: 0x00, w: 0));
+
+    // Wait for the async updateSeen call to land.
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final inv = await c.read(inventoryNotifierProvider.future);
+    expect(inv.first.lastShadeColor, [0xFF, 0x88, 0x00]);
+  });
+
+  test('setBaseColors refreshes the inventory color cache', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    await c.read(controlNotifierProvider(_devId).notifier).setBaseColors([
+      const LampColor(r: 0x11, g: 0x22, b: 0x33, w: 0),
+      const LampColor(r: 0x44, g: 0x55, b: 0x66, w: 0),
+    ]);
+
+    // Wait for the async updateSeen call to land.
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final inv = await c.read(inventoryNotifierProvider.future);
+    final lamp = inv.firstWhere((l) => l.id == _devId);
+    // ac was 0 (seeded), so we expect colors[0]
+    expect(lamp.lastBaseColor, [0x11, 0x22, 0x33]);
   });
 
   test('save() is a no-op while disconnected', () async {

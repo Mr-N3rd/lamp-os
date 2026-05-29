@@ -33,6 +33,23 @@ class ControlNotifier extends _$ControlNotifier {
   // Captured from the build argument for use in save().
   late final String _deviceId;
 
+  // ---------------------------------------------------------------------------
+  // Inventory color-cache helpers
+  // ---------------------------------------------------------------------------
+
+  List<int> _rgbList(LampColor c) => [c.r, c.g, c.b];
+
+  Future<void> _updateSeen({
+    LampColor? shade,
+    LampColor? base,
+  }) async {
+    await ref.read(inventoryNotifierProvider.notifier).updateSeen(
+          _deviceId,
+          shade: shade == null ? null : _rgbList(shade),
+          base: base == null ? null : _rgbList(base),
+        );
+  }
+
   @override
   Future<ControlState> build(String deviceId) async {
     _deviceId = deviceId;
@@ -108,6 +125,10 @@ class ControlNotifier extends _$ControlNotifier {
       lamp: LampSection.fromJson(lampJson),
       base: BaseSection.fromJson(baseJson),
       shade: ShadeSection.fromJson(shadeJson),
+    );
+    await _updateSeen(
+      shade: loaded.shade.colors.single,
+      base: loaded.base.colors[loaded.base.ac],
     );
     _original = loaded;
     return loaded;
@@ -229,6 +250,7 @@ class ControlNotifier extends _$ControlNotifier {
       shade: ShadeSection(px: cur.shade.px, bpp: cur.shade.bpp, colors: colors),
     ));
     _shadeColorsWriter.schedule(_encodeColors(colors));
+    await _updateSeen(shade: color);
   }
 
   Future<void> setBaseColors(List<LampColor> colors) async {
@@ -243,6 +265,10 @@ class ControlNotifier extends _$ControlNotifier {
       ),
     ));
     _baseColorsWriter.schedule(_encodeColors(colors));
+    if (colors.isNotEmpty) {
+      final acIdx = cur.base.ac.clamp(0, colors.length - 1);
+      await _updateSeen(base: colors[acIdx]);
+    }
   }
 
   Future<void> setBaseAc(int index) async {
