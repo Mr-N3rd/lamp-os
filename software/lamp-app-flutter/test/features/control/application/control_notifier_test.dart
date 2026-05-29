@@ -9,6 +9,7 @@ import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/control/application/control_notifier.dart';
 import 'package:lamp_app/features/control/application/control_state.dart';
 import 'package:lamp_app/features/control/domain/lamp_color.dart';
+import 'package:lamp_app/features/control/domain/sections.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -648,6 +649,143 @@ void main() {
     expect(homeNode['ssid'], 'WiFi');
     expect(homeNode['brightness'], 80);
     expect(homeNode.containsKey('password'), isFalse); // sentinel was stripped
+  });
+
+  test('upsertExpression adds a new entry and writes the op', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final entry = ExpressionConfig(
+      type: 'glitchy',
+      enabled: true,
+      colors: [LampColor.fromHex('#FF00FFAA')],
+      intervalMin: 30,
+      intervalMax: 60,
+      target: 2,
+      parameters: const {},
+    );
+    await c.read(controlNotifierProvider(_devId).notifier)
+        .upsertExpression(entry);
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.expressions.expressions,
+      hasLength(1),
+    );
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.expressionOp);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect(parsed['op'], 'upsert');
+    expect((parsed['entry'] as Map)['type'], 'glitchy');
+  });
+
+  test('upsertExpression replaces an existing (type,target) entry', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    const a = ExpressionConfig(
+      type: 'glitchy', enabled: true, colors: [],
+      intervalMin: 30, intervalMax: 60, target: 2, parameters: {},
+    );
+    const b = ExpressionConfig(
+      type: 'glitchy', enabled: false, colors: [],
+      intervalMin: 30, intervalMax: 60, target: 2, parameters: {},
+    );
+    await n.upsertExpression(a);
+    await n.upsertExpression(b);
+
+    final list = c.read(controlNotifierProvider(_devId)).value!.expressions.expressions;
+    expect(list, hasLength(1));
+    expect(list.single.enabled, isFalse);
+  });
+
+  test('removeExpression drops the (type, target) entry and writes op',
+      () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.upsertExpression(const ExpressionConfig(
+      type: 'glitchy', enabled: true, colors: [],
+      intervalMin: 30, intervalMax: 60, target: 2, parameters: {},
+    ));
+    await n.removeExpression(type: 'glitchy', target: 2);
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.expressions.expressions,
+      isEmpty,
+    );
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.expressionOp);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect(parsed['op'], 'remove');
+    expect(parsed['type'], 'glitchy');
+    expect(parsed['target'], 2);
+  });
+
+  test('testExpression writes to CHAR_EXPRESSION_TEST', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    await c.read(controlNotifierProvider(_devId).notifier).testExpression(
+          const ExpressionConfig(
+            type: 'breathing', enabled: true, colors: [],
+            intervalMin: 30, intervalMax: 60, target: 1, parameters: {},
+          ),
+        );
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.expressionTest);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect(parsed['type'], 'breathing');
   });
 
   test('save() is a no-op while disconnected', () async {

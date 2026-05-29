@@ -603,6 +603,84 @@ class ControlNotifier extends _$ControlNotifier {
     ));
   }
 
+  // ---------------------------------------------------------------------------
+  // Expressions
+  // ---------------------------------------------------------------------------
+
+  /// Add or update an expression. The key is the (type, target) tuple, so
+  /// upserting twice with the same type+target replaces the entry. Writes the
+  /// op to CHAR_EXPRESSION_OP which persists to NVS firmware-side.
+  Future<void> upsertExpression(ExpressionConfig entry) async {
+    final cur = state.value;
+    if (cur == null) return;
+
+    var found = false;
+    final next = <ExpressionConfig>[];
+    for (final e in cur.expressions.expressions) {
+      if (e.type == entry.type && e.target == entry.target) {
+        next.add(entry);
+        found = true;
+      } else {
+        next.add(e);
+      }
+    }
+    if (!found) next.add(entry);
+
+    state = AsyncData(cur.copyWith(
+      expressions: ExpressionsSection(expressions: next),
+    ));
+    await _writeExpressionOp({'op': 'upsert', 'entry': entry.toJson()});
+  }
+
+  /// Remove the expression keyed by (type, target). No-op if absent.
+  Future<void> removeExpression({
+    required String type,
+    required int target,
+  }) async {
+    final cur = state.value;
+    if (cur == null) return;
+    final next = cur.expressions.expressions
+        .where((e) => e.type != type || e.target != target)
+        .toList();
+    state = AsyncData(cur.copyWith(
+      expressions: ExpressionsSection(expressions: next),
+    ));
+    await _writeExpressionOp({
+      'op': 'remove',
+      'type': type,
+      'target': target,
+    });
+  }
+
+  /// Live-preview an expression configuration without persisting it.
+  Future<void> testExpression(ExpressionConfig entry) async {
+    final ble = ref.read(bleClientProvider);
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.expressionTest,
+        Uint8List.fromList(utf8.encode(jsonEncode(entry.toJson()))),
+      );
+    } catch (_) {
+      // best-effort live write — matches the existing live-preview contract
+    }
+  }
+
+  Future<void> _writeExpressionOp(Map<String, dynamic> payload) async {
+    final ble = ref.read(bleClientProvider);
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.expressionOp,
+        Uint8List.fromList(utf8.encode(jsonEncode(payload))),
+      );
+    } catch (_) {
+      // best-effort
+    }
+  }
+
   Uint8List _encodeColors(List<LampColor> colors) {
     final arr = colors.map((c) => c.toHex()).toList();
     return Uint8List.fromList(utf8.encode(jsonEncode(arr)));
