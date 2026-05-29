@@ -32,6 +32,15 @@ Future<void> _seed(InMemoryBleClient ble) async {
       Uint8List.fromList(utf8.encode(
         '{"px":38,"bpp":4,"colors":["#000000FF"]}',
       )));
+  await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
+      Uint8List.fromList(utf8.encode(
+        '{"ssid":"","brightness":60}',
+      )));
+  await ble.write(_devId, BleUuids.controlService, BleUuids.mqttSection,
+      Uint8List.fromList(utf8.encode(
+        '{"enabled":false,"brokerHost":"","brokerPort":1883,'
+        '"username":"","topicPrefix":""}',
+      )));
   await ble.disconnect(_devId);
 }
 
@@ -509,6 +518,25 @@ void main() {
     final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
     final knockout = (parsed['base'] as Map)['knockout'] as List;
     expect(knockout, [{'p': 3, 'b': 50}]);
+  });
+
+  test('build() loads home + mqtt sections into state', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    final state = await c.read(controlNotifierProvider(_devId).future);
+    expect(state.home.brightness, 60);
+    expect(state.mqtt.brokerPort, 1883);
   });
 
   test('save() is a no-op while disconnected', () async {

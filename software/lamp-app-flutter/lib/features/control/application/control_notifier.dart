@@ -81,6 +81,8 @@ class ControlNotifier extends _$ControlNotifier {
     final lampJson = await readJson(BleUuids.lampSection);
     final baseJson = await readJson(BleUuids.baseSection);
     final shadeJson = await readJson(BleUuids.shadeSection);
+    final homeJson = await readJson(BleUuids.homeSection);
+    final mqttJson = await readJson(BleUuids.mqttSection);
 
     // Live-preview writes are fire-and-forget. Swallow errors here so a
     // pending debounce timer that fires after the lamp disconnects (e.g.
@@ -135,6 +137,8 @@ class ControlNotifier extends _$ControlNotifier {
       lamp: LampSection.fromJson(lampJson),
       base: BaseSection.fromJson(baseJson),
       shade: ShadeSection.fromJson(shadeJson),
+      home: HomeSection.fromJson(homeJson),
+      mqtt: MqttSection.fromJson(mqttJson),
     );
     await _updateSeen(
       shade: loaded.shade.colors.single,
