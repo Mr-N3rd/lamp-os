@@ -2,9 +2,13 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/lamp_chip.dart';
 import '../../../features/control/application/control_notifier.dart';
 import '../../../features/control/presentation/control_screen.dart';
 import '../../inventory/application/inventory_notifier.dart';
+import '../../inventory/presentation/widgets/lamp_picker_sheet.dart';
+import '../../nearby/application/nearby_lamps_notifier.dart';
+import '../application/lamp_status.dart';
 import 'expressions_placeholder.dart';
 import 'setup_placeholder.dart';
 
@@ -49,9 +53,28 @@ class _LampShellState extends ConsumerState<LampShell> {
             ?.name ??
         widget.lampId;
 
+    final nearby = ref.watch(nearbyLampsNotifierProvider);
+    final connected = ref
+            .watch(controlNotifierProvider(widget.lampId))
+            .value
+            ?.connected ??
+        false;
+    final status = statusFor(
+      lampId: widget.lampId,
+      nearby: nearby,
+      connected: connected,
+    );
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(name),
+        title: LampChip(
+          name: name,
+          status: status,
+          onTap: () => showLampPickerSheet(
+            context,
+            currentLampId: widget.lampId,
+          ),
+        ),
         actions: [
           if (_tab == LampTab.control) _SaveAction(lampId: widget.lampId),
         ],
