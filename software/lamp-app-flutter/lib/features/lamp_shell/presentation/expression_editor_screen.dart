@@ -6,7 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/brand_colors.dart';
 import '../../control/application/control_notifier.dart';
-import '../../control/application/control_state.dart';
+import '../../control/application/expression_draft.dart';
 import '../../control/domain/lamp_color.dart';
 import '../../control/domain/sections.dart';
 import '../../control/presentation/widgets/color_picker_sheet.dart';
@@ -38,9 +38,9 @@ class ExpressionEditorScreen extends ConsumerStatefulWidget {
 
 class _ExpressionEditorScreenState
     extends ConsumerState<ExpressionEditorScreen> {
-  ExpressionConfig? _draft;
   late TextEditingController _parametersCtrl;
   String? _parametersError;
+  bool _ctrlSeeded = false;
 
   bool get _isNew => widget.typeKey == '_new';
 
@@ -56,39 +56,21 @@ class _ExpressionEditorScreenState
     super.dispose();
   }
 
-  void _ensureDraft(ControlNotifier _, ControlState state) {
-    if (_draft != null) return;
-    if (_isNew) {
-      _draft = const ExpressionConfig(
-        type: 'breathing',
-        enabled: true,
-        colors: [],
-        intervalMin: 60,
-        intervalMax: 900,
-        target: 3,
-        parameters: {},
-      );
-    } else {
-      _draft = state.expressions.expressions.firstWhere(
-        (e) => e.type == widget.typeKey && e.target == widget.targetKey,
-        orElse: () => const ExpressionConfig(
-          type: '',
-          enabled: false,
-          colors: [],
-          intervalMin: 60,
-          intervalMax: 900,
-          target: 3,
-          parameters: {},
-        ),
-      );
-    }
-    _parametersCtrl.text = jsonEncode(_draft!.parameters);
+  /// Seed `_parametersCtrl.text` from the draft the first time we have it.
+  /// Subsequent draft changes don't touch the controller (the user is
+  /// editing the text directly via onChanged).
+  void _seedParametersCtrl(ExpressionConfig draft) {
+    if (_ctrlSeeded) return;
+    _parametersCtrl.text = jsonEncode(draft.parameters);
+    _ctrlSeeded = true;
   }
 
   void _updateDraft(ExpressionConfig Function(ExpressionConfig d) f) {
-    setState(() {
-      _draft = f(_draft!);
-    });
+    ref
+        .read(expressionDraftProvider(
+                widget.lampId, widget.typeKey, widget.targetKey)
+            .notifier)
+        .update(f);
   }
 
   Map<String, int>? _parseParameters() {
@@ -143,8 +125,9 @@ class _ExpressionEditorScreenState
         data: (state) {
           final notifier =
               ref.read(controlNotifierProvider(widget.lampId).notifier);
-          _ensureDraft(notifier, state);
-          final draft = _draft!;
+          final draft = ref.watch(expressionDraftProvider(
+              widget.lampId, widget.typeKey, widget.targetKey));
+          _seedParametersCtrl(draft);
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
@@ -410,6 +393,13 @@ class _ExpressionEditorScreenState
                         target: draft.target,
                         parameters: params,
                       ));
+                      // Drop the draft so a fresh editor visit reflects
+                      // the saved state.
+                      ref
+                          .read(expressionDraftProvider(widget.lampId,
+                                  widget.typeKey, widget.targetKey)
+                              .notifier)
+                          .reset();
                       if (context.mounted) {
                         GoRouter.maybeOf(context)?.pop();
                       }
@@ -426,6 +416,11 @@ class _ExpressionEditorScreenState
                           type: widget.typeKey,
                           target: widget.targetKey,
                         );
+                        ref
+                            .read(expressionDraftProvider(widget.lampId,
+                                    widget.typeKey, widget.targetKey)
+                                .notifier)
+                            .reset();
                         if (context.mounted) {
                           GoRouter.maybeOf(context)?.pop();
                         }
