@@ -1,53 +1,65 @@
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../../inventory/application/inventory_notifier.dart';
 import '../../domain/lamp_color.dart';
+import 'critter_asset.dart';
 
 /// A small recolored lamp graphic that reflects the current shade + base
-/// gradient in real time.
+/// gradient in real time. Picks the same critter SVG as ConnectingView for
+/// this lamp (driven by the persistent `InventoryLamp.critterIndex`).
 ///
-/// The underlying SVG is critter-3.svg which carries two linearGradient defs:
-///   `critter3Shade` — drives the top/hood of the lamp
-///   `critter3Body`  — drives the base
-///
-/// On each rebuild the `<linearGradient …>…</linearGradient>` blocks in the
-/// cached template are replaced with new blocks whose `<stop>` elements carry
-/// the live colors.
-class LampPreview extends StatefulWidget {
+/// Each viable critter SVG carries two linearGradient defs whose ids end in
+/// `Shade` and `Body`. On each rebuild the `<linearGradient …>…</linearGradient>`
+/// blocks in the cached template are replaced with new blocks whose
+/// `<stop>` elements carry the live colors.
+class LampPreview extends ConsumerStatefulWidget {
   const LampPreview({
     super.key,
+    required this.deviceId,
     required this.shade,
     required this.baseColors,
     this.size = 140,
   });
 
+  final String deviceId;
   final LampColor shade;
   final List<LampColor> baseColors;
   final double size;
 
   @override
-  State<LampPreview> createState() => _LampPreviewState();
+  ConsumerState<LampPreview> createState() => _LampPreviewState();
 }
 
-class _LampPreviewState extends State<LampPreview> {
-  // Shared across all instances so the file is only read once per app session.
-  static String? _template;
+class _LampPreviewState extends ConsumerState<LampPreview> {
+  // Cache one template per asset path so the same SVG isn't re-read each
+  // time a different lamp's preview mounts.
+  static final Map<String, String> _templates = {};
 
-  // Instance-local copy so setState can trigger a rebuild after async load.
   String? _localTemplate;
+  String? _loadedFor; // the asset path the local template was loaded from
 
-  @override
-  void initState() {
-    super.initState();
-    if (_template != null) {
-      _localTemplate = _template;
-    } else {
-      rootBundle.loadString('assets/lamp-preview/lamp.svg').then((s) {
-        _template = s;
-        if (mounted) setState(() => _localTemplate = s);
-      });
+  Future<void> _ensureLoaded(String assetPath) async {
+    final cached = _templates[assetPath];
+    if (cached != null) {
+      if (_loadedFor != assetPath) {
+        setState(() {
+          _localTemplate = cached;
+          _loadedFor = assetPath;
+        });
+      }
+      return;
     }
+    final s = await rootBundle.loadString(assetPath);
+    _templates[assetPath] = s;
+    if (!mounted) return;
+    setState(() {
+      _localTemplate = s;
+      _loadedFor = assetPath;
+    });
   }
 
   /// Build replacement `<stop>` elements for [colors], spreading them evenly
@@ -76,17 +88,14 @@ class _LampPreviewState extends State<LampPreview> {
   /// the current widget state.
   String _renderSvg(String template) {
     final shadeHex = widget.shade.toHex().substring(1, 7);
-    final shadeStops =
-        '<stop offset="0%" stop-color="#$shadeHex"/>'
+    final shadeStops = '<stop offset="0%" stop-color="#$shadeHex"/>'
         '<stop offset="100%" stop-color="#$shadeHex"/>';
     final bodyStops = _buildStops(widget.baseColors);
 
-    // Matches any <linearGradient …id="…Shade"…>…</linearGradient> block.
     final shadePattern = RegExp(
       r'<linearGradient[^>]*id="[^"]*Shade"[^>]*>.*?</linearGradient>',
       dotAll: true,
     );
-    // Matches any <linearGradient …id="…Body"…>…</linearGradient> block.
     final bodyPattern = RegExp(
       r'<linearGradient[^>]*id="[^"]*Body"[^>]*>.*?</linearGradient>',
       dotAll: true,
@@ -95,8 +104,6 @@ class _LampPreviewState extends State<LampPreview> {
     return template
         .replaceFirstMapped(shadePattern, (m) {
           final tag = m.group(0)!;
-          // Re-use the original opening tag (preserves id, x1/y1/x2/y2 etc.)
-          // but strip any existing child stops.
           final openTag = '${tag.split('>').first}>';
           return '$openTag$shadeStops</linearGradient>';
         })
@@ -109,9 +116,23 @@ class _LampPreviewState extends State<LampPreview> {
 
   @override
   Widget build(BuildContext context) {
+    final inventory = ref.watch(inventoryNotifierProvider).value;
+    final lamp =
+        inventory?.firstWhereOrNull((l) => l.id == widget.deviceId);
+    final asset = critterAssetFor(
+      critterIndex: lamp?.critterIndex,
+      deviceId: widget.deviceId,
+    );
+
+    // Kick off (or refresh) the load if this is a new asset path. We do it
+    // here rather than initState because the chosen asset can change if the
+    // inventory entry's critterIndex appears asynchronously.
+    if (_loadedFor != asset) {
+      _ensureLoaded(asset);
+    }
+
     final template = _localTemplate;
     if (template == null) {
-      // SVG not yet loaded — reserve space so layout is stable.
       return SizedBox(width: widget.size, height: widget.size);
     }
     return SizedBox(

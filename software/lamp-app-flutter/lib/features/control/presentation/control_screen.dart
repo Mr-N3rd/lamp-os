@@ -48,6 +48,7 @@ class ControlScreen extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Center(
                 child: LampPreview(
+                  deviceId: lampId,
                   shade: shade,
                   baseColors: state.base.colors,
                 ),
