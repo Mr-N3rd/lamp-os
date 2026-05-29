@@ -74,10 +74,20 @@ class _SaveAction extends ConsumerWidget {
     // isDirty getter is read off the notifier, not from the value itself.
     final async = ref.watch(controlNotifierProvider(lampId));
     final notifier = ref.read(controlNotifierProvider(lampId).notifier);
-    final canSave = async.hasValue && notifier.isDirty;
+    final state = async.value;
+    final connected = state?.connected ?? false;
+    final canSave = state != null && connected && notifier.isDirty;
+    final String tooltip;
+    if (!connected) {
+      tooltip = 'Reconnecting…';
+    } else if (!notifier.isDirty) {
+      tooltip = 'No changes to save';
+    } else {
+      tooltip = 'Save';
+    }
     return IconButton(
       icon: const Icon(Icons.save_outlined),
-      tooltip: canSave ? 'Save' : 'No changes to save',
+      tooltip: tooltip,
       onPressed: canSave ? notifier.save : null,
     );
   }

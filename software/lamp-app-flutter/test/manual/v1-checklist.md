@@ -59,3 +59,25 @@ Hardware verification for things automated tests can't cover. Walk through this 
 - [ ] After Save completes, edits are reflected in the freshly loaded state and Save is back to disabled.
 - [ ] Power-cycle the lamp manually → all saved values persist (brightness, base colors, base active, shade).
 - [ ] Expressions / Setup tabs do NOT show the Save icon (Control-tab-only for now).
+
+## Phase 2.2 — Resilience (RGBW picker + disconnect handling)
+
+### RGBW slider picker
+
+- [ ] Shade picker shows 4 sliders (R, G, B, Warm White) with the lamp's current values pre-set.
+- [ ] Dragging any slider updates the lamp and the LampPreview critter live.
+- [ ] Hex string in the picker header updates as you drag.
+- [ ] Picker swatch reflects the warm-white channel: pulling W up with RGB=0 turns the swatch toward warm orange; with RGB=255,255,255 the swatch stays white.
+- [ ] Pulling Warm White down from 255 (default shade) makes the shade darken / colour become visible on the lamp.
+- [ ] Base editor: tap a stop → picker shows R/G/B + Warm White; same behaviour.
+- [ ] Cancel still reverts; Save commits the final values and the AppBar's Save action enables.
+
+### Disconnect + auto-reconnect
+
+- [ ] During rapid shade-drag editing the link no longer drops every few seconds (cached-service fix). Run for ≥30s of continuous slider movement.
+- [ ] Walk the phone out of BLE range while editing — within a second or two, an amber "Reconnecting…" banner appears at the top of Control.
+- [ ] Sliders and pickers stay interactive while disconnected (writes are silently dropped behind the scenes).
+- [ ] AppBar Save icon disables while disconnected; tooltip reads "Reconnecting…".
+- [ ] Walk back into range → banner clears within a few seconds; the lamp catches up to the last local values without losing the user's session.
+- [ ] After reconnect, any unsaved edits from before the drop are still present and Save re-enables.
+- [ ] Power-cycle the lamp manually → banner appears on the immediate disconnect, persists through the ~5 s boot, then clears once the lamp re-advertises.
