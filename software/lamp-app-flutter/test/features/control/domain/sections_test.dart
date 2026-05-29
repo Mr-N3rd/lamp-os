@@ -77,4 +77,43 @@ void main() {
     expect(s.enabled, isFalse);
     expect(s.brokerPort, 1883);
   });
+
+  test('ExpressionConfig round-trips through toJson + fromJson', () {
+    final original = ExpressionConfig(
+      type: 'glitchy',
+      enabled: true,
+      colors: [LampColor.fromHex('#FF00FFAA')],
+      intervalMin: 30,
+      intervalMax: 120,
+      target: 2,
+      parameters: {'flickerRate': 5, 'jitter': 100},
+    );
+    final round = ExpressionConfig.fromJson(
+      Map<String, dynamic>.from(
+          jsonDecode(jsonEncode(original.toJson())) as Map),
+    );
+    expect(round.type, 'glitchy');
+    expect(round.enabled, isTrue);
+    expect(round.colors.single.toHex(), '#FF00FFAA');
+    expect(round.intervalMin, 30);
+    expect(round.intervalMax, 120);
+    expect(round.target, 2);
+    expect(round.parameters, {'flickerRate': 5, 'jitter': 100});
+  });
+
+  test('ExpressionsSection parses an empty array', () {
+    expect(ExpressionsSection.fromJson([]).expressions, isEmpty);
+  });
+
+  test('ExpressionsSection parses two entries', () {
+    final s = ExpressionsSection.fromJson(
+      (jsonDecode(
+        '[{"type":"breathing","enabled":true,"colors":[],"intervalMin":10,"intervalMax":20,"target":1},'
+        '{"type":"glitchy","enabled":false,"colors":[],"intervalMin":60,"intervalMax":900,"target":3}]',
+      ) as List).cast<Map<String, dynamic>>(),
+    );
+    expect(s.expressions, hasLength(2));
+    expect(s.expressions[0].type, 'breathing');
+    expect(s.expressions[1].target, 3);
+  });
 }

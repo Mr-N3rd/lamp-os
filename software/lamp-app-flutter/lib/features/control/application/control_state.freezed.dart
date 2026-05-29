@@ -14,7 +14,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$ControlState {
 
- LampSection get lamp; BaseSection get base; ShadeSection get shade; HomeSection get home; MqttSection get mqtt; bool get connected; int get reconnectAttempt;
+ LampSection get lamp; BaseSection get base; ShadeSection get shade; HomeSection get home; MqttSection get mqtt; ExpressionsSection get expressions; bool get connected; int get reconnectAttempt;
 /// Create a copy of ControlState
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -25,16 +25,16 @@ $ControlStateCopyWith<ControlState> get copyWith => _$ControlStateCopyWithImpl<C
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ControlState&&(identical(other.lamp, lamp) || other.lamp == lamp)&&(identical(other.base, base) || other.base == base)&&(identical(other.shade, shade) || other.shade == shade)&&(identical(other.home, home) || other.home == home)&&(identical(other.mqtt, mqtt) || other.mqtt == mqtt)&&(identical(other.connected, connected) || other.connected == connected)&&(identical(other.reconnectAttempt, reconnectAttempt) || other.reconnectAttempt == reconnectAttempt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ControlState&&(identical(other.lamp, lamp) || other.lamp == lamp)&&(identical(other.base, base) || other.base == base)&&(identical(other.shade, shade) || other.shade == shade)&&(identical(other.home, home) || other.home == home)&&(identical(other.mqtt, mqtt) || other.mqtt == mqtt)&&(identical(other.expressions, expressions) || other.expressions == expressions)&&(identical(other.connected, connected) || other.connected == connected)&&(identical(other.reconnectAttempt, reconnectAttempt) || other.reconnectAttempt == reconnectAttempt));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,lamp,base,shade,home,mqtt,connected,reconnectAttempt);
+int get hashCode => Object.hash(runtimeType,lamp,base,shade,home,mqtt,expressions,connected,reconnectAttempt);
 
 @override
 String toString() {
-  return 'ControlState(lamp: $lamp, base: $base, shade: $shade, home: $home, mqtt: $mqtt, connected: $connected, reconnectAttempt: $reconnectAttempt)';
+  return 'ControlState(lamp: $lamp, base: $base, shade: $shade, home: $home, mqtt: $mqtt, expressions: $expressions, connected: $connected, reconnectAttempt: $reconnectAttempt)';
 }
 
 
@@ -45,7 +45,7 @@ abstract mixin class $ControlStateCopyWith<$Res>  {
   factory $ControlStateCopyWith(ControlState value, $Res Function(ControlState) _then) = _$ControlStateCopyWithImpl;
 @useResult
 $Res call({
- LampSection lamp, BaseSection base, ShadeSection shade, HomeSection home, MqttSection mqtt, bool connected, int reconnectAttempt
+ LampSection lamp, BaseSection base, ShadeSection shade, HomeSection home, MqttSection mqtt, ExpressionsSection expressions, bool connected, int reconnectAttempt
 });
 
 
@@ -62,14 +62,15 @@ class _$ControlStateCopyWithImpl<$Res>
 
 /// Create a copy of ControlState
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? lamp = null,Object? base = null,Object? shade = null,Object? home = null,Object? mqtt = null,Object? connected = null,Object? reconnectAttempt = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? lamp = null,Object? base = null,Object? shade = null,Object? home = null,Object? mqtt = null,Object? expressions = null,Object? connected = null,Object? reconnectAttempt = null,}) {
   return _then(_self.copyWith(
 lamp: null == lamp ? _self.lamp : lamp // ignore: cast_nullable_to_non_nullable
 as LampSection,base: null == base ? _self.base : base // ignore: cast_nullable_to_non_nullable
 as BaseSection,shade: null == shade ? _self.shade : shade // ignore: cast_nullable_to_non_nullable
 as ShadeSection,home: null == home ? _self.home : home // ignore: cast_nullable_to_non_nullable
 as HomeSection,mqtt: null == mqtt ? _self.mqtt : mqtt // ignore: cast_nullable_to_non_nullable
-as MqttSection,connected: null == connected ? _self.connected : connected // ignore: cast_nullable_to_non_nullable
+as MqttSection,expressions: null == expressions ? _self.expressions : expressions // ignore: cast_nullable_to_non_nullable
+as ExpressionsSection,connected: null == connected ? _self.connected : connected // ignore: cast_nullable_to_non_nullable
 as bool,reconnectAttempt: null == reconnectAttempt ? _self.reconnectAttempt : reconnectAttempt // ignore: cast_nullable_to_non_nullable
 as int,
   ));
@@ -156,10 +157,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( LampSection lamp,  BaseSection base,  ShadeSection shade,  HomeSection home,  MqttSection mqtt,  bool connected,  int reconnectAttempt)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( LampSection lamp,  BaseSection base,  ShadeSection shade,  HomeSection home,  MqttSection mqtt,  ExpressionsSection expressions,  bool connected,  int reconnectAttempt)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _ControlState() when $default != null:
-return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.connected,_that.reconnectAttempt);case _:
+return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.expressions,_that.connected,_that.reconnectAttempt);case _:
   return orElse();
 
 }
@@ -177,10 +178,10 @@ return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.co
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( LampSection lamp,  BaseSection base,  ShadeSection shade,  HomeSection home,  MqttSection mqtt,  bool connected,  int reconnectAttempt)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( LampSection lamp,  BaseSection base,  ShadeSection shade,  HomeSection home,  MqttSection mqtt,  ExpressionsSection expressions,  bool connected,  int reconnectAttempt)  $default,) {final _that = this;
 switch (_that) {
 case _ControlState():
-return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.connected,_that.reconnectAttempt);case _:
+return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.expressions,_that.connected,_that.reconnectAttempt);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -197,10 +198,10 @@ return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.co
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( LampSection lamp,  BaseSection base,  ShadeSection shade,  HomeSection home,  MqttSection mqtt,  bool connected,  int reconnectAttempt)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( LampSection lamp,  BaseSection base,  ShadeSection shade,  HomeSection home,  MqttSection mqtt,  ExpressionsSection expressions,  bool connected,  int reconnectAttempt)?  $default,) {final _that = this;
 switch (_that) {
 case _ControlState() when $default != null:
-return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.connected,_that.reconnectAttempt);case _:
+return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.expressions,_that.connected,_that.reconnectAttempt);case _:
   return null;
 
 }
@@ -212,7 +213,7 @@ return $default(_that.lamp,_that.base,_that.shade,_that.home,_that.mqtt,_that.co
 
 
 class _ControlState implements ControlState {
-  const _ControlState({required this.lamp, required this.base, required this.shade, required this.home, required this.mqtt, this.connected = true, this.reconnectAttempt = 0});
+  const _ControlState({required this.lamp, required this.base, required this.shade, required this.home, required this.mqtt, required this.expressions, this.connected = true, this.reconnectAttempt = 0});
   
 
 @override final  LampSection lamp;
@@ -220,6 +221,7 @@ class _ControlState implements ControlState {
 @override final  ShadeSection shade;
 @override final  HomeSection home;
 @override final  MqttSection mqtt;
+@override final  ExpressionsSection expressions;
 @override@JsonKey() final  bool connected;
 @override@JsonKey() final  int reconnectAttempt;
 
@@ -233,16 +235,16 @@ _$ControlStateCopyWith<_ControlState> get copyWith => __$ControlStateCopyWithImp
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _ControlState&&(identical(other.lamp, lamp) || other.lamp == lamp)&&(identical(other.base, base) || other.base == base)&&(identical(other.shade, shade) || other.shade == shade)&&(identical(other.home, home) || other.home == home)&&(identical(other.mqtt, mqtt) || other.mqtt == mqtt)&&(identical(other.connected, connected) || other.connected == connected)&&(identical(other.reconnectAttempt, reconnectAttempt) || other.reconnectAttempt == reconnectAttempt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _ControlState&&(identical(other.lamp, lamp) || other.lamp == lamp)&&(identical(other.base, base) || other.base == base)&&(identical(other.shade, shade) || other.shade == shade)&&(identical(other.home, home) || other.home == home)&&(identical(other.mqtt, mqtt) || other.mqtt == mqtt)&&(identical(other.expressions, expressions) || other.expressions == expressions)&&(identical(other.connected, connected) || other.connected == connected)&&(identical(other.reconnectAttempt, reconnectAttempt) || other.reconnectAttempt == reconnectAttempt));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,lamp,base,shade,home,mqtt,connected,reconnectAttempt);
+int get hashCode => Object.hash(runtimeType,lamp,base,shade,home,mqtt,expressions,connected,reconnectAttempt);
 
 @override
 String toString() {
-  return 'ControlState(lamp: $lamp, base: $base, shade: $shade, home: $home, mqtt: $mqtt, connected: $connected, reconnectAttempt: $reconnectAttempt)';
+  return 'ControlState(lamp: $lamp, base: $base, shade: $shade, home: $home, mqtt: $mqtt, expressions: $expressions, connected: $connected, reconnectAttempt: $reconnectAttempt)';
 }
 
 
@@ -253,7 +255,7 @@ abstract mixin class _$ControlStateCopyWith<$Res> implements $ControlStateCopyWi
   factory _$ControlStateCopyWith(_ControlState value, $Res Function(_ControlState) _then) = __$ControlStateCopyWithImpl;
 @override @useResult
 $Res call({
- LampSection lamp, BaseSection base, ShadeSection shade, HomeSection home, MqttSection mqtt, bool connected, int reconnectAttempt
+ LampSection lamp, BaseSection base, ShadeSection shade, HomeSection home, MqttSection mqtt, ExpressionsSection expressions, bool connected, int reconnectAttempt
 });
 
 
@@ -270,14 +272,15 @@ class __$ControlStateCopyWithImpl<$Res>
 
 /// Create a copy of ControlState
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? lamp = null,Object? base = null,Object? shade = null,Object? home = null,Object? mqtt = null,Object? connected = null,Object? reconnectAttempt = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? lamp = null,Object? base = null,Object? shade = null,Object? home = null,Object? mqtt = null,Object? expressions = null,Object? connected = null,Object? reconnectAttempt = null,}) {
   return _then(_ControlState(
 lamp: null == lamp ? _self.lamp : lamp // ignore: cast_nullable_to_non_nullable
 as LampSection,base: null == base ? _self.base : base // ignore: cast_nullable_to_non_nullable
 as BaseSection,shade: null == shade ? _self.shade : shade // ignore: cast_nullable_to_non_nullable
 as ShadeSection,home: null == home ? _self.home : home // ignore: cast_nullable_to_non_nullable
 as HomeSection,mqtt: null == mqtt ? _self.mqtt : mqtt // ignore: cast_nullable_to_non_nullable
-as MqttSection,connected: null == connected ? _self.connected : connected // ignore: cast_nullable_to_non_nullable
+as MqttSection,expressions: null == expressions ? _self.expressions : expressions // ignore: cast_nullable_to_non_nullable
+as ExpressionsSection,connected: null == connected ? _self.connected : connected // ignore: cast_nullable_to_non_nullable
 as bool,reconnectAttempt: null == reconnectAttempt ? _self.reconnectAttempt : reconnectAttempt // ignore: cast_nullable_to_non_nullable
 as int,
   ));

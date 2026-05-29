@@ -128,3 +128,73 @@ class MqttSection {
         topicPrefix: (json['topicPrefix'] as String?) ?? '',
       );
 }
+
+/// A single expression configuration. CHAR_EXPRESSION_SECTION returns an array
+/// of these; see firmware ExpressionConfig.
+class ExpressionConfig {
+  const ExpressionConfig({
+    required this.type,
+    required this.enabled,
+    required this.colors,
+    required this.intervalMin,
+    required this.intervalMax,
+    required this.target,
+    required this.parameters,
+  });
+
+  final String type;
+  final bool enabled;
+  final List<LampColor> colors;
+  final int intervalMin;
+  final int intervalMax;
+  final int target; // 1=shade, 2=base, 3=both
+  final Map<String, int> parameters;
+
+  static const _reservedKeys = {
+    'type', 'enabled', 'colors', 'intervalMin', 'intervalMax', 'target',
+  };
+
+  factory ExpressionConfig.fromJson(Map<String, dynamic> json) {
+    final params = <String, int>{};
+    for (final e in json.entries) {
+      if (_reservedKeys.contains(e.key)) continue;
+      if (e.value is num) params[e.key] = (e.value as num).toInt();
+    }
+    return ExpressionConfig(
+      type: json['type'] as String? ?? '',
+      enabled: json['enabled'] as bool? ?? false,
+      colors: ((json['colors'] as List?) ?? const [])
+          .map((e) => LampColor.fromHex(e as String))
+          .toList(),
+      intervalMin: (json['intervalMin'] as num?)?.toInt() ?? 60,
+      intervalMax: (json['intervalMax'] as num?)?.toInt() ?? 900,
+      target: (json['target'] as num?)?.toInt() ?? 3,
+      parameters: params,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'enabled': enabled,
+        'colors': colors.map((c) => c.toHex()).toList(),
+        'intervalMin': intervalMin,
+        'intervalMax': intervalMax,
+        'target': target,
+        ...parameters,
+      };
+}
+
+/// CHAR_EXPRESSION_SECTION payload — a JSON array of ExpressionConfig objects.
+class ExpressionsSection {
+  const ExpressionsSection({required this.expressions});
+
+  final List<ExpressionConfig> expressions;
+
+  factory ExpressionsSection.fromJson(List<dynamic> json) =>
+      ExpressionsSection(
+        expressions: json
+            .cast<Map<String, dynamic>>()
+            .map(ExpressionConfig.fromJson)
+            .toList(),
+      );
+}

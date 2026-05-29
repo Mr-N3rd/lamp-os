@@ -78,11 +78,17 @@ class ControlNotifier extends _$ControlNotifier {
       return jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
     }
 
+    Future<List<dynamic>> readJsonList(String charUuid) async {
+      final bytes = await ble.read(deviceId, BleUuids.controlService, charUuid);
+      return jsonDecode(utf8.decode(bytes)) as List<dynamic>;
+    }
+
     final lampJson = await readJson(BleUuids.lampSection);
     final baseJson = await readJson(BleUuids.baseSection);
     final shadeJson = await readJson(BleUuids.shadeSection);
     final homeJson = await readJson(BleUuids.homeSection);
     final mqttJson = await readJson(BleUuids.mqttSection);
+    final exprList = await readJsonList(BleUuids.exprSection);
 
     // Live-preview writes are fire-and-forget. Swallow errors here so a
     // pending debounce timer that fires after the lamp disconnects (e.g.
@@ -139,6 +145,7 @@ class ControlNotifier extends _$ControlNotifier {
       shade: ShadeSection.fromJson(shadeJson),
       home: HomeSection.fromJson(homeJson),
       mqtt: MqttSection.fromJson(mqttJson),
+      expressions: ExpressionsSection.fromJson(exprList),
     );
     await _updateSeen(
       shade: loaded.shade.colors.single,

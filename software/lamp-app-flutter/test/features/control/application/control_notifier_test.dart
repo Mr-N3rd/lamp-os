@@ -41,6 +41,8 @@ Future<void> _seed(InMemoryBleClient ble) async {
         '{"enabled":false,"brokerHost":"","brokerPort":1883,'
         '"username":"","topicPrefix":""}',
       )));
+  await ble.write(_devId, BleUuids.controlService, BleUuids.exprSection,
+      Uint8List.fromList(utf8.encode('[]')));
   await ble.disconnect(_devId);
 }
 
