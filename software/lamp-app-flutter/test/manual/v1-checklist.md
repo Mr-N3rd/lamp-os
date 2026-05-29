@@ -115,3 +115,15 @@ Hardware verification for things automated tests can't cover. Walk through this 
 ### Live color cache
 
 - [ ] After editing shade or base on a lamp and backing out without saving, re-opening the picker shows the inventory tile tinted by the *edited* colors (InventoryLamp.lastShadeColor / lastBaseColor cached on every live write).
+
+## Phase 3 — Knockout (per-LED brightness)
+
+- [ ] Control screen shows a "Knockout · N dimmed" tile below the Base card.
+- [ ] Subtitle reads "No pixels dimmed" when the knockout map is empty; "1 pixel dimmed" or "N pixels dimmed" otherwise.
+- [ ] Tap the tile → KnockoutScreen opens with the back chevron in the AppBar and title "Pixel Knockout · &lt;lamp name&gt;".
+- [ ] One slider row per LED (matches `base.px`); each shows index `#0..#N-1`, slider, percentage.
+- [ ] Default pixels show 100%; previously-dimmed pixels show their saved value.
+- [ ] Drag a slider → that LED on the lamp dims/brightens within ~100 ms.
+- [ ] Footer left side updates to "N edited" as you change pixels.
+- [ ] Tap "Reset all" → every slider returns to 100%, footer reads "0 edited", lamp is fully bright.
+- [ ] Back, then tap global Save → power-cycle the lamp → knockout state persists.
