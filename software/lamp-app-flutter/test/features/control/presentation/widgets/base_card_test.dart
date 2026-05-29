@@ -6,7 +6,7 @@ import 'package:lamp_app/features/control/presentation/widgets/base_card.dart';
 void main() {
   testWidgets('shows stop count subtitle and a ribbon for N stops',
       (tester) async {
-    final colors = const [
+    const colors = [
       LampColor(r: 0x30, g: 0x07, b: 0x83, w: 0),
       LampColor(r: 0xFF, g: 0x00, b: 0x00, w: 0),
     ];

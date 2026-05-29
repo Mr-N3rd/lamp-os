@@ -47,14 +47,12 @@ class BaseEditorSheet extends StatelessWidget {
   }
 
   void _reorder(int oldIndex, int newIndex) {
-    var ni = newIndex;
-    if (ni > oldIndex) ni -= 1;
     final next = [...colors];
     final picked = next.removeAt(oldIndex);
-    next.insert(ni, picked);
+    next.insert(newIndex, picked);
     onColorsChanged(next);
     if (activeIndex == oldIndex) {
-      onActiveChanged(ni);
+      onActiveChanged(newIndex);
     }
   }
 
@@ -82,7 +80,7 @@ class BaseEditorSheet extends StatelessWidget {
             Expanded(
               child: ReorderableListView.builder(
                 itemCount: colors.length,
-                onReorder: _reorder,
+                onReorderItem: _reorder,
                 buildDefaultDragHandles: false,
                 itemBuilder: (ctx, i) {
                   final stop = colors[i];
