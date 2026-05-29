@@ -35,12 +35,13 @@ abstract class BleClient {
 class InMemoryBleClient implements BleClient {
   final Map<String, Uint8List> _values = {};
   final Map<String, StreamController<Uint8List>> _streams = {};
-  final Set<String> _pendingEncryptionFails = {};
+  final Map<String, int> _pendingEncryptionFails = {};
 
   String _key(String d, String s, String c) => '$d|$s|$c';
 
   void scheduleEncryptionFailure(String d, String s, String c) {
-    _pendingEncryptionFails.add(_key(d, s, c));
+    final key = _key(d, s, c);
+    _pendingEncryptionFails[key] = (_pendingEncryptionFails[key] ?? 0) + 1;
   }
 
   @override
@@ -53,7 +54,9 @@ class InMemoryBleClient implements BleClient {
   @override
   Future<void> write(String d, String s, String c, Uint8List v) async {
     final key = _key(d, s, c);
-    if (_pendingEncryptionFails.remove(key)) {
+    final count = _pendingEncryptionFails[key] ?? 0;
+    if (count > 0) {
+      _pendingEncryptionFails[key] = count - 1;
       throw BleEncryptionRequired(d);
     }
     _values[key] = v;
