@@ -73,7 +73,7 @@ class AddLampNotifier extends _$AddLampNotifier {
     }
   }
 
-  Future<void> adopt({
+  Future<void> add({
     required String deviceId,
     required String name,
   }) async {

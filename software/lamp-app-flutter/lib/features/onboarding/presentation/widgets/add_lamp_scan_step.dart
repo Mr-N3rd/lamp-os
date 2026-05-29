@@ -37,11 +37,11 @@ class _LampRow extends ConsumerWidget {
     if (lamp.isFactoryDefault) {
       await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
     } else {
-      final name = await _askAdoptName(context, lamp.name);
+      final name = await _askAddName(context, lamp.name);
       if (name != null && name.isNotEmpty) {
         await ref
             .read(addLampNotifierProvider.notifier)
-            .adopt(deviceId: lamp.id, name: name);
+            .add(deviceId: lamp.id, name: name);
       }
     }
   }
@@ -105,7 +105,7 @@ class _Pill extends StatelessWidget {
         color: base.withValues(alpha: 0.18),
       ),
       child: Text(
-        factoryDefault ? 'set up' : 'adopt',
+        factoryDefault ? 'adopt' : 'add',
         style: TextStyle(
           fontSize: 10,
           color: base,
@@ -116,12 +116,12 @@ class _Pill extends StatelessWidget {
   }
 }
 
-Future<String?> _askAdoptName(BuildContext context, String suggested) async {
+Future<String?> _askAddName(BuildContext context, String suggested) async {
   final controller = TextEditingController(text: suggested);
   return showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Adopt this lamp?'),
+      title: const Text('Add this lamp?'),
       content: TextField(
         controller: controller,
         autofocus: true,
@@ -134,7 +134,7 @@ Future<String?> _askAdoptName(BuildContext context, String suggested) async {
         ),
         FilledButton(
           onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-          child: const Text('Adopt'),
+          child: const Text('Add'),
         ),
       ],
     ),

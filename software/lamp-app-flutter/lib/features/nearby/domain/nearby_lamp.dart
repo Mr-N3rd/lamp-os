@@ -28,9 +28,9 @@ abstract class NearbyLamp with _$NearbyLamp {
 
   /// True when the advertisement still carries the firmware defaults
   /// (name `standard`, base purple `0x300783`, shade off `0x000000`). The
-  /// AddLamp flow uses this to decide between the setup wizard (factory
-  /// default → user must claim it) and adopt (anything else → already
-  /// configured, just add to inventory).
+  /// AddLamp flow uses this to decide between the adopt wizard (factory
+  /// default → user must claim and personalize it) and a one-tap add
+  /// (anything else → already configured, just add to inventory).
   bool get isFactoryDefault =>
       name == _defaultName &&
       baseRgb == _defaultBaseRgb &&

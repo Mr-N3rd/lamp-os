@@ -67,7 +67,7 @@ void main() {
     expect(active, 'dev1');
   });
 
-  test('adopt(deviceId, name) skips wizard and adds to inventory', () async {
+  test('add(deviceId, name) skips wizard and adds to inventory', () async {
     final ble = InMemoryBleClient();
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
@@ -78,7 +78,7 @@ void main() {
 
     await c
         .read(addLampNotifierProvider.notifier)
-        .adopt(deviceId: 'dev2', name: 'melonie');
+        .add(deviceId: 'dev2', name: 'melonie');
 
     final inv = await c.read(inventoryNotifierProvider.future);
     expect(inv.map((l) => l.name).toList(), ['melonie']);
