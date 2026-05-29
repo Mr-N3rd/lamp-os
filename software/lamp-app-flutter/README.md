@@ -1,17 +1,33 @@
-# lamp_app
+# Lamplit Flutter app
 
-A new Flutter project.
+Flutter (Dart) rewrite of the Capacitor + Vue lamp control app.
+Lives in the `flutter-rewrite` worktree until parity is reached on a real device.
 
-## Getting Started
+See:
+- Spec: `docs/superpowers/specs/2026-05-28-flutter-rewrite-design.md`
+- Foundation plan: `docs/superpowers/plans/2026-05-28-flutter-rewrite-foundation.md`
 
-This project is a starting point for a Flutter application.
+## Run
 
-A few resources to get you started if this is your first Flutter project:
+```bash
+cd software/lamp-app-flutter
+flutter pub get
+dart run build_runner build --delete-conflicting-outputs
+flutter run
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Test
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+flutter test
+```
+
+## Codegen
+
+After touching any `@Riverpod`, `@freezed`, or `@JsonSerializable` source:
+
+```bash
+dart run build_runner build --delete-conflicting-outputs
+```
+
+(Or `watch` instead of `build` for continuous regeneration.)
