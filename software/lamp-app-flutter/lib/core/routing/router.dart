@@ -1,4 +1,3 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -28,7 +27,7 @@ GoRouter appRouter(Ref ref) {
     routes: [
       GoRoute(
         path: AppRoutes.onboarding,
-        builder: (_, __) => const OnboardingPlaceholder(),
+        builder: (_, _) => const OnboardingPlaceholder(),
       ),
       GoRoute(
         path: '/lamp/:id/control',

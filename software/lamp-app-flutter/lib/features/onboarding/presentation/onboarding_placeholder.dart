@@ -7,11 +7,11 @@ class OnboardingPlaceholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return const Scaffold(
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: const [
+          children: [
             Text(
               'No lamps yet',
               style: TextStyle(
