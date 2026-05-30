@@ -106,8 +106,7 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
               const InfoPanel(
                 child: Text(
                   'When the lamp is on your home Wi-Fi it uses a separate '
-                  'brightness level — useful for ambient lighting at home. '
-                  'Wi-Fi is paused while you\'re editing over Bluetooth.',
+                  'brightness level — useful for ambient lighting at home.',
                 ),
               ),
               const SizedBox(height: 16),
