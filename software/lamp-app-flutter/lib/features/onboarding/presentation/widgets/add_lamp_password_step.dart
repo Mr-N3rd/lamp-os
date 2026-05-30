@@ -13,6 +13,38 @@ class AddLampPasswordStep extends ConsumerStatefulWidget {
       _AddLampPasswordStepState();
 }
 
+Future<void> _confirmSkip(BuildContext context, AddLampNotifier notifier) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: BrandColors.midnightBlack,
+      title: const Text('Adopt without a password?',
+          style: TextStyle(color: BrandColors.lampWhite)),
+      content: const Text(
+        'Not recommended. Anyone within Bluetooth range will be able to '
+        'control this lamp. You can set a password later from the lamp\'s '
+        'Setup tab.',
+        style: TextStyle(color: BrandColors.fogGrey),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+              backgroundColor: BrandColors.slateGrey),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Skip anyway'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  notifier.setPassword('');
+  await notifier.submit();
+}
+
 class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
   late final TextEditingController _pwd = TextEditingController(
     text: ref.read(addLampNotifierProvider).password,
@@ -112,6 +144,16 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
                 child: const Text('Back'),
               ),
               const Spacer(),
+              TextButton(
+                onPressed: (state.status != AddLampStatus.working &&
+                        state.step != AddLampStep.verifying)
+                    ? () => _confirmSkip(context, notifier)
+                    : null,
+                style: TextButton.styleFrom(
+                    foregroundColor: BrandColors.slateGrey),
+                child: const Text('Skip'),
+              ),
+              const SizedBox(width: 8),
               FilledButton(
                 onPressed: (canContinue &&
                         state.status != AddLampStatus.working &&

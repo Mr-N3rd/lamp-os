@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/brand_colors.dart';
+import '../../control/presentation/widgets/connecting_view.dart';
 import '../application/add_lamp_notifier.dart';
 import '../domain/add_lamp_state.dart';
 import 'widgets/add_lamp_done_step.dart';
@@ -58,25 +59,31 @@ class _AddLampShellState extends ConsumerState<AddLampShell> {
 
   @override
   Widget build(BuildContext context) {
-    final step = ref.watch(addLampNotifierProvider).step;
+    final state = ref.watch(addLampNotifierProvider);
+    final step = state.step;
     final body = switch (step) {
       AddLampStep.scan => const AddLampScanStep(),
+      AddLampStep.connecting => ConnectingView(deviceId: state.deviceId),
       AddLampStep.name => const AddLampNameStep(),
       AddLampStep.password => const AddLampPasswordStep(),
       AddLampStep.verifying => const AddLampPasswordStep(),
       AddLampStep.done => const AddLampDoneStep(),
     };
-    // Hide progress dots while the user is still on the Scan step — there's
-    // no "process" to track yet, the dots only add noise. They appear once
-    // the user picks a lamp and we advance to Name (step.index > scan).
-    final showDots = step != AddLampStep.scan;
+    // Hide progress dots while the user is on Scan (no process to track
+    // yet) or Connecting (transient, no user input). They appear once
+    // we land on Name and stay through Done.
+    final showDots =
+        step != AddLampStep.scan && step != AddLampStep.connecting;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Add a lamp'),
         bottom: showDots
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(8),
-                child: _ProgressDots(currentIndex: step.index),
+                // Name = 2 in the enum, but it's the first user-visible
+                // dot — subtract 2 so name=>0, password=>1, verifying=>2,
+                // done=>3 against the 4-dot row below.
+                child: _ProgressDots(currentIndex: step.index - 2),
               )
             : null,
       ),
@@ -95,7 +102,7 @@ class _ProgressDots extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: List.generate(5, (i) {
+        children: List.generate(4, (i) {
           final active = i == currentIndex;
           return Container(
             margin: const EdgeInsets.symmetric(horizontal: 4),

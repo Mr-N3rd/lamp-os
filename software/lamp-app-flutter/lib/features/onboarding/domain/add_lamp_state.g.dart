@@ -36,6 +36,7 @@ Map<String, dynamic> _$AddLampStateToJson(_AddLampState instance) =>
 
 const _$AddLampStepEnumMap = {
   AddLampStep.scan: 'scan',
+  AddLampStep.connecting: 'connecting',
   AddLampStep.name: 'name',
   AddLampStep.password: 'password',
   AddLampStep.verifying: 'verifying',

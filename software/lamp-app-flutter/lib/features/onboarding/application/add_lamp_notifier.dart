@@ -32,11 +32,21 @@ class AddLampNotifier extends _$AddLampNotifier {
   AddLampState build() => const AddLampState();
 
   Future<void> select(String deviceId) async {
-    final ble = ref.read(bleClientProvider);
-    await ble.connect(deviceId);
+    // Phase 1: flip state synchronously so the shell can render a
+    // loading view as soon as the picker pushes the route — the user
+    // shouldn't see a blank pane while ble.connect awaits.
     state = state.copyWith(
       deviceId: deviceId,
+      step: AddLampStep.connecting,
+      status: AddLampStatus.working,
+    );
+    // Phase 2: actually connect (slow over BLE).
+    final ble = ref.read(bleClientProvider);
+    await ble.connect(deviceId);
+    // Phase 3: advance to the name form.
+    state = state.copyWith(
       step: AddLampStep.name,
+      status: AddLampStatus.idle,
     );
   }
 
@@ -45,7 +55,8 @@ class AddLampNotifier extends _$AddLampNotifier {
 
   void next() {
     state = state.copyWith(step: switch (state.step) {
-      AddLampStep.scan => AddLampStep.name,
+      AddLampStep.scan => AddLampStep.connecting,
+      AddLampStep.connecting => AddLampStep.name,
       AddLampStep.name => AddLampStep.password,
       AddLampStep.password => AddLampStep.verifying,
       AddLampStep.verifying => AddLampStep.done,
@@ -56,6 +67,7 @@ class AddLampNotifier extends _$AddLampNotifier {
   void previous() {
     state = state.copyWith(step: switch (state.step) {
       AddLampStep.scan => AddLampStep.scan,
+      AddLampStep.connecting => AddLampStep.scan,
       AddLampStep.name => AddLampStep.scan,
       AddLampStep.password => AddLampStep.name,
       AddLampStep.verifying => AddLampStep.password,

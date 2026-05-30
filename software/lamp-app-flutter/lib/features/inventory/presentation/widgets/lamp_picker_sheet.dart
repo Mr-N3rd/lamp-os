@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -279,12 +281,16 @@ class _NearbyLampTile extends ConsumerWidget {
 
   Future<void> _onTap(BuildContext context, WidgetRef ref) async {
     if (lamp.isFactoryDefault) {
-      await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
-      if (context.mounted) {
-        Navigator.pop(context);
-        // `push` not `go` — same reason as the FAB above.
-        GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
-      }
+      // Fire-and-forget: select() flips state.step to `connecting`
+      // synchronously, then awaits ble.connect in the background. Popping
+      // the picker + pushing the AddLamp route NOW lets the shell render
+      // the ConnectingView immediately instead of leaving the user
+      // staring at a frozen picker while BLE links up.
+      unawaited(
+          ref.read(addLampNotifierProvider.notifier).select(lamp.id));
+      Navigator.pop(context);
+      // `push` not `go` — same reason as the FAB above.
+      GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
     } else {
       // Skip the confirm dialog — the AddLampDoneStep ("X is ready") that
       // follows acts as the user-visible confirmation.
