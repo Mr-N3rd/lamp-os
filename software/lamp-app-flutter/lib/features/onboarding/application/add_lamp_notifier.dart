@@ -83,6 +83,30 @@ class AddLampNotifier extends _$AddLampNotifier {
     );
     final ble = ref.read(bleClientProvider);
 
+    // Step 0: ensure the link is up with a FRESH handle. select()
+    // connected ~30s ago; by now Android has dropped the link via
+    // LINK_SUPERVISION_TIMEOUT, but flutter_blue_plus's cached state
+    // may still report "connected", so a plain connect() is a no-op
+    // and the next write fails with fbp-code 6 (deviceIsDisconnected).
+    // Force a real reconnect via disconnect → 500ms pause → connect
+    // (same shape as the post-reboot reconnect below).
+    try {
+      try {
+        await ble.disconnect(state.deviceId);
+      } catch (_) {
+        // already-disconnected is fine
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await ble.connect(state.deviceId);
+    } catch (e) {
+      state = state.copyWith(
+        status: AddLampStatus.error,
+        error: AddLampError.connectFailed,
+        errorMessage: e.toString(),
+      );
+      return;
+    }
+
     // Step 1: claim. Failures here are usually BLE-side (connect dropped,
     // setup characteristics rejected) — surface as claimFailed and bail.
     try {
