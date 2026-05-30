@@ -174,6 +174,9 @@ class _SaveAction extends ConsumerWidget {
   const _SaveAction({required this.lampId});
   final String lampId;
 
+  // Visual dimensions are tuned to match LampChip on the left of the
+  // AppBar (padding h=12 v=6, text size 12 w600, icon ~14) so the two
+  // pills read as a consistent pair.
   static Widget _outlined({
     required String label,
     required IconData icon,
@@ -187,10 +190,16 @@ class _SaveAction extends ConsumerWidget {
           side: BorderSide(
               color: BrandColors.lampWhite.withValues(alpha: 0.18)),
           padding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+          minimumSize: const Size(0, 32),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          textStyle: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         onPressed: onPressed,
-        icon: Icon(icon, size: 16),
+        icon: Icon(icon, size: 14),
         label: Text(label),
       ),
     );
@@ -223,7 +232,7 @@ class _SaveAction extends ConsumerWidget {
     return Tooltip(
       message: 'You have unsaved changes — tap to save',
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -232,29 +241,29 @@ class _SaveAction extends ConsumerWidget {
               onTap: notifier.save,
               child: Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   gradient: _brandGradient,
                   borderRadius: BorderRadius.circular(999),
                   boxShadow: [
                     BoxShadow(
                       color: BrandColors.glowPink.withValues(alpha: 0.45),
-                      blurRadius: 14,
+                      blurRadius: 10,
                       spreadRadius: 1,
-                      offset: const Offset(0, 2),
+                      offset: const Offset(0, 1),
                     ),
                   ],
                 ),
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.save, size: 18, color: BrandColors.lampWhite),
+                    Icon(Icons.save, size: 14, color: BrandColors.lampWhite),
                     SizedBox(width: 8),
                     Text('Save changes',
                         style: TextStyle(
                           color: BrandColors.lampWhite,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
                         )),
                   ],
                 ),
@@ -265,13 +274,13 @@ class _SaveAction extends ConsumerWidget {
               right: -2,
               child: Container(
                 key: const ValueKey('save-dirty-dot'),
-                width: 10,
-                height: 10,
+                width: 8,
+                height: 8,
                 decoration: BoxDecoration(
                   color: BrandColors.error,
                   shape: BoxShape.circle,
                   border:
-                      Border.all(color: BrandColors.lampWhite, width: 1.5),
+                      Border.all(color: BrandColors.lampWhite, width: 1.2),
                 ),
               ),
             ),
