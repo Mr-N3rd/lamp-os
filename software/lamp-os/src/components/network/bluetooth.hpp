@@ -58,6 +58,17 @@ class BluetoothComponent {
    * active when ble_gatts_add_svcs runs (silent service registration drop).
    */
   void activateGattServices(Config* cfg, Preferences* prefs);
+
+  /**
+   * @brief update the 9th manufacturer-data byte to reflect mesh state.
+   * Idempotent — re-applies setManufacturerData only when the flag flips,
+   * so it's safe (and cheap) to call every loop iteration. Older app
+   * builds read 8-byte payloads so the layout remains backwards
+   * compatible.
+   * @param onMesh true iff the lamp is currently joined to the mesh
+   *  (`wifi::isConnected()` is the current source of truth).
+   */
+  void setMeshState(bool onMesh);
 };
 }  // namespace lamp
 #endif

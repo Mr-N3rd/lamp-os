@@ -10,6 +10,7 @@
 #include "../components/network/bluetooth.hpp"
 #include "../components/network/ble_control.hpp"
 #include "../components/network/mqtt.hpp"
+#include "../components/network/nearby_lamps.hpp"
 #include "../components/network/show_receiver.hpp"
 #include "../components/network/wifi.hpp"
 #include "../behaviors/show_behavior.hpp"
@@ -451,6 +452,20 @@ void loop() {
   // (JsonDocument parse, std::vector, gradient construction) happens here,
   // NOT in BLE callbacks on Core 0.
 
+  // Reflect mesh state on the manufacturer-data advertisement so the phone
+  // app's scanner can light a "mesh" dot beside this lamp.
+  //
+  // "On mesh" = we've heard at least one other lamp on BLE adv in the last
+  // 60 s. BLE-reachable is the most reliable proxy — it's the same signal
+  // SocialBehavior uses to greet neighbours and doesn't require Wi-Fi STA
+  // to be configured (ESP-NOW peer-to-peer falls back to channel 1 when
+  // STA isn't up, which doesn't reliably match other lamps).
+  //
+  // The setMeshState helper is idempotent: it only re-applies
+  // setManufacturerData when the flag flips, so calling it every loop
+  // tick is fine.
+  bt.setMeshState(!lamp::nearbyLamps.getReachableViaBle(60000).empty());
+
   if (pendingBrightness >= 0) {
     uint8_t level = static_cast<uint8_t>(pendingBrightness);
     pendingBrightness = -1;
@@ -580,7 +595,12 @@ void loop() {
           if (v.is<uint32_t>()) cfg.setParameter(key, v.as<uint32_t>());
           else if (v.is<int>()) cfg.setParameter(key, static_cast<uint32_t>(v.as<int>()));
         }
-        for (JsonVariant cv : entry["colors"].as<JsonArray>()) {
+        // Store the JsonArray in a local so iteration doesn't reference a
+        // temporary that's destroyed at the end of the full expression
+        // (ArduinoJson 7.4.x tightened lifetime semantics on chained
+        // calls; before this the same code happened to work).
+        JsonArray colorsArr = entry["colors"].as<JsonArray>();
+        for (JsonVariant cv : colorsArr) {
           cfg.colors.push_back(lamp::hexStringToColor(cv));
         }
         if (!cfg.type.empty()) {
