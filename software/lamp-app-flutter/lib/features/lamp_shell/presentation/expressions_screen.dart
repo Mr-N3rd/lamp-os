@@ -164,8 +164,7 @@ class _ExpressionTile extends StatelessWidget {
   String get _targetLabel => switch (expression.target) {
         1 => 'shade',
         2 => 'base',
-        3 => 'both',
-        _ => 'unknown',
+        _ => 'both',
       };
 
   @override
@@ -220,6 +219,7 @@ class _ExpressionTile extends StatelessWidget {
                       title,
                       style: const TextStyle(
                         color: BrandColors.lampWhite,
+                        fontSize: 15,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
