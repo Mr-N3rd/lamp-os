@@ -309,7 +309,10 @@ class _NearbyLampTile extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
         child: Row(
           children: [
-            const StatusDot(kind: StatusKind.bluetooth, size: 14),
+            StatusDot(
+              kind: lamp.onMesh ? StatusKind.mesh : StatusKind.bluetooth,
+              size: 14,
+            ),
             const SizedBox(width: 12),
             LampIcon(
               shade: _colorFromInt(lamp.shadeRgb),
