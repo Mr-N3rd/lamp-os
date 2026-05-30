@@ -63,6 +63,7 @@ class _AddLampShellState extends ConsumerState<AddLampShell> {
       AddLampStep.scan => const AddLampScanStep(),
       AddLampStep.name => const AddLampNameStep(),
       AddLampStep.password => const AddLampPasswordStep(),
+      AddLampStep.verifying => const AddLampPasswordStep(),
       AddLampStep.done => const AddLampDoneStep(),
     };
     return Scaffold(
@@ -88,7 +89,7 @@ class _ProgressDots extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: List.generate(4, (i) {
+        children: List.generate(5, (i) {
           final active = i == currentIndex;
           return Container(
             margin: const EdgeInsets.symmetric(horizontal: 4),

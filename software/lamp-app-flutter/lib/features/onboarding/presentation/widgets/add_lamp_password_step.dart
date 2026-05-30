@@ -55,6 +55,14 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
             textAlign: TextAlign.center,
             style: TextStyle(color: BrandColors.fogGrey),
           ),
+          if (state.error == AddLampError.wrongPassword) ...[
+            const SizedBox(height: 8),
+            const Text(
+              "Wrong password. The lamp didn't accept it — try again.",
+              style: TextStyle(color: BrandColors.error),
+              textAlign: TextAlign.center,
+            ),
+          ],
           const SizedBox(height: 16),
           TextField(
             controller: _pwd,
@@ -85,15 +93,24 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
               ),
               const Spacer(),
               FilledButton(
-                onPressed:
-                    (canContinue && state.status != AddLampStatus.working)
-                        ? notifier.submit
-                        : null,
-                child: state.status == AddLampStatus.working
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                onPressed: (canContinue &&
+                        state.status != AddLampStatus.working &&
+                        state.step != AddLampStep.verifying)
+                    ? notifier.submit
+                    : null,
+                child: (state.status == AddLampStatus.working ||
+                        state.step == AddLampStep.verifying)
+                    ? const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          SizedBox(width: 8),
+                          Text('Verifying…'),
+                        ],
                       )
                     : const Text('Adopt lamp'),
               ),
