@@ -1,10 +1,17 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../lamp_shell/domain/expression_meta.dart';
+import '../domain/lamp_color.dart';
 import '../domain/sections.dart';
 import 'control_notifier.dart';
 
 part 'expression_draft.g.dart';
+
+/// Default starting swatch for a brand-new expression — lime yellow
+/// (matches `BrandColors.headerLime`, `0xDDFF77`). Seeded so the user
+/// always has at least one color to work with; they can edit or add
+/// more from the editor.
+const _defaultNewColor = LampColor(r: 0xDD, g: 0xFF, b: 0x77, w: 0);
 
 /// Working copy of an expression while the user is editing it. Held in a
 /// keep-alive provider so navigating away from the editor and back doesn't
@@ -30,7 +37,7 @@ class ExpressionDraft extends _$ExpressionDraft {
     return ExpressionConfig(
       type: type,
       enabled: true,
-      colors: const [],
+      colors: const [_defaultNewColor],
       intervalMin: 60,
       intervalMax: 900,
       target: target,

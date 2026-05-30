@@ -202,8 +202,12 @@ class _ExpressionEditorScreenState
                         next[i] = picked;
                         _updateDraft((d) => _withColors(d, next));
                       },
-                      onRemove: () => _updateDraft(
-                          (d) => _withColors(d, [...d.colors]..removeAt(i))),
+                      // Last swatch is non-removable so the palette can't
+                      // end up empty (firmware would have nothing to draw).
+                      onRemove: draft.colors.length > 1
+                          ? () => _updateDraft((d) =>
+                              _withColors(d, [...d.colors]..removeAt(i)))
+                          : null,
                     ),
                   TextButton.icon(
                     icon: const Icon(Icons.add, size: 18),
@@ -537,7 +541,10 @@ class _ColorChip extends StatelessWidget {
 
   final LampColor color;
   final VoidCallback onEdit;
-  final VoidCallback onRemove;
+
+  /// Null when this swatch is the last one in the palette — the X button
+  /// hides entirely so the user can't end up with an empty colors list.
+  final VoidCallback? onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -548,31 +555,32 @@ class _ColorChip extends StatelessWidget {
           onTap: onEdit,
           child: LampColorSwatch(color: color, size: 40),
         ),
-        Positioned(
-          top: -6,
-          right: -6,
-          child: Semantics(
-            label: 'Remove color',
-            button: true,
-            child: InkWell(
-              onTap: onRemove,
-              customBorder: const CircleBorder(),
-              child: Container(
-                width: 18,
-                height: 18,
-                decoration: const BoxDecoration(
-                  color: BrandColors.ashGrey,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.close,
-                  size: 12,
-                  color: BrandColors.lampWhite,
+        if (onRemove != null)
+          Positioned(
+            top: -6,
+            right: -6,
+            child: Semantics(
+              label: 'Remove color',
+              button: true,
+              child: InkWell(
+                onTap: onRemove,
+                customBorder: const CircleBorder(),
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: const BoxDecoration(
+                    color: BrandColors.ashGrey,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.close,
+                    size: 12,
+                    color: BrandColors.lampWhite,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
       ],
     );
   }
