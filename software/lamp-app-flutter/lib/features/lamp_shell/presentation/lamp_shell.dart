@@ -174,69 +174,100 @@ class _SaveAction extends ConsumerWidget {
   const _SaveAction({required this.lampId});
   final String lampId;
 
+  Widget _outlined({
+    required String label,
+    required IconData icon,
+    required VoidCallback? onPressed,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: BrandColors.fogGrey,
+          side: BorderSide(
+              color: BrandColors.lampWhite.withValues(alpha: 0.18)),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        ),
+        onPressed: onPressed,
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Watching the AsyncValue so any state change rebuilds the icon; the
+    // Watching the AsyncValue so any state change rebuilds the widget; the
     // isDirty getter is read off the notifier, not from the value itself.
     final async = ref.watch(controlNotifierProvider(lampId));
     final notifier = ref.read(controlNotifierProvider(lampId).notifier);
     final state = async.value;
     final connected = state?.connected ?? false;
-    final canSave = state != null && connected && notifier.isDirty;
-    final String tooltip;
     if (!connected) {
-      tooltip = 'Reconnecting…';
-    } else if (!notifier.isDirty) {
-      tooltip = 'No changes to save';
-    } else {
-      tooltip = 'Save';
+      return _outlined(
+          label: 'Reconnecting…',
+          icon: Icons.cloud_off,
+          onPressed: null);
     }
-    // Gradient-pill Save matches the Vue lamp page's primary action. When
-    // disabled we fall back to a flat IconButton so the gradient doesn't
-    // imply availability.
-    if (!canSave) {
-      return IconButton(
-        icon: const Icon(Icons.save_outlined),
-        tooltip: tooltip,
-        onPressed: null,
-      );
+    if (!notifier.isDirty) {
+      return _outlined(
+          label: 'Saved', icon: Icons.check, onPressed: null);
     }
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      child: Tooltip(
-        message: tooltip,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: notifier.save,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-            decoration: BoxDecoration(
-              gradient: _brandGradient,
-              borderRadius: BorderRadius.circular(999),
-              boxShadow: [
-                BoxShadow(
-                  color: BrandColors.auroraBlue.withValues(alpha: 0.3),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.save_outlined,
-                    size: 16, color: BrandColors.lampWhite),
-                SizedBox(width: 6),
-                Text('Save',
-                    style: TextStyle(
-                      color: BrandColors.lampWhite,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                    )),
-              ],
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: notifier.save,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              decoration: BoxDecoration(
+                gradient: _brandGradient,
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: [
+                  BoxShadow(
+                    color: BrandColors.glowPink.withValues(alpha: 0.45),
+                    blurRadius: 14,
+                    spreadRadius: 1,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.save, size: 18, color: BrandColors.lampWhite),
+                  SizedBox(width: 8),
+                  Text('Save changes',
+                      style: TextStyle(
+                        color: BrandColors.lampWhite,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      )),
+                ],
+              ),
             ),
           ),
-        ),
+          Positioned(
+            top: -2,
+            right: -2,
+            child: Container(
+              key: const ValueKey('save-dirty-dot'),
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: BrandColors.error,
+                shape: BoxShape.circle,
+                border:
+                    Border.all(color: BrandColors.lampWhite, width: 1.5),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
