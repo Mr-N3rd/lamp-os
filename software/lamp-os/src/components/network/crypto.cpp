@@ -11,17 +11,31 @@ namespace lamp { namespace crypto {
 namespace {
 
 bool deriveKey(const uint8_t* salt, size_t saltLen,
-               const char* info,
+               const char* name,           // charShortName only
                const std::string& password,
                uint8_t outKey[32]) {
   const mbedtls_md_info_t* md =
       mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
   if (md == nullptr) return false;
-  // mbedtls_hkdf does Extract+Expand in one call. Output length is 32 (SHA-256).
+
+  // info = "lamp-v1" 0x00 charShortName  (NUL is a separator byte inside the
+  // info buffer, NOT a C-string terminator — so build the buffer explicitly
+  // instead of relying on strlen).
+  static constexpr char PREFIX[] = "lamp-v1";
+  static constexpr size_t PREFIX_LEN = sizeof(PREFIX) - 1;  // 7, excludes terminating NUL
+  const size_t nameLen = std::strlen(name);
+  const size_t infoLen = PREFIX_LEN + 1 + nameLen;          // +1 for the separator NUL
+
+  uint8_t info[64];
+  if (infoLen > sizeof(info)) return false;
+  std::memcpy(info, PREFIX, PREFIX_LEN);
+  info[PREFIX_LEN] = 0x00;
+  std::memcpy(info + PREFIX_LEN + 1, name, nameLen);
+
   int rc = mbedtls_hkdf(
       md, salt, saltLen,
       reinterpret_cast<const uint8_t*>(password.data()), password.size(),
-      reinterpret_cast<const uint8_t*>(info), std::strlen(info),
+      info, infoLen,
       outKey, 32);
   return rc == 0;
 }
@@ -58,6 +72,7 @@ bool decryptOp(const uint8_t* p, size_t n,
   }
 
   uint8_t key[32];
+  // Caller supplies UUID bytes already in LE order; no swap performed here.
   if (!deriveKey(uuidLE16, 16, name, password, key)) {
     std::memset(key, 0, sizeof(key));
     return false;
