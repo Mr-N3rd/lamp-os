@@ -7,6 +7,7 @@ import '../../../core/theme/brand_colors.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/domain/sections.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
+import '../domain/expression_meta.dart';
 
 class ExpressionsScreen extends ConsumerWidget {
   const ExpressionsScreen({super.key, required this.lampId});
@@ -95,6 +96,7 @@ class ExpressionsScreen extends ConsumerWidget {
                     ),
                   );
                 },
+                onTrigger: () => notifier.testExpression(e),
               );
             },
           );
@@ -149,6 +151,7 @@ class _ExpressionTile extends StatelessWidget {
     required this.onToggle,
     required this.onConfirmDelete,
     required this.onDelete,
+    required this.onTrigger,
   });
 
   final String lampId;
@@ -156,6 +159,7 @@ class _ExpressionTile extends StatelessWidget {
   final ValueChanged<bool> onToggle;
   final Future<bool> Function() onConfirmDelete;
   final Future<void> Function() onDelete;
+  final VoidCallback onTrigger;
 
   String get _targetLabel => switch (expression.target) {
         1 => 'shade',
@@ -166,6 +170,9 @@ class _ExpressionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final meta = ExpressionTypeMeta.byKey(expression.type);
+    final title = meta?.name ??
+        (expression.type.isEmpty ? '(unnamed)' : expression.type);
     return Dismissible(
       key: ValueKey('${expression.type}-${expression.target}'),
       direction: DismissDirection.endToStart,
@@ -193,12 +200,24 @@ class _ExpressionTile extends StatelessWidget {
           ),
           child: Row(
             children: [
+              Container(
+                width: 36,
+                height: 36,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: BrandColors.auroraBlue.withValues(alpha: 0.16),
+                ),
+                child: Icon(meta?.icon ?? Icons.auto_awesome,
+                    size: 18, color: BrandColors.auroraBlue),
+              ),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      expression.type.isEmpty ? '(unnamed)' : expression.type,
+                      title,
                       style: const TextStyle(
                         color: BrandColors.lampWhite,
                         fontWeight: FontWeight.w600,
@@ -206,8 +225,7 @@ class _ExpressionTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '$_targetLabel · '
-                      '${expression.intervalMin}-${expression.intervalMax}s',
+                      _targetLabel,
                       style: const TextStyle(
                         color: BrandColors.fogGrey,
                         fontSize: 12,
@@ -215,6 +233,12 @@ class _ExpressionTile extends StatelessWidget {
                     ),
                   ],
                 ),
+              ),
+              IconButton(
+                tooltip: 'Trigger now',
+                icon: const Icon(Icons.play_arrow,
+                    color: BrandColors.lumenGreen),
+                onPressed: onTrigger,
               ),
               Switch(value: expression.enabled, onChanged: onToggle),
             ],

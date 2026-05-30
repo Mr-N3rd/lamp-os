@@ -75,9 +75,9 @@ void main() {
         home: ExpressionsScreen(lampId: _devId),
       ),
     ));
-    await _pumpToData(tester, 'breathing');
-    expect(find.text('breathing'), findsOneWidget);
-    expect(find.text('glitchy'), findsOneWidget);
+    await _pumpToData(tester, 'Breathing');
+    expect(find.text('Breathing'), findsOneWidget);
+    expect(find.text('Glitchy'), findsOneWidget);
   });
 
   testWidgets('swipe-to-delete shows a confirm dialog; Cancel keeps the tile',
@@ -92,9 +92,9 @@ void main() {
         home: ExpressionsScreen(lampId: _devId),
       ),
     ));
-    await _pumpToData(tester, 'breathing');
+    await _pumpToData(tester, 'Breathing');
 
-    await tester.drag(find.text('breathing'), const Offset(-500, 0));
+    await tester.drag(find.text('Breathing'), const Offset(-500, 0));
     await tester.pump(); // open dialog
     await tester.pump(const Duration(milliseconds: 300));
 
@@ -104,7 +104,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     // Tile is still there
-    expect(find.text('breathing'), findsOneWidget);
+    expect(find.text('Breathing'), findsOneWidget);
   });
 
   testWidgets('confirm delete removes the entry and surfaces an UNDO snackbar',
@@ -119,9 +119,9 @@ void main() {
         home: ExpressionsScreen(lampId: _devId),
       ),
     ));
-    await _pumpToData(tester, 'breathing');
+    await _pumpToData(tester, 'Breathing');
 
-    await tester.drag(find.text('breathing'), const Offset(-500, 0));
+    await tester.drag(find.text('Breathing'), const Offset(-500, 0));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('Delete'));
@@ -130,7 +130,7 @@ void main() {
       if (find.text('UNDO').evaluate().isNotEmpty) break;
     }
 
-    expect(find.text('breathing'), findsNothing);
+    expect(find.text('Breathing'), findsNothing);
     expect(find.text('UNDO'), findsOneWidget);
     expect(find.textContaining('Removed'), findsOneWidget);
 
@@ -158,7 +158,7 @@ void main() {
         home: ExpressionsScreen(lampId: _devId),
       ),
     ));
-    await _pumpToData(tester, 'breathing');
+    await _pumpToData(tester, 'Breathing');
 
     await tester.tap(find.byType(Switch).first);
     await tester.pump();
@@ -171,4 +171,52 @@ void main() {
         .firstWhere((x) => x.type == 'breathing' && x.target == 1);
     expect(e.enabled, isFalse);
   });
+
+  testWidgets('tile shows titleized name from registry', (tester) async {
+    final c = await _withState(
+        '[{"type":"breathing","enabled":true,"colors":[],'
+        '"intervalMin":10,"intervalMax":20,"target":1}]');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(home: ExpressionsScreen(lampId: _devId)),
+    ));
+    await _pumpToData(tester, 'Breathing');
+    expect(find.text('Breathing'), findsOneWidget);
+    expect(find.text('breathing'), findsNothing);
+  });
+
+  testWidgets('tile shows expression icon in aurora-blue circle',
+      (tester) async {
+    final c = await _withState(
+        '[{"type":"breathing","enabled":true,"colors":[],'
+        '"intervalMin":10,"intervalMax":20,"target":1}]');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(home: ExpressionsScreen(lampId: _devId)),
+    ));
+    await _pumpToData(tester, 'Breathing');
+    // The breathing meta uses Icons.air.
+    expect(find.byIcon(Icons.air), findsOneWidget);
+  });
+
+  testWidgets('tile does not show raw interval seconds', (tester) async {
+    final c = await _withState(
+        '[{"type":"breathing","enabled":true,"colors":[],'
+        '"intervalMin":60,"intervalMax":900,"target":1}]');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(home: ExpressionsScreen(lampId: _devId)),
+    ));
+    await _pumpToData(tester, 'Breathing');
+    expect(find.textContaining('60-900'), findsNothing);
+  });
+
+  // TODO: verify trigger via BLE introspection once a helper exists.
+  // InMemoryBleClient stores only the last-written value per characteristic
+  // in a private map (_values) with no public writesTo() / recordedWritesTo()
+  // accessor. Until such a helper is added to InMemoryBleClient, we cannot
+  // assert that tapping 'Trigger now' wrote to BleUuids.expressionTest.
 }
