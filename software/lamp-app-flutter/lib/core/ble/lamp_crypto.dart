@@ -59,9 +59,13 @@ class LampCrypto {
     required Uint8List saltUuid16,
     required String charShortName,
   }) async {
-    assert(password.isNotEmpty,
+    if (password.isEmpty) {
+      throw ArgumentError.value(
+        password, 'password',
         'encryptOp requires a non-empty password; use wrapPlaintext() '
-        'for factory-default lamps');
+        'for factory-default lamps',
+      );
+    }
     final key = await deriveKey(
         password: password,
         saltUuid16: saltUuid16,

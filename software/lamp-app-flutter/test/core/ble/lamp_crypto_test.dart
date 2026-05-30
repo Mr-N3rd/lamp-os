@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart' show SecretBoxAuthenticationError;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_app/core/ble/lamp_crypto.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
@@ -79,10 +80,10 @@ void main() {
           password: 'sekret',
           saltUuid16: salt,
           charShortName: 'wifiOp');
-      expect(
-        () => LampCrypto.decryptOpForTesting(ct,
+      await expectLater(
+        LampCrypto.decryptOpForTesting(ct,
             password: 'wrong', saltUuid16: salt, charShortName: 'wifiOp'),
-        throwsA(isA<Object>()),
+        throwsA(isA<SecretBoxAuthenticationError>()),
       );
     });
 
@@ -93,12 +94,12 @@ void main() {
           password: 'sekret',
           saltUuid16: salt,
           charShortName: 'wifiOp');
-      expect(
-        () => LampCrypto.decryptOpForTesting(ct,
+      await expectLater(
+        LampCrypto.decryptOpForTesting(ct,
             password: 'sekret',
             saltUuid16: salt,
             charShortName: 'mqttOp'),
-        throwsA(isA<Object>()),
+        throwsA(isA<SecretBoxAuthenticationError>()),
       );
     });
 
@@ -112,10 +113,10 @@ void main() {
       // Flip a bit in the tag region (bytes 13..28).
       final tampered = Uint8List.fromList(ct);
       tampered[20] ^= 0x01;
-      expect(
-        () => LampCrypto.decryptOpForTesting(tampered,
+      await expectLater(
+        LampCrypto.decryptOpForTesting(tampered,
             password: 'sekret', saltUuid16: salt, charShortName: 'wifiOp'),
-        throwsA(isA<Object>()),
+        throwsA(isA<SecretBoxAuthenticationError>()),
       );
     });
   });
