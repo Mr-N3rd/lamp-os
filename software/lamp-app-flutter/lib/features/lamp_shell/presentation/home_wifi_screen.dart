@@ -111,7 +111,7 @@ class _HomeWifiScreenState extends ConsumerState<HomeWifiScreen> {
 
     // Listen for failed state and show a SnackBar.
     ref.listen(wifiNotifierProvider(widget.lampId), (prev, next) {
-      if (next.value?.state == 'failed') {
+      if (prev?.value?.state != 'failed' && next.value?.state == 'failed') {
         final msg = _errorMessage(next.value?.lastError);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg)),
