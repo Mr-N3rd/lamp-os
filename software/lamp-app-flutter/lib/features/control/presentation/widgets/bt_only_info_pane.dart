@@ -1,16 +1,16 @@
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
-import '../../../../core/routing/routes.dart';
+import '../../../../core/theme/brand_colors.dart';
 import '../../../../core/widgets/info_panel.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 
-/// Renders a "this lamp is BT-only — set up home Wi-Fi" callout on the
-/// Control screen when the active lamp's advertisement reports
-/// `onMesh: false`, or when the lamp is not in the nearby list at all
-/// (direct-BLE-only case). Hidden when the lamp is currently on the mesh.
+/// Surfaces when the active lamp's advertisement reports `onMesh: false`
+/// (or the lamp isn't in the nearby list at all). BT-only means the
+/// firmware predates ESP-NOW mesh support — fixing it is a firmware
+/// update, not a Wi-Fi config tweak. In the meantime the lamp's own
+/// access-point + web UI is still available for direct configuration.
 class BtOnlyInfoPane extends ConsumerWidget {
   const BtOnlyInfoPane({super.key, required this.lampId});
   final String lampId;
@@ -20,22 +20,24 @@ class BtOnlyInfoPane extends ConsumerWidget {
     final onMesh = ref.watch(nearbyLampsNotifierProvider.select(
         (list) => list.firstWhereOrNull((l) => l.id == lampId)?.onMesh));
     if (onMesh == true) return const SizedBox.shrink();
-    return InfoPanel(
+    return const InfoPanel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'This lamp is reachable on Bluetooth only. Set up Home Wi-Fi '
-            'so you can use it from anywhere in your home.',
+          Text(
+            'This lamp is on Bluetooth only — it can\'t join the mesh '
+            'on its current firmware.',
           ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              icon: const Icon(Icons.wifi, size: 16),
-              label: const Text('Set up Home Wi-Fi'),
-              onPressed: () => context.push(AppRoutes.homeWifi(lampId)),
-            ),
+          SizedBox(height: 8),
+          Text(
+            'To enable mesh: visit update.lamplit.ca on your phone and '
+            'follow the firmware-update instructions.',
+          ),
+          SizedBox(height: 8),
+          Text(
+            'In the meantime you can still configure this lamp directly: '
+            'connect to its Wi-Fi access point and open the web UI.',
+            style: TextStyle(color: BrandColors.fogGrey, fontSize: 11),
           ),
         ],
       ),
