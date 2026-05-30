@@ -222,10 +222,9 @@ class _ExpressionEditorScreenState
               ),
               const SizedBox(height: 16),
 
-              // Trigger cadence — two sliders that hide the seconds math.
-              // "Frequency" is the center (geometric mean of min/max) on a
-              // rare↔often axis. "Predictability" widens the random spread
-              // around that center.
+              // Trigger cadence — two 0..1 normalized sliders. The widget owns its UI
+              // state; each drag emits a fresh (intervalMin, intervalMax) pair via
+              // ExpressionIntervalMath.
               _FrequencySpread(
                 intervalMin: draft.intervalMin,
                 intervalMax: draft.intervalMax,
@@ -488,7 +487,7 @@ class _FrequencySpreadState extends State<_FrequencySpread> {
         ),
         const Padding(
           padding: EdgeInsets.only(top: 12, bottom: 2),
-          child: Text('Predictability',
+          child: Text('Variation',
               style: TextStyle(color: BrandColors.lampWhite, fontSize: 14)),
         ),
         Row(
