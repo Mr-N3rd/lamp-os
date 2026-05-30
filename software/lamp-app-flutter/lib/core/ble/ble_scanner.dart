@@ -15,6 +15,7 @@ class BleAdvertisement {
     required this.baseRgb,
     required this.shadeRgb,
     required this.rssi,
+    this.onMesh = false,
   });
 
   final String id;
@@ -25,6 +26,11 @@ class BleAdvertisement {
   /// Shade color in 0xRRGGBB form, parsed from the lamp manufacturer data.
   final int shadeRgb;
   final int rssi;
+
+  /// True iff the firmware's advertisement byte 8 was non-zero. v1
+  /// firmware (8-byte payload) omits the byte; `onMesh` stays false. v2
+  /// firmware (9-byte payload) sets it based on `wifi::isConnected()`.
+  final bool onMesh;
 }
 
 abstract class BleScanner {
@@ -59,8 +65,13 @@ class FbpBleScanner implements BleScanner {
         // 128-bit service UUIDs are NOT in the advertisement (would overflow
         // the 31-byte adv limit — see firmware ble_control.cpp:640-644).
         final mfg = r.advertisementData.manufacturerData[_lampMfgId];
-        if (mfg == null || mfg.length < 6) continue;
-        // mfg payload: [baseR, baseG, baseB, shadeR, shadeG, shadeB]
+        if (mfg == null || mfg.length < 3) continue;
+        // mfg payload v1 (8 bytes incl. magic; 6 here after company-ID
+        //   strip): [baseR, baseG, baseB, shadeR, shadeG, shadeB]
+        // mfg payload v2 (6 bytes incl. magic; 4 here after strip):
+        //   [baseR, baseG, baseB, meshFlag]. We dropped shade to keep
+        //   the total adv inside NimBLE's data-length cap.
+        final isV2 = mfg.length == 4;
         _ctrl.add(BleAdvertisement(
           id: r.device.remoteId.str,
           name: r.advertisementData.advName.isNotEmpty
@@ -70,8 +81,11 @@ class FbpBleScanner implements BleScanner {
               .map((g) => g.str128.toLowerCase())
               .toList(),
           baseRgb: (mfg[0] << 16) | (mfg[1] << 8) | mfg[2],
-          shadeRgb: (mfg[3] << 16) | (mfg[4] << 8) | mfg[5],
+          // v2 lamps don't advertise shade — fall back to black so the
+          // factory-default heuristic still has a sensible default.
+          shadeRgb: isV2 ? 0 : (mfg[3] << 16) | (mfg[4] << 8) | mfg[5],
           rssi: r.rssi,
+          onMesh: isV2 && mfg[3] != 0,
         ));
       }
     });

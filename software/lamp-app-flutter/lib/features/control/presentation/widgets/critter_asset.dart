@@ -4,14 +4,14 @@
 /// `InventoryLamp`; this module maps that index to one of the available
 /// assets.
 ///
-/// TODO: extend the catalog to 8 distinct critters once we have SVGs that
-/// properly split into shade + body. Today only critters 1, 3, 5, 7 (from
-/// lamplit-web) have the right structure; the asset-N variants are
-/// single-fill sketches and would need per-path classification to be
-/// usable. While there are only 4 viable SVGs, indices cycle through
-/// them so the mapping is deterministic per-lamp and only visually
-/// "doubled up" — i.e. lamp index 1 and lamp index 5 share a critter
-/// shape.
+/// critter-7 was originally a single-gradient sketch in lamplit-web (only
+/// `critter7Gradient`); we hand-classified each path into shade vs body
+/// based on its y-coordinate range and republished it with two gradients
+/// (`critter7Shade` + `critter7Body`) so the runtime recoloring works.
+///
+/// TODO: same hand-classification pass could lift critter-asset-2/4/6/8
+/// from lamplit-web's `/public` directory into a Shade/Body split if we
+/// want eight distinct critters.
 library;
 
 const _critters = [

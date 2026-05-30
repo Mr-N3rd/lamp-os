@@ -2,7 +2,11 @@ import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../features/control/presentation/knockout_screen.dart';
+import '../../features/lamp_shell/presentation/add_expression_picker_screen.dart';
+import '../../features/lamp_shell/presentation/advanced_leds_screen.dart';
 import '../../features/lamp_shell/presentation/expression_editor_screen.dart';
+import '../../features/lamp_shell/presentation/home_mode_screen.dart';
+import '../../features/lamp_shell/presentation/home_wifi_screen.dart';
 import '../../features/inventory/application/active_lamp_notifier.dart';
 import '../../features/inventory/application/inventory_notifier.dart';
 import '../../features/lamp_shell/presentation/lamp_shell.dart';
@@ -61,6 +65,28 @@ GoRouter appRouter(Ref ref) {
         ),
       ),
       GoRoute(
+        path: '/lamp/:id/info',
+        builder: (_, state) => LampShell(
+          lampId: state.pathParameters['id']!,
+          initialTab: LampTab.info,
+        ),
+      ),
+      GoRoute(
+        path: '/lamp/:id/setup/wifi',
+        builder: (_, state) =>
+            HomeWifiScreen(lampId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/lamp/:id/setup/home-mode',
+        builder: (_, state) =>
+            HomeModeScreen(lampId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/lamp/:id/setup/advanced-leds',
+        builder: (_, state) =>
+            AdvancedLedsScreen(lampId: state.pathParameters['id']!),
+      ),
+      GoRoute(
         path: '/onboarding/add',
         builder: (_, _) => const AddLampShell(),
       ),
@@ -69,9 +95,15 @@ GoRouter appRouter(Ref ref) {
         builder: (_, state) => const NearbyLampsScreen(),
       ),
       GoRoute(
-        path: '/lamp/:id/control/knockout',
+        path: '/lamp/:id/setup/knockout',
         builder: (_, state) =>
             KnockoutScreen(lampId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/lamp/:id/expressions/new',
+        builder: (_, state) => AddExpressionPickerScreen(
+          lampId: state.pathParameters['id']!,
+        ),
       ),
       GoRoute(
         path: '/lamp/:id/expressions/:type/:target',

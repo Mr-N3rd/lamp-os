@@ -20,9 +20,13 @@ const _writeDebounce = Duration(milliseconds: 30);
 
 @Riverpod(keepAlive: false, name: 'controlNotifierProvider')
 class ControlNotifier extends _$ControlNotifier {
-  late final WriteCoalescer _brightnessWriter;
-  late final WriteCoalescer _shadeColorsWriter;
-  late final WriteCoalescer _baseColorsWriter;
+  // Nullable rather than `late final` so a Riverpod retry (which re-runs
+  // build() on the same notifier instance after a transient connect/auth
+  // failure) can re-assign without throwing LateInitializationError. We
+  // dispose the previous writer instances before swapping in new ones.
+  WriteCoalescer? _brightnessWriter;
+  WriteCoalescer? _shadeColorsWriter;
+  WriteCoalescer? _baseColorsWriter;
 
   // Per-pixel knockout debounce: keyed by pixel index.
   final Map<int, Timer?> _knockoutTimers = {};
@@ -32,11 +36,23 @@ class ControlNotifier extends _$ControlNotifier {
   Timer? _reconnectTimer;
   static const _reconnectDelays = [500, 1000, 2000, 4000, 8000]; // ms, capped
 
+  // Inventory "last-seen color" debouncer. We don't need to persist every
+  // slider tick — only the trailing value. The previous code was awaiting a
+  // SharedPreferences write + an inventory-state notification per tick,
+  // which dominated frame time during a drag. We collapse all the writes
+  // inside a window into one disk write at the trailing edge.
+  Timer? _seenFlushTimer;
+  LampColor? _pendingSeenShade;
+  LampColor? _pendingSeenBase;
+  static const _seenFlushDelay = Duration(milliseconds: 500);
+
   // Snapshot of the state as loaded from the lamp. Used for isDirty checks.
   late ControlState _original;
 
-  // Captured from the build argument for use in save().
-  late final String _deviceId;
+  // Captured from the build argument. Not `late final` because a Riverpod
+  // retry re-runs build() on the same notifier instance — the second pass
+  // would reassign and a final field throws LateInitializationError.
+  late String _deviceId;
 
   // ---------------------------------------------------------------------------
   // Inventory color-cache helpers
@@ -55,6 +71,26 @@ class ControlNotifier extends _$ControlNotifier {
         );
   }
 
+  /// Coalesces "last-seen color" updates into one trailing disk write.
+  /// Used by `setShadeColor` and `setBaseColors` so a continuous slider
+  /// drag at 60 fps doesn't translate into 60 SharedPreferences writes
+  /// (and 60 inventory-state notifications that rebuild LampShell).
+  void _queueSeen({LampColor? shade, LampColor? base}) {
+    if (shade != null) _pendingSeenShade = shade;
+    if (base != null) _pendingSeenBase = base;
+    _seenFlushTimer?.cancel();
+    _seenFlushTimer = Timer(_seenFlushDelay, () => unawaited(_flushSeen()));
+  }
+
+  Future<void> _flushSeen() async {
+    final s = _pendingSeenShade;
+    final b = _pendingSeenBase;
+    _pendingSeenShade = null;
+    _pendingSeenBase = null;
+    if (s == null && b == null) return;
+    await _updateSeen(shade: s, base: b);
+  }
+
   @override
   Future<ControlState> build(String deviceId) async {
     _deviceId = deviceId;
@@ -67,28 +103,15 @@ class ControlNotifier extends _$ControlNotifier {
     );
 
     await ble.connect(deviceId);
-    // Register disconnect immediately so a failure in auth or section reads
-    // still tears down the BLE connection on dispose.
+    // Register disconnect now — only after a successful connect. If connect
+    // itself threw, there's nothing to tear down, and registering this
+    // earlier would crash dispose on platforms where the BLE client can't
+    // run (e.g. flutter_blue_plus in unit tests). If auth or section reads
+    // throw below, this still fires on container teardown.
     ref.onDispose(() => ble.disconnect(deviceId));
     await AuthClient(ble: ble)
         .authenticate(deviceId: deviceId, password: lamp.controlPassword);
-
-    Future<Map<String, dynamic>> readJson(String charUuid) async {
-      final bytes = await ble.read(deviceId, BleUuids.controlService, charUuid);
-      return jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-    }
-
-    Future<List<dynamic>> readJsonList(String charUuid) async {
-      final bytes = await ble.read(deviceId, BleUuids.controlService, charUuid);
-      return jsonDecode(utf8.decode(bytes)) as List<dynamic>;
-    }
-
-    final lampJson = await readJson(BleUuids.lampSection);
-    final baseJson = await readJson(BleUuids.baseSection);
-    final shadeJson = await readJson(BleUuids.shadeSection);
-    final homeJson = await readJson(BleUuids.homeSection);
-    final mqttJson = await readJson(BleUuids.mqttSection);
-    final exprList = await readJsonList(BleUuids.exprSection);
+    final fresh = await _readSections(ble);
 
     // Live-preview writes are fire-and-forget. Swallow errors here so a
     // pending debounce timer that fires after the lamp disconnects (e.g.
@@ -99,10 +122,15 @@ class ControlNotifier extends _$ControlNotifier {
       try {
         await ble.write(deviceId, BleUuids.controlService, charUuid, v);
       } catch (_) {
-        // intentionally dropped
+        // intentionally dropped — live-preview writes are fire-and-forget
       }
     }
 
+    // Dispose any prior writers (from an earlier build() invocation on this
+    // instance after a Riverpod retry) before swapping new ones in.
+    _brightnessWriter?.dispose();
+    _shadeColorsWriter?.dispose();
+    _baseColorsWriter?.dispose();
     _brightnessWriter = WriteCoalescer(
       onWrite: (v) => safeWrite(BleUuids.brightness, v),
       debounce: _writeDebounce,
@@ -117,14 +145,20 @@ class ControlNotifier extends _$ControlNotifier {
     );
 
     ref.onDispose(() {
-      _brightnessWriter.dispose();
-      _shadeColorsWriter.dispose();
-      _baseColorsWriter.dispose();
+      _brightnessWriter?.dispose();
+      _shadeColorsWriter?.dispose();
+      _baseColorsWriter?.dispose();
       for (final t in _knockoutTimers.values) {
         t?.cancel();
       }
       _knockoutTimers.clear();
       _knockoutPending.clear();
+      // Flush any pending "last-seen color" to disk before tearing down so
+      // the trailing value of an in-flight drag isn't dropped.
+      if (_seenFlushTimer?.isActive == true) {
+        _seenFlushTimer!.cancel();
+        unawaited(_flushSeen());
+      }
       // disconnect is handled by the earlier onDispose registered right after
       // connect(), ensuring it always runs even if build() throws mid-way.
     });
@@ -139,7 +173,45 @@ class ControlNotifier extends _$ControlNotifier {
       _reconnectTimer?.cancel();
     });
 
-    final loaded = ControlState(
+    await _updateSeen(
+      shade: fresh.shade.colors.single,
+      base: fresh.base.colors[fresh.base.ac],
+    );
+
+    // Self-heal: if a previous session left the firmware's configurator
+    // behaviors stuck in disabled=true (the test_expression / complete
+    // protocol can leak that state — see ExpressionEditorScreen.dispose),
+    // re-enable them on every connect. Cheap one-shot write; safe no-op
+    // when the configurators are already enabled.
+    await _completeExpressionTest(ble);
+
+    _original = fresh;
+    return fresh;
+  }
+
+  /// Reads every section characteristic and returns a fresh ControlState.
+  /// Assumes the BLE link is connected and authenticated. Used by both
+  /// build() (initial load) and save() (post-reboot reload).
+  Future<ControlState> _readSections(BleClient ble) async {
+    Future<Map<String, dynamic>> readJson(String charUuid) async {
+      final bytes =
+          await ble.read(_deviceId, BleUuids.controlService, charUuid);
+      return jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    }
+
+    Future<List<dynamic>> readJsonList(String charUuid) async {
+      final bytes =
+          await ble.read(_deviceId, BleUuids.controlService, charUuid);
+      return jsonDecode(utf8.decode(bytes)) as List<dynamic>;
+    }
+
+    final lampJson = await readJson(BleUuids.lampSection);
+    final baseJson = await readJson(BleUuids.baseSection);
+    final shadeJson = await readJson(BleUuids.shadeSection);
+    final homeJson = await readJson(BleUuids.homeSection);
+    final mqttJson = await readJson(BleUuids.mqttSection);
+    final exprList = await readJsonList(BleUuids.exprSection);
+    return ControlState(
       lamp: LampSection.fromJson(lampJson),
       base: BaseSection.fromJson(baseJson),
       shade: ShadeSection.fromJson(shadeJson),
@@ -147,12 +219,6 @@ class ControlNotifier extends _$ControlNotifier {
       mqtt: MqttSection.fromJson(mqttJson),
       expressions: ExpressionsSection.fromJson(exprList),
     );
-    await _updateSeen(
-      shade: loaded.shade.colors.single,
-      base: loaded.base.colors[loaded.base.ac],
-    );
-    _original = loaded;
-    return loaded;
   }
 
   // ---------------------------------------------------------------------------
@@ -308,12 +374,37 @@ class ControlNotifier extends _$ControlNotifier {
       if (!looksLikeReboot) rethrow;
     }
 
-    // 4. Schedule a reconnect by invalidating this provider after a delay.
-    //    Riverpod will rebuild and run the standard connect/auth/read path.
-    //    Meanwhile the UI shows ConnectingView (loading state).
+    // 4. After the firmware reboots, manually re-read every section and
+    //    refresh state. We do NOT call ref.invalidateSelf() — Riverpod would
+    //    re-run build() on the same notifier instance and the `late final`
+    //    fields above would throw LateInitializationError. Doing the reload
+    //    inline keeps the writers + connection subscription intact.
     state = const AsyncLoading<ControlState>();
-    Future<void>.delayed(const Duration(seconds: 5), () {
-      if (ref.mounted) ref.invalidateSelf();
+    Future<void>.delayed(const Duration(seconds: 5), () async {
+      if (!ref.mounted) return;
+      try {
+        final inv = await ref.read(inventoryNotifierProvider.future);
+        final lamp = inv.firstWhere(
+          (l) => l.id == _deviceId,
+          orElse: () =>
+              throw StateError('lamp $_deviceId not in inventory'),
+        );
+        // ble.connect is idempotent — if the reconnect loop already brought
+        // the link back up this is a no-op.
+        await ble.connect(_deviceId);
+        await AuthClient(ble: ble).authenticate(
+            deviceId: _deviceId, password: lamp.controlPassword);
+        final fresh = await _readSections(ble);
+        if (!ref.mounted) return;
+        _original = fresh;
+        state = AsyncData(fresh);
+        await _updateSeen(
+          shade: fresh.shade.colors.single,
+          base: fresh.base.colors[fresh.base.ac],
+        );
+      } catch (e, st) {
+        if (ref.mounted) state = AsyncError(e, st);
+      }
     });
   }
 
@@ -328,7 +419,7 @@ class ControlNotifier extends _$ControlNotifier {
         advancedEnabled: cur.lamp.advancedEnabled,
       ),
     ));
-    _brightnessWriter.schedule(Uint8List.fromList([v]));
+    _brightnessWriter?.schedule(Uint8List.fromList([v]));
   }
 
   Future<void> setShadeColor(LampColor color) async {
@@ -338,8 +429,8 @@ class ControlNotifier extends _$ControlNotifier {
     state = AsyncData(cur.copyWith(
       shade: ShadeSection(px: cur.shade.px, bpp: cur.shade.bpp, colors: colors),
     ));
-    _shadeColorsWriter.schedule(_encodeColors(colors));
-    await _updateSeen(shade: color);
+    _shadeColorsWriter?.schedule(_encodeColors(colors));
+    _queueSeen(shade: color);
   }
 
   Future<void> setBaseColors(List<LampColor> colors) async {
@@ -354,10 +445,10 @@ class ControlNotifier extends _$ControlNotifier {
         knockout: cur.base.knockout,
       ),
     ));
-    _baseColorsWriter.schedule(_encodeColors(colors));
+    _baseColorsWriter?.schedule(_encodeColors(colors));
     if (colors.isNotEmpty) {
       final acIdx = cur.base.ac.clamp(0, colors.length - 1);
-      await _updateSeen(base: colors[acIdx]);
+      _queueSeen(base: colors[acIdx]);
     }
   }
 
@@ -424,6 +515,35 @@ class ControlNotifier extends _$ControlNotifier {
       );
     } catch (_) {
       // intentionally dropped (same contract as the other live-preview writes)
+    }
+  }
+
+  /// Reset every knockout entry to 100% in one pass. Cheaper than looping
+  /// `setKnockoutPixel` N times because we mutate state once and skip the
+  /// per-pixel debounce timers. Firmware has no clear-all sentinel, so we
+  /// still write index+100 per previously-edited pixel.
+  Future<void> clearKnockout() async {
+    final cur = state.value;
+    if (cur == null) return;
+    final edited = cur.base.knockout.keys.toList();
+    if (edited.isEmpty) return;
+    for (final t in _knockoutTimers.values) {
+      t?.cancel();
+    }
+    _knockoutTimers.clear();
+    _knockoutPending.clear();
+    state = AsyncData(cur.copyWith(
+      base: BaseSection(
+        px: cur.base.px,
+        ac: cur.base.ac,
+        bpp: cur.base.bpp,
+        colors: cur.base.colors,
+        knockout: const {},
+      ),
+    ));
+    final ble = ref.read(bleClientProvider);
+    for (final i in edited) {
+      unawaited(_safeWriteKnockout(ble, i, 100));
     }
   }
 
@@ -597,6 +717,21 @@ class ControlNotifier extends _$ControlNotifier {
     ));
   }
 
+  Future<void> setBasePx(int px) async {
+    final cur = state.value;
+    if (cur == null) return;
+    final clamped = px.clamp(1, 255);
+    state = AsyncData(cur.copyWith(
+      base: BaseSection(
+        px: clamped,
+        ac: cur.base.ac,
+        bpp: cur.base.bpp,
+        colors: cur.base.colors,
+        knockout: cur.base.knockout,
+      ),
+    ));
+  }
+
   Future<void> setShadeBpp(int bpp) async {
     final cur = state.value;
     if (cur == null) return;
@@ -605,6 +740,19 @@ class ControlNotifier extends _$ControlNotifier {
       shade: ShadeSection(
         px: cur.shade.px,
         bpp: clamped,
+        colors: cur.shade.colors,
+      ),
+    ));
+  }
+
+  Future<void> setShadePx(int px) async {
+    final cur = state.value;
+    if (cur == null) return;
+    final clamped = px.clamp(1, 255);
+    state = AsyncData(cur.copyWith(
+      shade: ShadeSection(
+        px: clamped,
+        bpp: cur.shade.bpp,
         colors: cur.shade.colors,
       ),
     ));
@@ -660,17 +808,55 @@ class ControlNotifier extends _$ControlNotifier {
   }
 
   /// Live-preview an expression configuration without persisting it.
+  ///
+  /// Sends the firmware-expected envelope `{"a":"test_expression", "type":…,
+  /// "target":…}`. Previously this sent the full ExpressionConfig JSON
+  /// directly, which the firmware's BLE dispatch couldn't recognize and
+  /// silently treated as `test_expression` against a non-existent type —
+  /// leaving the configurator behaviors stuck in `disabled=true` until the
+  /// next `test_expression_complete` (or lamp reboot). The colors and
+  /// parameters are already on the lamp via the `expressionOp` upsert that
+  /// preceded this call, so the envelope only needs to name the entry.
   Future<void> testExpression(ExpressionConfig entry) async {
     final ble = ref.read(bleClientProvider);
+    final payload = <String, dynamic>{
+      'a': 'test_expression',
+      'type': entry.type,
+      'target': entry.target,
+    };
     try {
       await ble.write(
         _deviceId,
         BleUuids.controlService,
         BleUuids.expressionTest,
-        Uint8List.fromList(utf8.encode(jsonEncode(entry.toJson()))),
+        Uint8List.fromList(utf8.encode(jsonEncode(payload))),
       );
     } catch (_) {
       // best-effort live write — matches the existing live-preview contract
+    }
+  }
+
+  /// Tells the firmware to end a `test_expression` preview and re-enable
+  /// the configurator behaviors. Safe to call when no preview is in flight
+  /// — firmware treats it idempotently. Called from build() (heal stuck
+  /// state on connect) and from the expression editor's dispose.
+  Future<void> completeExpressionTest() async {
+    final ble = ref.read(bleClientProvider);
+    await _completeExpressionTest(ble);
+  }
+
+  /// Private form so build() can use the BleClient it already holds.
+  Future<void> _completeExpressionTest(BleClient ble) async {
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.expressionTest,
+        Uint8List.fromList(
+            utf8.encode('{"a":"test_expression_complete"}')),
+      );
+    } catch (_) {
+      // best-effort — same contract as the live-preview writes
     }
   }
 
@@ -747,8 +933,8 @@ class ControlNotifier extends _$ControlNotifier {
 
   void _pushLocalState(ControlState cur) {
     _brightnessWriter
-        .schedule(Uint8List.fromList([cur.lamp.brightness]));
-    _shadeColorsWriter.schedule(_encodeColors(cur.shade.colors));
-    _baseColorsWriter.schedule(_encodeColors(cur.base.colors));
+        ?.schedule(Uint8List.fromList([cur.lamp.brightness]));
+    _shadeColorsWriter?.schedule(_encodeColors(cur.shade.colors));
+    _baseColorsWriter?.schedule(_encodeColors(cur.base.colors));
   }
 }

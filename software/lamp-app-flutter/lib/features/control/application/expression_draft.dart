@@ -1,5 +1,6 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../lamp_shell/domain/expression_meta.dart';
 import '../domain/sections.dart';
 import 'control_notifier.dart';
 
@@ -9,20 +10,32 @@ part 'expression_draft.g.dart';
 /// keep-alive provider so navigating away from the editor and back doesn't
 /// lose in-progress edits. Save / Delete invalidate the entry.
 ///
-/// Family key is `(lampId, type, target)`. The sentinel `_new` is used by
-/// the FAB "+ Add expression" entry point; for that key, an empty draft is
-/// returned. For all other keys we copy the matching existing entry out of
-/// `controlNotifierProvider`'s `expressions.expressions`.
+/// Family key is `(lampId, type, target)`. If the family entry doesn't
+/// match any existing expression, a fresh draft is created with that
+/// (type, target) — this is the path used for new entries after the user
+/// picks them in `AddExpressionPickerScreen`.
 @Riverpod(keepAlive: true, name: 'expressionDraftProvider')
 class ExpressionDraft extends _$ExpressionDraft {
   @override
   ExpressionConfig build(String lampId, String type, int target) {
-    if (type == '_new') return _defaultDraft();
     final state = ref.read(controlNotifierProvider(lampId)).value;
-    if (state == null) return _defaultDraft();
-    return state.expressions.expressions.firstWhere(
-      (e) => e.type == type && e.target == target,
-      orElse: _defaultDraft,
+    if (state != null) {
+      final existing = state.expressions.expressions
+          .where((e) => e.type == type && e.target == target);
+      if (existing.isNotEmpty) return existing.first;
+    }
+    // No matching entry — build a default draft pre-populated with the
+    // firmware's documented defaults for this type.
+    final meta = ExpressionTypeMeta.byKey(type);
+    return ExpressionConfig(
+      type: type,
+      enabled: true,
+      colors: const [],
+      intervalMin: 60,
+      intervalMax: 900,
+      target: target,
+      parameters: Map<String, int>.from(
+          meta?.defaultParameters ?? const <String, int>{}),
     );
   }
 
@@ -32,17 +45,5 @@ class ExpressionDraft extends _$ExpressionDraft {
 
   /// Drop the draft so the next [build] gets a fresh copy. Call after Save
   /// or Delete to avoid leaking stale state into the next editor visit.
-  void reset() {
-    ref.invalidate(expressionDraftProvider(lampId, type, target));
-  }
-
-  static ExpressionConfig _defaultDraft() => const ExpressionConfig(
-        type: 'breathing',
-        enabled: true,
-        colors: [],
-        intervalMin: 60,
-        intervalMax: 900,
-        target: 3,
-        parameters: {},
-      );
+  void reset() => ref.invalidateSelf();
 }

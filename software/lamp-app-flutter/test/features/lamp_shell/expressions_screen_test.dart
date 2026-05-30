@@ -145,4 +145,30 @@ void main() {
     // directly by control_notifier_test.dart; here we only verify the
     // snackbar plumbing.
   });
+
+  testWidgets('toggling the Enabled switch flips ExpressionConfig.enabled',
+      (tester) async {
+    final c = await _withState(
+        '[{"type":"breathing","enabled":true,"colors":[],'
+        '"intervalMin":10,"intervalMax":20,"target":1}]');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: ExpressionsScreen(lampId: _devId),
+      ),
+    ));
+    await _pumpToData(tester, 'breathing');
+
+    await tester.tap(find.byType(Switch).first);
+    await tester.pump();
+
+    final e = c
+        .read(controlNotifierProvider(_devId))
+        .value!
+        .expressions
+        .expressions
+        .firstWhere((x) => x.type == 'breathing' && x.target == 1);
+    expect(e.enabled, isFalse);
+  });
 }

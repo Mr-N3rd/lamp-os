@@ -39,8 +39,26 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
   // time a different lamp's preview mounts.
   static final Map<String, String> _templates = {};
 
+  // Compiled once per process; the patterns are constant across builds.
+  static final RegExp _shadePattern = RegExp(
+    r'<linearGradient[^>]*id="[^"]*Shade"[^>]*>.*?</linearGradient>',
+    dotAll: true,
+  );
+  static final RegExp _bodyPattern = RegExp(
+    r'<linearGradient[^>]*id="[^"]*Body"[^>]*>.*?</linearGradient>',
+    dotAll: true,
+  );
+
   String? _localTemplate;
   String? _loadedFor; // the asset path the local template was loaded from
+
+  // Single-entry memoization for `_renderSvg`. Each rebuild that hits the
+  // same shade + base color set returns the cached SVG string instead of
+  // running three regex passes again. The cache key is the joined hex of
+  // the inputs; values are cheap to compute and short.
+  String? _memoKey;
+  String? _memoRendered;
+  String? _memoFor; // the template the cached result was rendered against
 
   Future<void> _ensureLoaded(String assetPath) async {
     final cached = _templates[assetPath];
@@ -63,23 +81,28 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
   }
 
   /// Build replacement `<stop>` elements for [colors], spreading them evenly
-  /// from 0 % to 100 % along the gradient axis.
+  /// from 0 % to 100 % along the gradient axis. Uses the `style="stop-color:…"`
+  /// form to match the convention in the critter SVGs — flutter_svg renders
+  /// the style-attribute form reliably but ignores `stop-color="…"` written
+  /// as a direct attribute, which would leave the gradient uncolored.
+  String _stopTag(double pct, String hex) =>
+      '<stop offset="${pct.round()}%" '
+      'style="stop-color:#$hex;stop-opacity:1"/>';
+
   String _buildStops(List<LampColor> colors) {
     if (colors.isEmpty) {
-      return '<stop offset="0%" stop-color="#000000"/>'
-          '<stop offset="100%" stop-color="#000000"/>';
+      return _stopTag(0, '000000') + _stopTag(100, '000000');
     }
     if (colors.length == 1) {
       final hex = colors.single.toHex().substring(1, 7);
-      return '<stop offset="0%" stop-color="#$hex"/>'
-          '<stop offset="100%" stop-color="#$hex"/>';
+      return _stopTag(0, hex) + _stopTag(100, hex);
     }
     final n = colors.length;
     final buf = StringBuffer();
     for (var i = 0; i < n; i++) {
-      final pct = (i / (n - 1) * 100).round();
+      final pct = i / (n - 1) * 100;
       final hex = colors[i].toHex().substring(1, 7);
-      buf.write('<stop offset="$pct%" stop-color="#$hex"/>');
+      buf.write(_stopTag(pct, hex));
     }
     return buf.toString();
   }
@@ -88,39 +111,37 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
   /// the current widget state.
   String _renderSvg(String template) {
     final shadeHex = widget.shade.toHex().substring(1, 7);
-    final shadeStops = '<stop offset="0%" stop-color="#$shadeHex"/>'
-        '<stop offset="100%" stop-color="#$shadeHex"/>';
+    final shadeStops = _stopTag(0, shadeHex) + _stopTag(100, shadeHex);
     final bodyStops = _buildStops(widget.baseColors);
 
-    final shadePattern = RegExp(
-      r'<linearGradient[^>]*id="[^"]*Shade"[^>]*>.*?</linearGradient>',
-      dotAll: true,
-    );
-    final bodyPattern = RegExp(
-      r'<linearGradient[^>]*id="[^"]*Body"[^>]*>.*?</linearGradient>',
-      dotAll: true,
-    );
+    String rewrite(String tag, String stops) {
+      final openTag = '${tag.split('>').first}>';
+      return '$openTag$stops</linearGradient>';
+    }
 
-    return template
-        .replaceFirstMapped(shadePattern, (m) {
-          final tag = m.group(0)!;
-          final openTag = '${tag.split('>').first}>';
-          return '$openTag$shadeStops</linearGradient>';
-        })
-        .replaceFirstMapped(bodyPattern, (m) {
-          final tag = m.group(0)!;
-          final openTag = '${tag.split('>').first}>';
-          return '$openTag$bodyStops</linearGradient>';
-        });
+    var out = template;
+    out = out.replaceFirstMapped(
+        _shadePattern, (m) => rewrite(m.group(0)!, shadeStops));
+    out = out.replaceFirstMapped(
+        _bodyPattern, (m) => rewrite(m.group(0)!, bodyStops));
+    return out;
   }
 
   @override
   Widget build(BuildContext context) {
-    final inventory = ref.watch(inventoryNotifierProvider).value;
-    final lamp =
-        inventory?.firstWhereOrNull((l) => l.id == widget.deviceId);
+    // Watch ONLY this lamp's critterIndex. The previous `ref.watch` against
+    // the whole inventory list caused a full LampPreview rebuild every time
+    // setShadeColor / setBaseColors called _updateSeen (which writes
+    // lastShadeColor + lastBaseColor back into inventory). Per slider tick
+    // that storm of rebuilds was wasting frames re-rendering the same SVG.
+    final critterIndex =
+        ref.watch(inventoryNotifierProvider.select((async) {
+      return async.value
+          ?.firstWhereOrNull((l) => l.id == widget.deviceId)
+          ?.critterIndex;
+    }));
     final asset = critterAssetFor(
-      critterIndex: lamp?.critterIndex,
+      critterIndex: critterIndex,
       deviceId: widget.deviceId,
     );
 
@@ -135,11 +156,30 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
     if (template == null) {
       return SizedBox(width: widget.size, height: widget.size);
     }
+    final cacheKey =
+        '${widget.shade.toHex()}|${widget.baseColors.map((c) => c.toHex()).join(",")}';
+    String rendered;
+    if (_memoFor == template &&
+        _memoKey == cacheKey &&
+        _memoRendered != null) {
+      rendered = _memoRendered!;
+    } else {
+      rendered = _renderSvg(template);
+      _memoFor = template;
+      _memoKey = cacheKey;
+      _memoRendered = rendered;
+    }
     return SizedBox(
       width: widget.size,
       height: widget.size,
+      // Key on the rendered content so flutter_svg treats each unique
+      // shade/base color set as a brand-new picture. Without this, the
+      // SvgPicture widget is reused across rebuilds and flutter_svg's
+      // internal picture cache hands back the first decode even when our
+      // source string differs.
       child: SvgPicture.string(
-        _renderSvg(template),
+        rendered,
+        key: ValueKey<String>(cacheKey),
         width: widget.size,
         height: widget.size,
       ),

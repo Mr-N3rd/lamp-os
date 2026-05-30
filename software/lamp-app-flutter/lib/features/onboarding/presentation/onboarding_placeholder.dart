@@ -28,13 +28,15 @@ class OnboardingPlaceholder extends StatelessWidget {
             ),
             const SizedBox(height: 24),
             FilledButton.icon(
-              onPressed: () => context.go('/onboarding/add'),
+              // `push` so the add-lamp wizard's back/cancel returns here.
+              onPressed: () => context.push('/onboarding/add'),
               icon: const Icon(Icons.add),
               label: const Text('Add a lamp'),
             ),
             const SizedBox(height: 12),
             TextButton(
-              onPressed: () => context.go('/devices'),
+              // `push` so the debug scan screen's back arrow returns here.
+              onPressed: () => context.push('/devices'),
               child: const Text('Live scan (debug)'),
             ),
           ],

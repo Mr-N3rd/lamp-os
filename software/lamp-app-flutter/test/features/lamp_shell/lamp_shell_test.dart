@@ -18,6 +18,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// reach for the real flutter_blue_plus platform (unsupported in tests).
 ProviderContainer _container() {
   return ProviderContainer(
+    // Disable Riverpod's default exponential-backoff retry: this test
+    // intentionally lets controlNotifier's build() error out (the BLE client
+    // has no seeded characteristics), and the retry timer would otherwise
+    // outlive the test widget and trip the pending-timer assertion.
+    retry: (_, _) => null,
     overrides: [
       bleClientProvider.overrideWithValue(InMemoryBleClient()),
       bleScannerProvider.overrideWithValue(FakeBleScanner()),

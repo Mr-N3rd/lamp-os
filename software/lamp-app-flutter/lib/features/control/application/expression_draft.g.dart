@@ -12,10 +12,10 @@ part of 'expression_draft.dart';
 /// keep-alive provider so navigating away from the editor and back doesn't
 /// lose in-progress edits. Save / Delete invalidate the entry.
 ///
-/// Family key is `(lampId, type, target)`. The sentinel `_new` is used by
-/// the FAB "+ Add expression" entry point; for that key, an empty draft is
-/// returned. For all other keys we copy the matching existing entry out of
-/// `controlNotifierProvider`'s `expressions.expressions`.
+/// Family key is `(lampId, type, target)`. If the family entry doesn't
+/// match any existing expression, a fresh draft is created with that
+/// (type, target) — this is the path used for new entries after the user
+/// picks them in `AddExpressionPickerScreen`.
 
 @ProviderFor(ExpressionDraft)
 final expressionDraftProvider = ExpressionDraftFamily._();
@@ -24,20 +24,20 @@ final expressionDraftProvider = ExpressionDraftFamily._();
 /// keep-alive provider so navigating away from the editor and back doesn't
 /// lose in-progress edits. Save / Delete invalidate the entry.
 ///
-/// Family key is `(lampId, type, target)`. The sentinel `_new` is used by
-/// the FAB "+ Add expression" entry point; for that key, an empty draft is
-/// returned. For all other keys we copy the matching existing entry out of
-/// `controlNotifierProvider`'s `expressions.expressions`.
+/// Family key is `(lampId, type, target)`. If the family entry doesn't
+/// match any existing expression, a fresh draft is created with that
+/// (type, target) — this is the path used for new entries after the user
+/// picks them in `AddExpressionPickerScreen`.
 final class ExpressionDraftProvider
     extends $NotifierProvider<ExpressionDraft, ExpressionConfig> {
   /// Working copy of an expression while the user is editing it. Held in a
   /// keep-alive provider so navigating away from the editor and back doesn't
   /// lose in-progress edits. Save / Delete invalidate the entry.
   ///
-  /// Family key is `(lampId, type, target)`. The sentinel `_new` is used by
-  /// the FAB "+ Add expression" entry point; for that key, an empty draft is
-  /// returned. For all other keys we copy the matching existing entry out of
-  /// `controlNotifierProvider`'s `expressions.expressions`.
+  /// Family key is `(lampId, type, target)`. If the family entry doesn't
+  /// match any existing expression, a fresh draft is created with that
+  /// (type, target) — this is the path used for new entries after the user
+  /// picks them in `AddExpressionPickerScreen`.
   ExpressionDraftProvider._({
     required ExpressionDraftFamily super.from,
     required (String, String, int) super.argument,
@@ -82,16 +82,16 @@ final class ExpressionDraftProvider
   }
 }
 
-String _$expressionDraftHash() => r'aef036fd2028a76491f42b86e682987b1165fd4a';
+String _$expressionDraftHash() => r'2a11da9188636652aff1a7cbd629292be4bedda9';
 
 /// Working copy of an expression while the user is editing it. Held in a
 /// keep-alive provider so navigating away from the editor and back doesn't
 /// lose in-progress edits. Save / Delete invalidate the entry.
 ///
-/// Family key is `(lampId, type, target)`. The sentinel `_new` is used by
-/// the FAB "+ Add expression" entry point; for that key, an empty draft is
-/// returned. For all other keys we copy the matching existing entry out of
-/// `controlNotifierProvider`'s `expressions.expressions`.
+/// Family key is `(lampId, type, target)`. If the family entry doesn't
+/// match any existing expression, a fresh draft is created with that
+/// (type, target) — this is the path used for new entries after the user
+/// picks them in `AddExpressionPickerScreen`.
 
 final class ExpressionDraftFamily extends $Family
     with
@@ -115,10 +115,10 @@ final class ExpressionDraftFamily extends $Family
   /// keep-alive provider so navigating away from the editor and back doesn't
   /// lose in-progress edits. Save / Delete invalidate the entry.
   ///
-  /// Family key is `(lampId, type, target)`. The sentinel `_new` is used by
-  /// the FAB "+ Add expression" entry point; for that key, an empty draft is
-  /// returned. For all other keys we copy the matching existing entry out of
-  /// `controlNotifierProvider`'s `expressions.expressions`.
+  /// Family key is `(lampId, type, target)`. If the family entry doesn't
+  /// match any existing expression, a fresh draft is created with that
+  /// (type, target) — this is the path used for new entries after the user
+  /// picks them in `AddExpressionPickerScreen`.
 
   ExpressionDraftProvider call(String lampId, String type, int target) =>
       ExpressionDraftProvider._(argument: (lampId, type, target), from: this);
@@ -131,10 +131,10 @@ final class ExpressionDraftFamily extends $Family
 /// keep-alive provider so navigating away from the editor and back doesn't
 /// lose in-progress edits. Save / Delete invalidate the entry.
 ///
-/// Family key is `(lampId, type, target)`. The sentinel `_new` is used by
-/// the FAB "+ Add expression" entry point; for that key, an empty draft is
-/// returned. For all other keys we copy the matching existing entry out of
-/// `controlNotifierProvider`'s `expressions.expressions`.
+/// Family key is `(lampId, type, target)`. If the family entry doesn't
+/// match any existing expression, a fresh draft is created with that
+/// (type, target) — this is the path used for new entries after the user
+/// picks them in `AddExpressionPickerScreen`.
 
 abstract class _$ExpressionDraft extends $Notifier<ExpressionConfig> {
   late final _$args = ref.$arg as (String, String, int);

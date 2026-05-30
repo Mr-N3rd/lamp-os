@@ -74,13 +74,16 @@ class KnockoutScreen extends ConsumerWidget {
                         ),
                       ),
                       const Spacer(),
-                      TextButton(
-                        onPressed: () {
-                          for (var i = 0; i < pixelCount; i++) {
-                            notifier.setKnockoutPixel(i, 100);
-                          }
-                        },
-                        child: const Text('Reset all'),
+                      Tooltip(
+                        message: state.base.knockout.isEmpty
+                            ? 'No knockout pixels to reset'
+                            : 'Reset every pixel to 100%',
+                        child: TextButton(
+                          onPressed: state.base.knockout.isEmpty
+                              ? null
+                              : () => notifier.clearKnockout(),
+                          child: const Text('Reset all'),
+                        ),
                       ),
                     ],
                   ),

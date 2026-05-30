@@ -28,6 +28,24 @@ class LampColor {
     );
   }
 
+  /// Lenient parser used by the color-picker hex input. Accepts `#RRGGBB`
+  /// (W defaults to 0) or `#RRGGBBWW`, leading `#` optional, case-insensitive.
+  /// Returns null on any parse failure so the caller can surface an error
+  /// state without a try/catch.
+  static LampColor? tryFromHex(String input) {
+    var s = input.trim();
+    if (s.startsWith('#')) s = s.substring(1);
+    if (s.length != 6 && s.length != 8) return null;
+    final r = int.tryParse(s.substring(0, 2), radix: 16);
+    final g = int.tryParse(s.substring(2, 4), radix: 16);
+    final b = int.tryParse(s.substring(4, 6), radix: 16);
+    if (r == null || g == null || b == null) return null;
+    if (s.length == 6) return LampColor(r: r, g: g, b: b, w: 0);
+    final w = int.tryParse(s.substring(6, 8), radix: 16);
+    if (w == null) return null;
+    return LampColor(r: r, g: g, b: b, w: w);
+  }
+
   String toHex() {
     String h(int v) => v.toRadixString(16).padLeft(2, '0').toUpperCase();
     return '#${h(r)}${h(g)}${h(b)}${h(w)}';

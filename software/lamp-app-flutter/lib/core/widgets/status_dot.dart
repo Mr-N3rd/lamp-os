@@ -24,7 +24,21 @@ class _StatusDotState extends State<StatusDot>
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat(reverse: true);
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Pause the pulse when this widget is in an off-screen tab. Flutter's
+    // TickerMode is `false` for descendants of a NavigationBar destination
+    // that isn't currently visible; respecting it keeps a row of dots from
+    // burning CPU when their lamp shell tab is hidden.
+    if (TickerMode.getValuesNotifier(context).value.enabled) {
+      if (!_ctrl.isAnimating) _ctrl.repeat(reverse: true);
+    } else {
+      _ctrl.stop();
+    }
   }
 
   @override
@@ -35,9 +49,12 @@ class _StatusDotState extends State<StatusDot>
 
   @override
   Widget build(BuildContext context) {
+    // Mesh-connected lamps glow brand green (mesh is the live, healthy
+    // state). BT-only is auroraBlue at ~45 % so it reads as "online but not
+    // the live link." Offline is a neutral grey.
     final color = switch (widget.kind) {
       StatusKind.offline => BrandColors.slateGrey,
-      StatusKind.bluetooth => const Color(0xFF4D6F53),
+      StatusKind.bluetooth => BrandColors.auroraBlue.withValues(alpha: 0.45),
       StatusKind.mesh => BrandColors.lumenGreen,
     };
 

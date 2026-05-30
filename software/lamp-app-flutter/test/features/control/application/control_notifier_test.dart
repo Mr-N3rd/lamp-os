@@ -337,13 +337,20 @@ void main() {
           controlPassword: 'secret',
         ));
     await c.read(controlNotifierProvider(_devId).future);
+    // Hold a listener so the provider doesn't auto-dispose during the
+    // 500 ms debounce window for `_updateSeen` and kill the flush timer.
+    final sub = c.listen<AsyncValue<ControlState>>(
+        controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
 
     await c
         .read(controlNotifierProvider(_devId).notifier)
         .setShadeColor(const LampColor(r: 0xFF, g: 0x88, b: 0x00, w: 0));
 
-    // Wait for the async updateSeen call to land.
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    // The updateSeen call is now debounced (~500 ms) so a 60 fps slider
+    // doesn't generate 60 disk writes per second. Wait past the window
+    // before asserting the trailing value landed.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
 
     final inv = await c.read(inventoryNotifierProvider.future);
     expect(inv.first.lastShadeColor, [0xFF, 0x88, 0x00]);
@@ -364,14 +371,18 @@ void main() {
           controlPassword: 'secret',
         ));
     await c.read(controlNotifierProvider(_devId).future);
+    // See setShadeColor test for why we hold a listener here.
+    final sub = c.listen<AsyncValue<ControlState>>(
+        controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
 
     await c.read(controlNotifierProvider(_devId).notifier).setBaseColors([
       const LampColor(r: 0x11, g: 0x22, b: 0x33, w: 0),
       const LampColor(r: 0x44, g: 0x55, b: 0x66, w: 0),
     ]);
 
-    // Wait for the async updateSeen call to land.
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    // See setShadeColor test — same 500 ms debounce.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
 
     final inv = await c.read(inventoryNotifierProvider.future);
     final lamp = inv.firstWhere((l) => l.id == _devId);
@@ -759,7 +770,42 @@ void main() {
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.expressionTest);
     final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    // Firmware-expected envelope: action + the named entry's keys. The full
+    // ExpressionConfig isn't sent — the lamp already has those colors and
+    // parameters from the preceding expressionOp upsert.
+    expect(parsed['a'], 'test_expression');
     expect(parsed['type'], 'breathing');
+    expect(parsed['target'], 1);
+  });
+
+  test('completeExpressionTest writes the test_expression_complete envelope',
+      () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    // build() itself sends the complete write at the end of the load, so the
+    // last value on expressionTest is already what we want to assert. Call
+    // the public mutator anyway to verify the production code path.
+    await c
+        .read(controlNotifierProvider(_devId).notifier)
+        .completeExpressionTest();
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.expressionTest);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect(parsed['a'], 'test_expression_complete');
   });
 
   test('save() is a no-op while disconnected', () async {

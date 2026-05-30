@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/brand_colors.dart';
 import '../../domain/lamp_color.dart';
 
 /// A circular swatch that visualizes a [LampColor] — including the
@@ -22,7 +23,7 @@ class LampColorSwatch extends StatelessWidget {
   final double size;
   final Color? borderColor;
 
-  static const _warmWhiteHex = Color(0xFFFABB3E);
+  static const _warmWhiteHex = BrandColors.warmWhite;
 
   /// `(W / 255) * (availableRoom / 765)`, clamped to [0, 1].
   /// Exposed for unit tests.

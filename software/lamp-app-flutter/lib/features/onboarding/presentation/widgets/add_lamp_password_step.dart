@@ -31,11 +31,17 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
     final canContinue = state.password.isNotEmpty;
     return Padding(
       padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+      // SizedBox.expand fills the Padding's width so `crossAxisAlignment
+      // .center` lands the heading at screen-center (a bare Column shrinks
+      // to its widest child and pins to the left edge of the Padding).
+      child: SizedBox(
+        width: double.infinity,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
           const Text(
             'Set a password',
+            textAlign: TextAlign.center,
             style: TextStyle(
               color: BrandColors.lampWhite,
               fontSize: 18,
@@ -46,6 +52,7 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
           const Text(
             'This password protects the lamp so only phones you trust can '
             'control it.',
+            textAlign: TextAlign.center,
             style: TextStyle(color: BrandColors.fogGrey),
           ),
           const SizedBox(height: 16),
@@ -92,7 +99,8 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
               ),
             ],
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -21,6 +21,7 @@ abstract class NearbyLamp with _$NearbyLamp {
     required int baseRgb,
     required int shadeRgb,
     required int lastSeenEpochMs,
+    @Default(false) bool onMesh,
   }) = _NearbyLamp;
 
   factory NearbyLamp.fromJson(Map<String, dynamic> json) =>

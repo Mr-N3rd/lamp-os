@@ -7,7 +7,6 @@ void main() {
       expect(AppRoutes.onboarding, '/onboarding');
       expect(AppRoutes.addLamp, '/onboarding/add');
       expect(AppRoutes.lampPicker, '/lamp-picker');
-      expect(AppRoutes.info, '/info');
     });
 
     test('parameterized builders', () {
@@ -16,8 +15,14 @@ void main() {
       expect(AppRoutes.expressions('abc'), '/lamp/abc/expressions');
       expect(AppRoutes.expressionEditor('abc', 'breathing', 3),
           '/lamp/abc/expressions/breathing/3');
-      expect(AppRoutes.knockout('abc'), '/lamp/abc/control/knockout');
+      // Knockout moved under /setup/ (was /control/) when knockout entry
+      // moved from the Control tab to the Setup tab in the row-list refactor.
+      expect(AppRoutes.knockout('abc'), '/lamp/abc/setup/knockout');
       expect(AppRoutes.setup('abc'), '/lamp/abc/setup');
+      expect(AppRoutes.info('abc'), '/lamp/abc/info');
+      expect(AppRoutes.homeWifi('abc'), '/lamp/abc/setup/wifi');
+      expect(AppRoutes.homeMode('abc'), '/lamp/abc/setup/home-mode');
+      expect(AppRoutes.advancedLeds('abc'), '/lamp/abc/setup/advanced-leds');
     });
   });
 }

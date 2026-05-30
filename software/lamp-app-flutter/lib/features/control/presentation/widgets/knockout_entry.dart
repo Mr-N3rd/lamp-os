@@ -17,7 +17,9 @@ class KnockoutEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => context.go(AppRoutes.knockout(lampId)),
+      // `push` not `go` — KnockoutScreen has an explicit back button that
+      // calls `context.pop()`; `go` would replace history and strand it.
+      onTap: () => context.push(AppRoutes.knockout(lampId)),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

@@ -12,6 +12,19 @@ class BrightnessCard extends StatelessWidget {
   final int value;
   final ValueChanged<int> onChanged;
 
+  /// Interpolates the slider thumb black → amber-gold → white as brightness
+  /// goes 0 → 50 → 100 %. Ported from the prior Vue app's BrightnessSlider
+  /// (`software/lamp-app/src/components/BrightnessSlider.vue:27-48`). The
+  /// amber midpoint visually signals "warm light, partially dimmed."
+  static Color _thumbColorFor(int pct) {
+    if (pct <= 50) {
+      return Color.lerp(
+          BrandColors.midnightBlack, BrandColors.amberGold, pct / 50)!;
+    }
+    return Color.lerp(
+        BrandColors.amberGold, BrandColors.lampWhite, (pct - 50) / 50)!;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -46,12 +59,20 @@ class BrightnessCard extends StatelessWidget {
               ),
             ],
           ),
-          Slider(
-            min: 0,
-            max: 100,
-            divisions: 100,
-            value: value.toDouble(),
-            onChanged: (v) => onChanged(v.toInt()),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              thumbColor: _thumbColorFor(value),
+              // Track stays on the brand palette; only the thumb morphs so
+              // the cue is unmistakable but the chrome stays consistent.
+              activeTrackColor: BrandColors.amberGold.withValues(alpha: 0.5),
+            ),
+            child: Slider(
+              min: 0,
+              max: 100,
+              divisions: 100,
+              value: value.toDouble(),
+              onChanged: (v) => onChanged(v.toInt()),
+            ),
           ),
         ],
       ),

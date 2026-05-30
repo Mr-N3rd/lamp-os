@@ -25,11 +25,22 @@ class _ConnectingViewState extends ConsumerState<ConnectingView>
   late final AnimationController _ctrl = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1400),
-  )..repeat(reverse: true);
+  );
 
   late final Animation<double> _scale = Tween(begin: 0.96, end: 1.04)
       .chain(CurveTween(curve: Curves.easeInOut))
       .animate(_ctrl);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Pause the pulse when off-screen (e.g. another tab is foregrounded).
+    if (TickerMode.getValuesNotifier(context).value.enabled) {
+      if (!_ctrl.isAnimating) _ctrl.repeat(reverse: true);
+    } else {
+      _ctrl.stop();
+    }
+  }
 
   @override
   void dispose() {

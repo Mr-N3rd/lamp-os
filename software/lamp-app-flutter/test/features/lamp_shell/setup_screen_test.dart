@@ -7,6 +7,7 @@ import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
+import 'package:lamp_app/features/control/application/control_notifier.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/setup_screen.dart';
 
 import '../../_support/seed.dart';
@@ -25,11 +26,6 @@ Future<void> _seed(
       advancedEnabled: advancedEnabled,
     );
 
-/// Build a container with BLE seeded and inventory populated.
-/// The controlNotifier is NOT pre-primed here — pre-priming via
-/// ProviderContainer.read() then closing the temporary subscription schedules
-/// Riverpod's 0-ms dispose timer inside testWidgets' FakeAsync zone, which
-/// causes "pending timer" failures. Instead the widget's watch primes it.
 Future<ProviderContainer> _makeContainer({
   String homeSsid = '',
   bool advancedEnabled = false,
@@ -49,86 +45,128 @@ Future<ProviderContainer> _makeContainer({
   return c;
 }
 
-/// Pump enough frames for InMemoryBleClient's async-but-synchronous operations
-/// to complete so the provider reaches data state. ConnectingView runs an
-/// infinite animation so pumpAndSettle would never converge.
+/// Pump frames until the row list has rendered (its lampname subtitle is
+/// the most stable visible anchor). ConnectingView runs an infinite
+/// animation so pumpAndSettle would never converge.
 Future<void> _pumpToData(WidgetTester tester) async {
-  // Each BLE operation is an async function that resolves in one microtask.
-  // Five sections × one hop each = 5 microtask bounces; a handful of pumps
-  // drains the queue. We stop early once the Setup fields are visible.
   for (var i = 0; i < 30; i++) {
     await tester.pump(const Duration(milliseconds: 16));
-    if (find.text('Lamp name').evaluate().isNotEmpty) return;
+    if (find.text('jacko').evaluate().isNotEmpty) return;
   }
 }
 
+Widget _wrap(ProviderContainer c) => UncontrolledProviderScope(
+      container: c,
+      child: MaterialApp(
+        // GoRouter's context.push needs a Router; we don't need one for these
+        // row-rendering tests since taps fire onTap callbacks not navigation.
+        // The dialog path uses Navigator, which a plain MaterialApp provides.
+        home: const Scaffold(body: SetupScreen(lampId: _devId)),
+      ),
+    );
+
 void main() {
-  testWidgets('Renders the lamp name in the name field', (tester) async {
-    final c = await _makeContainer();
-    addTearDown(c.dispose);
-
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: c,
-      child: const MaterialApp(
-        home: Scaffold(body: SetupScreen(lampId: _devId)),
-      ),
-    ));
-    await _pumpToData(tester);
-
-    final field = find.widgetWithText(TextField, 'jacko');
-    expect(field, findsOneWidget);
-  });
-
-  testWidgets('Hides MQTT section when home SSID is empty', (tester) async {
-    final c = await _makeContainer(); // homeSsid: '' (default)
-    addTearDown(c.dispose);
-
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: c,
-      child: const MaterialApp(
-        home: Scaffold(body: SetupScreen(lampId: _devId)),
-      ),
-    ));
-    await _pumpToData(tester);
-
-    expect(find.text('Smart Home (MQTT)'), findsNothing);
-  });
-
-  testWidgets('Shows MQTT section once home SSID is set', (tester) async {
-    final c = await _makeContainer(homeSsid: 'home');
-    addTearDown(c.dispose);
-
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: c,
-      child: const MaterialApp(
-        home: Scaffold(body: SetupScreen(lampId: _devId)),
-      ),
-    ));
-    await _pumpToData(tester);
-
-    expect(find.text('Smart Home (MQTT)'), findsOneWidget);
-  });
-
-  testWidgets('Hides Advanced section by default; reveals it when enabled',
+  testWidgets('renders Name row with current lamp name as subtitle',
       (tester) async {
     final c = await _makeContainer();
     addTearDown(c.dispose);
-
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: c,
-      child: const MaterialApp(
-        home: Scaffold(body: SetupScreen(lampId: _devId)),
-      ),
-    ));
+    await tester.pumpWidget(_wrap(c));
     await _pumpToData(tester);
 
-    expect(find.text('Advanced'), findsNothing);
-    expect(find.text('Enable advanced settings'), findsOneWidget);
+    expect(find.text('Name'), findsOneWidget);
+    expect(find.text('jacko'), findsOneWidget);
+  });
 
-    await tester.tap(find.text('Enable advanced settings'));
+  testWidgets('Home Wi-Fi row shows "Not connected" when SSID empty',
+      (tester) async {
+    final c = await _makeContainer();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(_wrap(c));
+    await _pumpToData(tester);
+    expect(find.text('Home Wi-Fi'), findsOneWidget);
+    expect(find.text('Not connected'), findsOneWidget);
+  });
+
+  testWidgets('Home Wi-Fi row subtitle reflects SSID once set',
+      (tester) async {
+    final c = await _makeContainer(homeSsid: 'home');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(_wrap(c));
+    await _pumpToData(tester);
+    expect(find.text('home'), findsOneWidget);
+  });
+
+  testWidgets('Home Mode row tells the user to set Wi-Fi first when empty',
+      (tester) async {
+    final c = await _makeContainer();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(_wrap(c));
+    await _pumpToData(tester);
+
+    expect(find.text('Home Mode'), findsOneWidget);
+    expect(find.text('Requires home Wi-Fi'), findsOneWidget);
+  });
+
+  testWidgets('Advanced LED row hidden by default', (tester) async {
+    final c = await _makeContainer();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(_wrap(c));
+    await _pumpToData(tester);
+    expect(find.text('Advanced LED setup'), findsNothing);
+  });
+
+  testWidgets('Advanced LED row appears when advanced is enabled',
+      (tester) async {
+    final c = await _makeContainer(advancedEnabled: true);
+    addTearDown(c.dispose);
+    await tester.pumpWidget(_wrap(c));
+    await _pumpToData(tester);
+    expect(find.text('Advanced LED setup'), findsOneWidget);
+  });
+
+  testWidgets('Knockout row is always visible on Setup', (tester) async {
+    final c = await _makeContainer();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(_wrap(c));
+    await _pumpToData(tester);
+
+    expect(find.text('Per-pixel knockout'), findsOneWidget);
+  });
+
+  testWidgets('tapping Name row opens a rename dialog that updates the notifier',
+      (tester) async {
+    final c = await _makeContainer();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(_wrap(c));
+    await _pumpToData(tester);
+
+    await tester.tap(find.text('Name'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    await tester.enterText(find.byType(TextField).first, 'foyer');
+    await tester.tap(find.text('Save'));
     await tester.pump();
 
-    expect(find.text('Advanced'), findsOneWidget);
-    expect(find.text('Enable advanced settings'), findsNothing);
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.lamp.name,
+      'foyer',
+    );
+  });
+
+  testWidgets('toggling Home Wi-Fi switch off clears the SSID',
+      (tester) async {
+    final c = await _makeContainer(homeSsid: 'home');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(_wrap(c));
+    await _pumpToData(tester);
+
+    await tester.tap(find.byType(Switch).first);
+    await tester.pump();
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.home.ssid,
+      isEmpty,
+    );
   });
 }

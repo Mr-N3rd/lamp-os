@@ -17,6 +17,15 @@ StatusKind statusFor({
   required bool connected,
 }) {
   if (connected) return StatusKind.mesh;
-  final inNearby = nearby.any((l) => l.id == lampId);
-  return inNearby ? StatusKind.bluetooth : StatusKind.offline;
+  NearbyLamp? hit;
+  for (final l in nearby) {
+    if (l.id == lampId) {
+      hit = l;
+      break;
+    }
+  }
+  if (hit == null) return StatusKind.offline;
+  // v2-firmware lamps advertise their mesh state — surface that even when
+  // we don't hold a live BLE link to this lamp.
+  return hit.onMesh ? StatusKind.mesh : StatusKind.bluetooth;
 }

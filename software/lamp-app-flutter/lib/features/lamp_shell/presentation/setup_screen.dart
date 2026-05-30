@@ -1,12 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/settings_row.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/application/control_state.dart';
-import '../../control/domain/sections.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
 
+/// Setup tab — mobile-style row list. Tapping a row drills into a
+/// sub-pane (HomeWifi, HomeMode, AdvancedLeds, Knockout). The Home Wi-Fi
+/// row has a tap-toggle that flips the SSID between "" and a placeholder
+/// without leaving the screen; tapping the chevron-y area drills in to
+/// pick the network / enter the password.
 class SetupScreen extends ConsumerWidget {
   const SetupScreen({super.key, required this.lampId});
   final String lampId;
@@ -39,466 +46,110 @@ class _SetupBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final n = ref.read(controlNotifierProvider(lampId).notifier);
+    final homeOn = state.home.ssid.isNotEmpty;
     return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.only(top: 8, bottom: 32),
       children: [
-        _Section(
-          title: 'Lamp name',
-          child: _NameField(initial: state.lamp.name, onChanged: n.setLampName),
+        const SettingsGroupHeading('Lamp'),
+        SettingsRow(
+          icon: Icons.label_outline,
+          title: 'Name',
+          subtitle: state.lamp.name.isEmpty ? '(unnamed)' : state.lamp.name,
+          onTap: () => _showRenameDialog(context, state.lamp.name, n.setLampName),
         ),
-        _Section(
-          title: 'Home WiFi',
-          child: _HomeFields(home: state.home, notifier: n),
-        ),
-        if (state.home.ssid.isNotEmpty)
-          _CollapsibleSection(
-            title: 'Smart Home (MQTT)',
-            initiallyExpanded: state.mqtt.enabled,
-            child: _MqttFields(mqtt: state.mqtt, notifier: n),
+        const SettingsGroupHeading('Connectivity'),
+        SettingsRow(
+          icon: Icons.wifi,
+          title: 'Home Wi-Fi',
+          subtitle: homeOn ? state.home.ssid : 'Not connected',
+          trailing: Switch(
+            value: homeOn,
+            // Tapping the toggle directly when off drills in to pick a
+            // network; turning the toggle off clears the saved SSID.
+            onChanged: (v) {
+              if (!v) {
+                n.setHomeSsid('');
+                n.setHomePassword('');
+              } else {
+                context.push(AppRoutes.homeWifi(lampId));
+              }
+            },
           ),
+          onTap: () => context.push(AppRoutes.homeWifi(lampId)),
+        ),
+        SettingsRow(
+          icon: Icons.home_outlined,
+          title: 'Home Mode',
+          subtitle: homeOn
+              ? 'Brightness ${state.home.brightness}%'
+              : 'Requires home Wi-Fi',
+          onTap: () => context.push(AppRoutes.homeMode(lampId)),
+        ),
+        const SettingsGroupHeading('LEDs'),
+        SettingsRow(
+          icon: Icons.grid_on,
+          title: 'Per-pixel knockout',
+          subtitle: '${state.base.knockout.length} pixel(s) masked',
+          onTap: () => context.push(AppRoutes.knockout(lampId)),
+        ),
         if (state.lamp.advancedEnabled)
-          _CollapsibleSection(
-            title: 'Advanced',
-            initiallyExpanded: true,
-            child: _AdvancedFields(state: state, notifier: n),
-          )
-        else
-          _EnableAdvancedTile(
-            onEnable: () => n.setLampAdvancedEnabled(true),
+          SettingsRow(
+            icon: Icons.memory,
+            title: 'Advanced LED setup',
+            subtitle:
+                'Base ${state.base.px}×${state.base.bpp == 4 ? "RGBW" : "RGB"} · '
+                'Shade ${state.shade.px}×${state.shade.bpp == 4 ? "RGBW" : "RGB"}',
+            onTap: () => context.push(AppRoutes.advancedLeds(lampId)),
+          ),
+        if (state.lamp.advancedEnabled) const SettingsGroupHeading('Advanced'),
+        if (state.lamp.advancedEnabled)
+          SettingsRow(
+            icon: Icons.science_outlined,
+            title: 'Advanced enabled',
+            subtitle: 'Hide to lock advanced settings until next 5-tap unlock',
+            trailing: Switch(
+              value: true,
+              onChanged: (_) => n.setLampAdvancedEnabled(false),
+            ),
           ),
       ],
     );
   }
 }
 
-class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.child});
-  final String title;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+/// Lightweight rename modal — keeps the row tappable without taking the
+/// user to a full sub-screen for a one-field edit.
+Future<void> _showRenameDialog(
+  BuildContext context,
+  String initial,
+  ValueChanged<String> onSave,
+) async {
+  final ctrl = TextEditingController(text: initial);
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: BrandColors.midnightBlack,
+      title: const Text('Rename lamp',
+          style: TextStyle(color: BrandColors.lampWhite)),
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Name'),
+        style: const TextStyle(color: BrandColors.lampWhite),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: BrandColors.lampWhite,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.4,
-            ),
-          ),
-          const SizedBox(height: 12),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-class _CollapsibleSection extends StatelessWidget {
-  const _CollapsibleSection({
-    required this.title,
-    required this.child,
-    this.initiallyExpanded = false,
-  });
-  final String title;
-  final Widget child;
-  final bool initiallyExpanded;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-      ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          shape: const RoundedRectangleBorder(side: BorderSide.none),
-          initiallyExpanded: initiallyExpanded,
-          title: Text(
-            title,
-            style: const TextStyle(
-              color: BrandColors.lampWhite,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.4,
-            ),
-          ),
-          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          children: [child],
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: const Text('Cancel'),
         ),
-      ),
-    );
-  }
-}
-
-class _NameField extends StatefulWidget {
-  const _NameField({required this.initial, required this.onChanged});
-  final String initial;
-  final ValueChanged<String> onChanged;
-
-  @override
-  State<_NameField> createState() => _NameFieldState();
-}
-
-class _NameFieldState extends State<_NameField> {
-  late final TextEditingController _ctrl =
-      TextEditingController(text: widget.initial);
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: _ctrl,
-      style: const TextStyle(color: BrandColors.lampWhite),
-      decoration: const InputDecoration(
-        labelText: 'Lamp name',
-        border: OutlineInputBorder(),
-      ),
-      onChanged: widget.onChanged,
-    );
-  }
-}
-
-class _HomeFields extends StatefulWidget {
-  const _HomeFields({required this.home, required this.notifier});
-  final HomeSection home;
-  final ControlNotifier notifier;
-
-  @override
-  State<_HomeFields> createState() => _HomeFieldsState();
-}
-
-class _HomeFieldsState extends State<_HomeFields> {
-  late final TextEditingController _ssid =
-      TextEditingController(text: widget.home.ssid);
-  late final TextEditingController _password = TextEditingController();
-  late final TextEditingController _brightness =
-      TextEditingController(text: '${widget.home.brightness}');
-
-  bool get _hasExistingPassword =>
-      widget.home.password == '********' || widget.home.password.isNotEmpty;
-
-  @override
-  void didUpdateWidget(_HomeFields old) {
-    super.didUpdateWidget(old);
-    // Reflect external state changes (e.g. post-save section reload) into
-    // the controllers without clobbering a focused user mid-typing.
-    if (old.home.ssid != widget.home.ssid && !_ssid.value.composing.isValid) {
-      _ssid.text = widget.home.ssid;
-    }
-    if (old.home.brightness != widget.home.brightness) {
-      _brightness.text = '${widget.home.brightness}';
-    }
-  }
-
-  @override
-  void dispose() {
-    _ssid.dispose();
-    _password.dispose();
-    _brightness.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextField(
-          controller: _ssid,
-          style: const TextStyle(color: BrandColors.lampWhite),
-          decoration: const InputDecoration(
-            labelText: 'SSID',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: widget.notifier.setHomeSsid,
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _password,
-          obscureText: true,
-          style: const TextStyle(color: BrandColors.lampWhite),
-          decoration: InputDecoration(
-            labelText: 'Password',
-            hintText: _hasExistingPassword
-                ? '(unchanged — type to replace)'
-                : null,
-            suffixIcon: _hasExistingPassword && _password.text.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.only(right: 8),
-                    child: Tooltip(
-                      message:
-                          'A password is set; leaving this blank keeps it.',
-                      child: Icon(Icons.lock,
-                          size: 16, color: BrandColors.lumenGreen),
-                    ),
-                  )
-                : null,
-            border: const OutlineInputBorder(),
-          ),
-          onChanged: (v) {
-            setState(() {}); // refresh suffixIcon
-            // Empty input → keep the sentinel; the save merge will strip it.
-            widget.notifier.setHomePassword(v.isEmpty ? '********' : v);
+        FilledButton(
+          onPressed: () {
+            onSave(ctrl.text.trim());
+            Navigator.of(ctx).pop();
           },
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            const Text(
-              'Brightness',
-              style: TextStyle(color: BrandColors.lampWhite, fontSize: 13),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Slider(
-                min: 0,
-                max: 100,
-                divisions: 100,
-                value: widget.home.brightness.toDouble(),
-                onChanged: (v) => widget.notifier.setHomeBrightness(v.round()),
-              ),
-            ),
-            SizedBox(
-              width: 40,
-              child: Text(
-                '${widget.home.brightness}%',
-                textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: BrandColors.fogGrey,
-                  fontSize: 12,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ),
-          ],
+          child: const Text('Save'),
         ),
       ],
-    );
-  }
-}
-
-class _MqttFields extends StatefulWidget {
-  const _MqttFields({required this.mqtt, required this.notifier});
-  final MqttSection mqtt;
-  final ControlNotifier notifier;
-
-  @override
-  State<_MqttFields> createState() => _MqttFieldsState();
-}
-
-class _MqttFieldsState extends State<_MqttFields> {
-  late final _host = TextEditingController(text: widget.mqtt.brokerHost);
-  late final _port = TextEditingController(text: '${widget.mqtt.brokerPort}');
-  late final _user = TextEditingController(text: widget.mqtt.username);
-  late final _password = TextEditingController();
-  late final _topic = TextEditingController(text: widget.mqtt.topicPrefix);
-
-  @override
-  void didUpdateWidget(_MqttFields old) {
-    super.didUpdateWidget(old);
-    if (old.mqtt.brokerHost != widget.mqtt.brokerHost &&
-        !_host.value.composing.isValid) {
-      _host.text = widget.mqtt.brokerHost;
-    }
-    if (old.mqtt.brokerPort != widget.mqtt.brokerPort) {
-      _port.text = '${widget.mqtt.brokerPort}';
-    }
-    if (old.mqtt.username != widget.mqtt.username &&
-        !_user.value.composing.isValid) {
-      _user.text = widget.mqtt.username;
-    }
-    if (old.mqtt.topicPrefix != widget.mqtt.topicPrefix &&
-        !_topic.value.composing.isValid) {
-      _topic.text = widget.mqtt.topicPrefix;
-    }
-  }
-
-  @override
-  void dispose() {
-    _host.dispose();
-    _port.dispose();
-    _user.dispose();
-    _password.dispose();
-    _topic.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Enabled',
-              style: TextStyle(color: BrandColors.lampWhite, fontSize: 13)),
-          value: widget.mqtt.enabled,
-          onChanged: widget.notifier.setMqttEnabled,
-        ),
-        const SizedBox(height: 4),
-        TextField(
-          controller: _host,
-          style: const TextStyle(color: BrandColors.lampWhite),
-          decoration: const InputDecoration(
-            labelText: 'Broker host',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: widget.notifier.setMqttBrokerHost,
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _port,
-          keyboardType: TextInputType.number,
-          style: const TextStyle(color: BrandColors.lampWhite),
-          decoration: const InputDecoration(
-            labelText: 'Broker port',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: (v) {
-            final n = int.tryParse(v);
-            if (n != null) widget.notifier.setMqttBrokerPort(n);
-          },
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _user,
-          style: const TextStyle(color: BrandColors.lampWhite),
-          decoration: const InputDecoration(
-            labelText: 'Username',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: widget.notifier.setMqttUsername,
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _password,
-          obscureText: true,
-          style: const TextStyle(color: BrandColors.lampWhite),
-          decoration: InputDecoration(
-            labelText: 'Password',
-            hintText: (widget.mqtt.password == '********' ||
-                    widget.mqtt.password.isNotEmpty)
-                ? '(unchanged — type to replace)'
-                : null,
-            suffixIcon: (widget.mqtt.password == '********' ||
-                        widget.mqtt.password.isNotEmpty) &&
-                    _password.text.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.only(right: 8),
-                    child: Tooltip(
-                      message:
-                          'A password is set; leaving this blank keeps it.',
-                      child: Icon(Icons.lock,
-                          size: 16, color: BrandColors.lumenGreen),
-                    ),
-                  )
-                : null,
-            border: const OutlineInputBorder(),
-          ),
-          onChanged: (v) {
-            setState(() {}); // refresh suffixIcon
-            widget.notifier.setMqttPassword(v.isEmpty ? '********' : v);
-          },
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _topic,
-          style: const TextStyle(color: BrandColors.lampWhite),
-          decoration: const InputDecoration(
-            labelText: 'Topic prefix',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: widget.notifier.setMqttTopicPrefix,
-        ),
-      ],
-    );
-  }
-}
-
-class _AdvancedFields extends StatelessWidget {
-  const _AdvancedFields({required this.state, required this.notifier});
-  final ControlState state;
-  final ControlNotifier notifier;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('Base strip type',
-            style: TextStyle(color: BrandColors.lampWhite, fontSize: 13)),
-        const SizedBox(height: 4),
-        SegmentedButton<int>(
-          showSelectedIcon: false,
-          segments: const [
-            ButtonSegment(value: 4, label: Text('RGBW (4 bpp)')),
-            ButtonSegment(value: 3, label: Text('RGB (3 bpp)')),
-          ],
-          selected: {state.base.bpp},
-          onSelectionChanged: (s) => notifier.setBaseBpp(s.first),
-        ),
-        const SizedBox(height: 12),
-        const Text('Shade strip type',
-            style: TextStyle(color: BrandColors.lampWhite, fontSize: 13)),
-        const SizedBox(height: 4),
-        SegmentedButton<int>(
-          showSelectedIcon: false,
-          segments: const [
-            ButtonSegment(value: 4, label: Text('RGBW (4 bpp)')),
-            ButtonSegment(value: 3, label: Text('RGB (3 bpp)')),
-          ],
-          selected: {state.shade.bpp},
-          onSelectionChanged: (s) => notifier.setShadeBpp(s.first),
-        ),
-        const SizedBox(height: 12),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text(
-            'Advanced enabled',
-            style: TextStyle(color: BrandColors.lampWhite, fontSize: 13),
-          ),
-          value: state.lamp.advancedEnabled,
-          onChanged: notifier.setLampAdvancedEnabled,
-        ),
-      ],
-    );
-  }
-}
-
-class _EnableAdvancedTile extends StatelessWidget {
-  const _EnableAdvancedTile({required this.onEnable});
-  final VoidCallback onEnable;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: TextButton(
-        onPressed: onEnable,
-        child: const Text('Enable advanced settings'),
-      ),
-    );
-  }
+    ),
+  );
 }

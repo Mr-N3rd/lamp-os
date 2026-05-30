@@ -101,8 +101,11 @@ class ExpressionsScreen extends ConsumerWidget {
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => GoRouter.maybeOf(context)?.go(
-          AppRoutes.expressionEditor(lampId, '_new', 3),
+        // Pushes the friendly target + type picker; the editor is reached
+        // from there with a real `(type, target)` pair, not the legacy
+        // `_new` sentinel.
+        onPressed: () => GoRouter.maybeOf(context)?.push(
+          AppRoutes.addExpression(lampId),
         ),
         tooltip: 'Add expression',
         child: const Icon(Icons.add),
@@ -175,7 +178,8 @@ class _ExpressionTile extends StatelessWidget {
       confirmDismiss: (_) => onConfirmDelete(),
       onDismissed: (_) => onDelete(),
       child: InkWell(
-        onTap: () => GoRouter.maybeOf(context)?.go(
+        // `push` not `go` — see the FAB callsite for the same reason.
+        onTap: () => GoRouter.maybeOf(context)?.push(
           AppRoutes.expressionEditor(
               lampId, expression.type, expression.target),
         ),
