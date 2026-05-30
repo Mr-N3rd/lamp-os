@@ -7,6 +7,7 @@ import '../domain/lamp_color.dart';
 import 'widgets/base_card.dart';
 import 'widgets/base_editor_sheet.dart';
 import 'widgets/brightness_card.dart';
+import 'widgets/bt_only_info_pane.dart';
 import 'widgets/connecting_view.dart';
 import 'widgets/connection_banner.dart';
 import 'widgets/lamp_preview.dart';
@@ -46,10 +47,6 @@ class ControlScreen extends ConsumerWidget {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
-                  BrightnessCard(
-                    value: state.lamp.brightness,
-                    onChanged: notifier.setBrightness,
-                  ),
                   // "Hello my name is:" nameplate beside the live critter
                   // — ports `CritterNameplate.vue` from the old UI.
                   Padding(
@@ -95,6 +92,7 @@ class ControlScreen extends ConsumerWidget {
                       ],
                     ),
                   ),
+                  BtOnlyInfoPane(lampId: lampId),
                   ShadeCard(
                     color: shade,
                     bpp: state.shade.bpp,
@@ -105,6 +103,11 @@ class ControlScreen extends ConsumerWidget {
                     activeIndex: state.base.ac,
                     onTap: () =>
                         showBaseEditorSheet(context, lampId: lampId),
+                  ),
+                  const SizedBox(height: 12),
+                  BrightnessCard(
+                    value: state.lamp.brightness,
+                    onChanged: notifier.setBrightness,
                   ),
                 ],
               ),
