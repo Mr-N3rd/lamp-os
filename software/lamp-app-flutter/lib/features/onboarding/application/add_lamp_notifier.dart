@@ -26,7 +26,7 @@ class AddLampNotifier extends _$AddLampNotifier {
   /// attempt to reconnect for the post-claim password-verification probe.
   /// Tests can override this to `Duration.zero`.
   @visibleForTesting
-  static Duration verifyDelay = const Duration(seconds: 5);
+  static Duration verifyDelay = const Duration(seconds: 8);
 
   @override
   AddLampState build() => const AddLampState();

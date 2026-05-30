@@ -463,8 +463,19 @@ void loop() {
   //
   // The setMeshState helper is idempotent: it only re-applies
   // setManufacturerData when the flag flips, so calling it every loop
-  // tick is fine.
-  bt.setMeshState(!lamp::nearbyLamps.getReachableViaBle(60000).empty());
+  // tick is fine — once we're past the post-boot stabilisation window.
+  //
+  // Skip the first 5 seconds after boot. Otherwise the very first
+  // loop tick flips s_meshStateInitialized false→true and rebuilds
+  // the advertisement packet via setAdvertisementData, and the first
+  // HELLO from a neighbour 1-2 sec later flips meshFlag 0→1 and
+  // rebuilds it AGAIN. Both rebuilds momentarily stop + restart
+  // advertising on the BLE host task, which destabilises any phone
+  // that's mid-connection — the exact failure pattern the AddLamp
+  // verify reconnect hits about 5 s post-reboot.
+  if (millis() >= 5000) {
+    bt.setMeshState(!lamp::nearbyLamps.getReachableViaBle(60000).empty());
+  }
 
   if (pendingBrightness >= 0) {
     uint8_t level = static_cast<uint8_t>(pendingBrightness);
