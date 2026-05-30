@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/core/ble/ble_scanner.dart';
+import 'package:lamp_app/core/ble/lamp_crypto.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
@@ -101,7 +102,13 @@ void main() {
     final ble = c.read(bleClientProvider);
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.wifiOp);
-    expect(jsonDecode(utf8.decode(written)), {'op': 'scan'});
+    expect(written[0], LampCrypto.magicCiphertext);
+    final plain = await LampCrypto.decryptOpForTesting(
+        written,
+        password: 'secret',
+        saltUuid16: uuidSaltLE16(BleUuids.wifiOp),
+        charShortName: 'wifiOp');
+    expect(jsonDecode(utf8.decode(plain)), {'op': 'scan'});
   });
 
   testWidgets('tapping a network opens the password sheet', (tester) async {
