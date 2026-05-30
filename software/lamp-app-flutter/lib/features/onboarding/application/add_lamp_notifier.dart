@@ -98,6 +98,19 @@ class AddLampNotifier extends _$AddLampNotifier {
     );
     try {
       await Future<void>.delayed(verifyDelay);
+      // Force a fresh BLE link. After setupApply the firmware fades + reboots,
+      // but flutter_blue_plus typically still believes it's connected (it only
+      // notices via LINK_SUPERVISION_TIMEOUT, which can take >1s). Calling
+      // connect() in that stale state is a no-op, so the next write fires
+      // into a dead handle and Android returns GATT_ERROR (133). Explicitly
+      // disconnecting first guarantees a real reconnect against the rebooted
+      // lamp.
+      try {
+        await ble.disconnect(state.deviceId);
+      } catch (_) {
+        // already-disconnected is fine
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
       await ble.connect(state.deviceId);
       await AuthClient(ble: ble).authenticate(
         deviceId: state.deviceId,

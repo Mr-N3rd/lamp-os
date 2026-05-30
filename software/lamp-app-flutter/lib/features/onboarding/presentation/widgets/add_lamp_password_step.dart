@@ -17,10 +17,12 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
   late final TextEditingController _pwd = TextEditingController(
     text: ref.read(addLampNotifierProvider).password,
   );
+  final _confirm = TextEditingController();
 
   @override
   void dispose() {
     _pwd.dispose();
+    _confirm.dispose();
     super.dispose();
   }
 
@@ -28,7 +30,10 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
   Widget build(BuildContext context) {
     final notifier = ref.read(addLampNotifierProvider.notifier);
     final state = ref.watch(addLampNotifierProvider);
-    final canContinue = state.password.isNotEmpty;
+    final showMismatch =
+        _confirm.text.isNotEmpty && _confirm.text != state.password;
+    final canContinue = state.password.isNotEmpty &&
+        _confirm.text == state.password;
     return Padding(
       padding: const EdgeInsets.all(24),
       // SizedBox.expand fills the Padding's width so `crossAxisAlignment
@@ -68,10 +73,24 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
             controller: _pwd,
             autofocus: true,
             obscureText: true,
-            onChanged: notifier.setPassword,
+            onChanged: (v) {
+              notifier.setPassword(v);
+              setState(() {}); // re-evaluate the mismatch banner + button
+            },
             decoration: const InputDecoration(
               labelText: 'Lamp password',
               border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _confirm,
+            obscureText: true,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              labelText: 'Confirm password',
+              border: const OutlineInputBorder(),
+              errorText: showMismatch ? "Doesn't match" : null,
             ),
           ),
           const Spacer(),
