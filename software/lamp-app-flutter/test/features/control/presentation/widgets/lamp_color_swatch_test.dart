@@ -47,4 +47,24 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('roundedSquare shape uses BoxShape.rectangle', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: LampColorSwatch(
+          color: LampColor(r: 0x11, g: 0x22, b: 0x33, w: 0),
+          shape: LampSwatchShape.roundedSquare,
+          size: 56,
+        ),
+      ),
+    ));
+    final container = tester.widgetList<Container>(
+        find.descendant(
+          of: find.byType(LampColorSwatch),
+          matching: find.byType(Container),
+        )).first;
+    final deco = container.decoration as BoxDecoration;
+    expect(deco.shape, BoxShape.rectangle);
+    expect(deco.borderRadius, isNotNull);
+  });
 }
