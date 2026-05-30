@@ -34,6 +34,7 @@ class GlitchyExpression : public Expression {
 
 protected:
   void onTrigger() override;
+  void onComplete() override;
 };
 
 }  // namespace lamp

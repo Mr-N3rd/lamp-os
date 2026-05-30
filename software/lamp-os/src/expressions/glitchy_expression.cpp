@@ -1,4 +1,5 @@
 #include "./glitchy_expression.hpp"
+#include <Arduino.h>
 #include "../util/fade.hpp"
 
 namespace lamp {
@@ -60,9 +61,17 @@ void GlitchyExpression::draw() {
   }
 
   nextFrame();
+}
 
-  // Check if animation just completed
-  if (animationState == STOPPED && frame >= frames) {
+void GlitchyExpression::onComplete() {
+  // ~33% chance to chain a second glitch 200–600 ms after this one
+  // finishes, ignoring the configured intervalMin/Max. The base
+  // class's scheduleNextTrigger() handles the next regular trigger
+  // when this short-circuit doesn't fire.
+  std::uniform_int_distribution<uint32_t> rollDist(0, 99);
+  if (rollDist(rng) < 33) {
+    std::uniform_int_distribution<uint32_t> delayDist(200, 600);
+    nextTriggerMs = millis() + delayDist(rng);
   }
 }
 
