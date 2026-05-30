@@ -31,22 +31,18 @@ class AddLampNotifier extends _$AddLampNotifier {
   @override
   AddLampState build() => const AddLampState();
 
-  Future<void> select(String deviceId) async {
-    // Phase 1: flip state synchronously so the shell can render a
-    // loading view as soon as the picker pushes the route — the user
-    // shouldn't see a blank pane while ble.connect awaits.
+  void select(String deviceId) {
+    // Record the picked device + jump to the Name form. We deliberately
+    // do NOT open the BLE link here: the user spends 30+ seconds in the
+    // Name + Password forms, and any idle link gets killed by Android's
+    // LINK_SUPERVISION_TIMEOUT, after which the next direct connect
+    // tends to fail with android-code 133. submit() opens the link
+    // immediately before the setup writes that need it, which is the
+    // same pattern ControlNotifier uses (connect-then-immediately-use,
+    // never sit idle on an open link).
     state = state.copyWith(
       deviceId: deviceId,
-      step: AddLampStep.connecting,
-      status: AddLampStatus.working,
-    );
-    // Phase 2: actually connect (slow over BLE).
-    final ble = ref.read(bleClientProvider);
-    await ble.connect(deviceId);
-    // Phase 3: advance to the name form.
-    state = state.copyWith(
       step: AddLampStep.name,
-      status: AddLampStatus.idle,
     );
   }
 
@@ -83,21 +79,19 @@ class AddLampNotifier extends _$AddLampNotifier {
     );
     final ble = ref.read(bleClientProvider);
 
-    // Step 0: ensure the link is up with a FRESH handle. select()
-    // connected ~30s ago; by now Android has dropped the link via
-    // LINK_SUPERVISION_TIMEOUT, but flutter_blue_plus's cached state
-    // may still report "connected", so a plain connect() is a no-op
-    // and the next write fails with fbp-code 6 (deviceIsDisconnected).
-    // Force a real reconnect via disconnect → 500ms pause → connect
-    // (same shape as the post-reboot reconnect below).
+    // Step 0: open the BLE link. select() deliberately doesn't connect
+    // (avoids LINK_SUPERVISION_TIMEOUT during form-fill), so submit is
+    // where the link gets established. Retry once on the
+    // android-code 133 / deviceIsDisconnected race that Android throws
+    // when the previous link's cleanup is still in flight.
+    Future<void> doConnect() => ble.connect(state.deviceId);
     try {
       try {
-        await ble.disconnect(state.deviceId);
+        await doConnect();
       } catch (_) {
-        // already-disconnected is fine
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        await doConnect();
       }
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      await ble.connect(state.deviceId);
     } catch (e) {
       state = state.copyWith(
         status: AddLampStatus.error,

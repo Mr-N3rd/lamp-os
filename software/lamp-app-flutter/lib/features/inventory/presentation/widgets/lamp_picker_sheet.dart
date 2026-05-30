@@ -281,13 +281,11 @@ class _NearbyLampTile extends ConsumerWidget {
 
   Future<void> _onTap(BuildContext context, WidgetRef ref) async {
     if (lamp.isFactoryDefault) {
-      // Fire-and-forget: select() flips state.step to `connecting`
-      // synchronously, then awaits ble.connect in the background. Popping
-      // the picker + pushing the AddLamp route NOW lets the shell render
-      // the ConnectingView immediately instead of leaving the user
-      // staring at a frozen picker while BLE links up.
-      unawaited(
-          ref.read(addLampNotifierProvider.notifier).select(lamp.id));
+      // select() is synchronous now (no BLE I/O) — it just records the
+      // deviceId and jumps to Name. The BLE link is opened later by
+      // submit() so it doesn't sit idle through the form-fill and
+      // expire under LINK_SUPERVISION_TIMEOUT.
+      ref.read(addLampNotifierProvider.notifier).select(lamp.id);
       Navigator.pop(context);
       // `push` not `go` — same reason as the FAB above.
       GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
