@@ -6,17 +6,14 @@ import '../../../core/theme/brand_colors.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
+import '../application/wifi_notifier.dart';
+import '../domain/wifi_state.dart';
 
 /// Home Wi-Fi configuration pane.
 ///
-/// Phase 1 (this commit): keeps the existing SSID + password text-field
-/// flow that the Setup screen already had, just moved into its own
-/// drill-down screen so the parent Setup tab can be a tidy row list.
-///
-/// Phase 2 (next chunk): replace the manual SSID field with a live scan
-/// powered by the firmware's `wifiOp` / `wifiState` characteristics so
-/// the user can tap a network from a list and enter a password — that's
-/// what the old Vue app's `HomeNetworkSheet.vue` did.
+/// Powered by [WifiNotifier] — shows live scan results from the lamp's
+/// `wifiState` characteristic, lets the user tap a network to enter a
+/// password, and shows a connected / forget-network row when already joined.
 class HomeWifiScreen extends ConsumerStatefulWidget {
   const HomeWifiScreen({super.key, required this.lampId});
   final String lampId;
@@ -26,20 +23,102 @@ class HomeWifiScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeWifiScreenState extends ConsumerState<HomeWifiScreen> {
-  final _ssidCtrl = TextEditingController();
-  final _passwordCtrl = TextEditingController();
-  bool _seededSsid = false;
+  bool _didKickoff = false;
 
   @override
-  void dispose() {
-    _ssidCtrl.dispose();
-    _passwordCtrl.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    // Listen for connection failures and surface them as SnackBars.
+    // Must be registered after first build — do it here via addPostFrameCallback
+    // to ensure the context has a Scaffold.
+  }
+
+  String _errorMessage(String? lastError) {
+    switch (lastError) {
+      case 'auth':
+        return 'Wrong password';
+      case 'noap':
+        return 'Network not found';
+      case 'timeout':
+        return 'Connection timed out';
+      default:
+        return 'Connection failed';
+    }
+  }
+
+  Future<void> _promptPassword(BuildContext context, WifiScanResult r) async {
+    final ctrl = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: BrandColors.midnightBlack,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+          top: 16,
+          left: 16,
+          right: 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Join "${r.ssid}"',
+              style: const TextStyle(
+                color: BrandColors.lampWhite,
+                fontWeight: FontWeight.w600,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              obscureText: r.encrypted,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: r.encrypted ? 'Password' : 'Password (none required)',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton(
+                onPressed: () {
+                  final pwd = ctrl.text;
+                  Navigator.of(ctx).pop();
+                  ref
+                      .read(wifiNotifierProvider(widget.lampId).notifier)
+                      .connect(r.ssid, pwd);
+                },
+                child: const Text('Connect'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    ctrl.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final async = ref.watch(controlNotifierProvider(widget.lampId));
+    final wifiAsync = ref.watch(wifiNotifierProvider(widget.lampId));
+    final notifier = ref.read(wifiNotifierProvider(widget.lampId).notifier);
+
+    // Listen for failed state and show a SnackBar.
+    ref.listen(wifiNotifierProvider(widget.lampId), (prev, next) {
+      if (next.value?.state == 'failed') {
+        final msg = _errorMessage(next.value?.lastError);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    });
+
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -48,21 +127,33 @@ class _HomeWifiScreenState extends ConsumerState<HomeWifiScreen> {
         ),
         title: const Text('Home Wi-Fi'),
       ),
-      body: async.when(
+      body: wifiAsync.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
         error: (e, _) => Center(
-          child: Text('Could not reach this lamp: $e',
-              style: const TextStyle(color: BrandColors.fogGrey)),
+          child: Text(
+            'Could not reach this lamp: $e',
+            style: const TextStyle(color: BrandColors.fogGrey),
+          ),
         ),
-        data: (state) {
-          if (!_seededSsid) {
-            _ssidCtrl.text = state.home.ssid;
-            _seededSsid = true;
+        data: (wifi) {
+          // Post-frame scan kickoff on first render with empty + idle state.
+          if (!_didKickoff && wifi.scanResults.isEmpty && wifi.state == 'idle') {
+            _didKickoff = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              notifier.scan();
+            });
           }
-          final notifier =
-              ref.read(controlNotifierProvider(widget.lampId).notifier);
-          final hasExisting = state.home.password == '********' ||
-              state.home.password.isNotEmpty;
+
+          // Read the saved SSID from the control state for the "saved but not
+          // connected" row.
+          final savedSsid = ref
+              .watch(controlNotifierProvider(widget.lampId)
+                  .select((async) => async.value?.home.ssid ?? ''));
+
+          final isConnected = wifi.state == 'connected';
+          final hasSaved = savedSsid.isNotEmpty;
+          final isScanning = wifi.state == 'scanning';
+
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
@@ -70,63 +161,163 @@ class _HomeWifiScreenState extends ConsumerState<HomeWifiScreen> {
                 child: Text(
                   'Join your lamp to your home Wi-Fi so it can participate in '
                   'the mesh, accept smart-home control, and receive '
-                  'over-the-air updates. Live network scanning is coming '
-                  'soon — enter the SSID and password manually for now.',
+                  'over-the-air updates. Tap a network to join it.',
                 ),
               ),
               const SizedBox(height: 16),
-              TextField(
-                controller: _ssidCtrl,
-                decoration: const InputDecoration(labelText: 'Network (SSID)'),
-                style: const TextStyle(color: BrandColors.lampWhite),
-                onChanged: notifier.setHomeSsid,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _passwordCtrl,
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  hintText:
-                      hasExisting ? '(unchanged — type to replace)' : null,
-                  suffixIcon: hasExisting && _passwordCtrl.text.isEmpty
-                      ? const Padding(
-                          padding: EdgeInsets.only(right: 8),
-                          child: Tooltip(
-                            message:
-                                'A password is set; leaving this blank keeps it.',
-                            child: Icon(Icons.lock,
-                                size: 16,
-                                color: BrandColors.lumenGreen),
+
+              // Connected row.
+              if (isConnected) ...[
+                _ConnectionStatusRow(
+                  label: 'Connected to ${wifi.ssid} (${wifi.ip})',
+                  onForget: notifier.forget,
+                ),
+                const SizedBox(height: 8),
+              ] else if (hasSaved) ...[
+                // Saved but not currently connected.
+                _ConnectionStatusRow(
+                  label: 'Saved: $savedSsid',
+                  onForget: notifier.forget,
+                ),
+                const SizedBox(height: 8),
+              ],
+
+              // "Networks" header row with refresh button.
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Networks',
+                      style: TextStyle(
+                        color: BrandColors.fogGrey,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: isScanning
+                        ? const Padding(
+                            padding: EdgeInsets.all(8),
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : IconButton(
+                            icon: const Icon(Icons.refresh, size: 20),
+                            tooltip: 'Scan for networks',
+                            onPressed: isScanning ? null : notifier.scan,
+                            padding: EdgeInsets.zero,
                           ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+
+              // Empty-state hint.
+              if (wifi.scanResults.isEmpty && !isScanning)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Text(
+                    'Tap refresh to scan for networks.',
+                    style: TextStyle(color: BrandColors.fogGrey),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+
+              // Scan results.
+              ...wifi.scanResults.map((r) {
+                final inFlight = r.ssid == wifi.ssid &&
+                    wifi.state == 'connecting';
+                return ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 0),
+                  leading: _RssiBars(rssi: r.rssi),
+                  title: Text(r.ssid),
+                  trailing: r.encrypted
+                      ? const Icon(
+                          Icons.lock_outline,
+                          size: 16,
+                          color: BrandColors.slateGrey,
                         )
                       : null,
-                ),
-                style: const TextStyle(color: BrandColors.lampWhite),
-                onChanged: (v) {
-                  setState(() {});
-                  notifier
-                      .setHomePassword(v.isEmpty ? '********' : v);
-                },
-              ),
-              if (state.home.ssid.isNotEmpty) ...[
-                const SizedBox(height: 24),
-                TextButton.icon(
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  style: TextButton.styleFrom(
-                      foregroundColor: BrandColors.error),
-                  label: const Text('Forget this network'),
-                  onPressed: () {
-                    notifier.setHomeSsid('');
-                    notifier.setHomePassword('');
-                    _ssidCtrl.clear();
-                    _passwordCtrl.clear();
-                  },
-                ),
-              ],
+                  onTap: inFlight ? null : () => _promptPassword(context, r),
+                );
+              }),
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Private widgets
+// ---------------------------------------------------------------------------
+
+class _ConnectionStatusRow extends StatelessWidget {
+  const _ConnectionStatusRow({
+    required this.label,
+    required this.onForget,
+  });
+  final String label;
+  final VoidCallback onForget;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(color: BrandColors.lampWhite),
+          ),
+        ),
+        TextButton.icon(
+          icon: const Icon(Icons.wifi_off, size: 16),
+          label: const Text('Forget network'),
+          onPressed: onForget,
+        ),
+      ],
+    );
+  }
+}
+
+class _RssiBars extends StatelessWidget {
+  const _RssiBars({required this.rssi});
+  final int rssi;
+
+  int get _bars => rssi >= -55
+      ? 4
+      : rssi >= -65
+          ? 3
+          : rssi >= -75
+              ? 2
+              : 1;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 22,
+      height: 22,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(4, (i) {
+          final filled = i < _bars;
+          return Container(
+            width: 3,
+            height: 6.0 + i * 4,
+            margin: const EdgeInsets.symmetric(horizontal: 1),
+            decoration: BoxDecoration(
+              color: filled
+                  ? BrandColors.lumenGreen
+                  : BrandColors.slateGrey.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(1),
+            ),
+          );
+        }),
       ),
     );
   }
