@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -13,6 +11,7 @@ import '../../control/domain/sections.dart';
 import '../../control/presentation/widgets/color_picker_sheet.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
 import '../../control/presentation/widgets/lamp_color_swatch.dart';
+import '../domain/expression_interval_math.dart';
 import '../domain/expression_meta.dart';
 import 'widgets/expression_params_panel.dart';
 
@@ -420,12 +419,6 @@ class _FrequencySpread extends StatefulWidget {
   final int intervalMax;
   final void Function(int min, int max) onChanged;
 
-  // Firmware allows 10s … 3600s.
-  static const int minSec = 10;
-  static const int maxSec = 3600;
-  // Spread multiplier range. spread=0 → min == max. spread=1 → [c/5, c*5].
-  static const double maxMultiplier = 5.0;
-
   @override
   State<_FrequencySpread> createState() => _FrequencySpreadState();
 }
@@ -437,62 +430,16 @@ class _FrequencySpreadState extends State<_FrequencySpread> {
   @override
   void initState() {
     super.initState();
-    final centre = _centreOf(widget.intervalMin, widget.intervalMax);
-    _freq = _freqFromCentre(centre);
-    _spread = _spreadFromMultiplier(
-        _multOf(widget.intervalMin, widget.intervalMax));
+    final n = ExpressionIntervalMath.normsFromInterval(
+        widget.intervalMin, widget.intervalMax);
+    _freq = n.freq;
+    _spread = n.spread;
   }
 
-  @override
-  void didUpdateWidget(_FrequencySpread oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Only re-sync from the upstream `(intervalMin, intervalMax)` when the
-    // parent value would land us on a meaningfully different slider
-    // position than where the user currently has it. Otherwise we'd
-    // bounce the slider thumb under the user's finger on every emit.
-    final centre = _centreOf(widget.intervalMin, widget.intervalMax);
-    final upstreamFreq = _freqFromCentre(centre);
-    final upstreamSpread = _spreadFromMultiplier(
-        _multOf(widget.intervalMin, widget.intervalMax));
-    if ((upstreamFreq - _freq).abs() > 0.02) _freq = upstreamFreq;
-    if ((upstreamSpread - _spread).abs() > 0.02) _spread = upstreamSpread;
-  }
-
-  // ---- Frequency (0 = rare/hourly, 1 = often/10s) ----
-
-  static double _freqFromCentre(double centreSec) {
-    final lo = math.log(_FrequencySpread.minSec.toDouble());
-    final hi = math.log(_FrequencySpread.maxSec.toDouble());
-    final t = (math.log(centreSec) - hi) / (lo - hi);
-    return t.clamp(0.0, 1.0);
-  }
-
-  static double _centreFromFreq(double freq) {
-    final lo = math.log(_FrequencySpread.minSec.toDouble());
-    final hi = math.log(_FrequencySpread.maxSec.toDouble());
-    return math.exp(hi + (lo - hi) * freq.clamp(0.0, 1.0));
-  }
-
-  // ---- Spread (0 = identical/predictable, 1 = full 5× spread) ----
-
-  static double _spreadFromMultiplier(double mult) {
-    return ((mult - 1.0) / (_FrequencySpread.maxMultiplier - 1.0))
-        .clamp(0.0, 1.0);
-  }
-
-  static double _multiplierFromSpread(double spread) {
-    return 1.0 +
-        spread.clamp(0.0, 1.0) *
-            (_FrequencySpread.maxMultiplier - 1.0);
-  }
-
-  // ---- Decode existing min/max → (centre, multiplier) ----
-
-  static double _centreOf(int min, int max) =>
-      math.sqrt(min.toDouble() * max.toDouble());
-
-  static double _multOf(int min, int max) =>
-      max == 0 || min == 0 ? 1.0 : math.sqrt(max / min);
+  // didUpdateWidget intentionally omitted: the slider positions are the
+  // source of truth in the UI from initState onward. We never re-derive
+  // them from upstream, so dragging Predictability cannot shove the
+  // Frequency thumb.
 
   static String _fmt(double seconds) {
     if (seconds < 1) return '${(seconds * 1000).round()}ms';
@@ -504,40 +451,26 @@ class _FrequencySpreadState extends State<_FrequencySpread> {
   }
 
   void _emit() {
-    final centre = _centreFromFreq(_freq);
-    final mult = _multiplierFromSpread(_spread);
-    final lo = (centre / mult).clamp(_FrequencySpread.minSec.toDouble(),
-        _FrequencySpread.maxSec.toDouble());
-    final hi = (centre * mult).clamp(_FrequencySpread.minSec.toDouble(),
-        _FrequencySpread.maxSec.toDouble());
-    widget.onChanged(lo.round(), hi.round());
+    final r = ExpressionIntervalMath.intervalFromNorms(_freq, _spread);
+    widget.onChanged(r.min, r.max);
   }
 
   @override
   Widget build(BuildContext context) {
-    final centre = _centreFromFreq(_freq);
-    final mult = _multiplierFromSpread(_spread);
-    final lo = (centre / mult).clamp(_FrequencySpread.minSec.toDouble(),
-        _FrequencySpread.maxSec.toDouble());
-    final hi = (centre * mult).clamp(_FrequencySpread.minSec.toDouble(),
-        _FrequencySpread.maxSec.toDouble());
-
+    final r = ExpressionIntervalMath.intervalFromNorms(_freq, _spread);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const Padding(
           padding: EdgeInsets.only(top: 8, bottom: 2),
-          child: Text(
-            'Frequency',
-            style:
-                TextStyle(color: BrandColors.lampWhite, fontSize: 14),
-          ),
+          child: Text('Frequency',
+              style: TextStyle(color: BrandColors.lampWhite, fontSize: 14)),
         ),
         Row(
           children: [
             const Text('rare',
-                style: TextStyle(
-                    color: BrandColors.fogGrey, fontSize: 11)),
+                style:
+                    TextStyle(color: BrandColors.fogGrey, fontSize: 11)),
             Expanded(
               child: Slider(
                 value: _freq,
@@ -550,23 +483,20 @@ class _FrequencySpreadState extends State<_FrequencySpread> {
               ),
             ),
             const Text('often',
-                style: TextStyle(
-                    color: BrandColors.fogGrey, fontSize: 11)),
+                style:
+                    TextStyle(color: BrandColors.fogGrey, fontSize: 11)),
           ],
         ),
         const Padding(
           padding: EdgeInsets.only(top: 12, bottom: 2),
-          child: Text(
-            'Predictability',
-            style:
-                TextStyle(color: BrandColors.lampWhite, fontSize: 14),
-          ),
+          child: Text('Predictability',
+              style: TextStyle(color: BrandColors.lampWhite, fontSize: 14)),
         ),
         Row(
           children: [
-            const Text('exact',
-                style: TextStyle(
-                    color: BrandColors.fogGrey, fontSize: 11)),
+            const Text('less',
+                style:
+                    TextStyle(color: BrandColors.fogGrey, fontSize: 11)),
             Expanded(
               child: Slider(
                 value: _spread,
@@ -578,17 +508,17 @@ class _FrequencySpreadState extends State<_FrequencySpread> {
                 },
               ),
             ),
-            const Text('varied',
-                style: TextStyle(
-                    color: BrandColors.fogGrey, fontSize: 11)),
+            const Text('more',
+                style:
+                    TextStyle(color: BrandColors.fogGrey, fontSize: 11)),
           ],
         ),
         Padding(
           padding: const EdgeInsets.only(top: 6),
           child: Text(
             _spread < 0.02
-                ? 'Roughly every ${_fmt(centre)}.'
-                : 'Between ${_fmt(lo)} and ${_fmt(hi)}.',
+                ? 'Roughly every ${_fmt(r.min.toDouble())}.'
+                : 'Between ${_fmt(r.min.toDouble())} and ${_fmt(r.max.toDouble())}.',
             style: const TextStyle(
               color: BrandColors.fogGrey,
               fontSize: 11,

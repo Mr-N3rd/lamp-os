@@ -173,4 +173,73 @@ void main() {
       hasLength(1),
     );
   });
+
+  testWidgets('predictability slider labels read "less" and "more"',
+      (tester) async {
+    final c = await _withEmptyState();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: ExpressionEditorScreen(
+            lampId: _devId, typeKey: 'breathing', targetKey: 3),
+      ),
+    ));
+    await _pumpToData(tester, 'Breathing');
+    await tester.dragUntilVisible(
+      find.text('less'), find.byType(ListView), const Offset(0, -200));
+    expect(find.text('less'), findsOneWidget);
+    expect(find.text('more'), findsOneWidget);
+    expect(find.text('exact'), findsNothing);
+    expect(find.text('varied'), findsNothing);
+  });
+
+  testWidgets('frequency slider labels read "rare" and "often"',
+      (tester) async {
+    final c = await _withEmptyState();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: ExpressionEditorScreen(
+            lampId: _devId, typeKey: 'breathing', targetKey: 3),
+      ),
+    ));
+    await _pumpToData(tester, 'Breathing');
+    await tester.dragUntilVisible(
+      find.text('rare'), find.byType(ListView), const Offset(0, -200));
+    expect(find.text('rare'), findsOneWidget);
+    expect(find.text('often'), findsOneWidget);
+  });
+
+  testWidgets('frequency thumb does not move when predictability changes',
+      (tester) async {
+    final c = await _withEmptyState();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: ExpressionEditorScreen(
+            lampId: _devId, typeKey: 'breathing', targetKey: 3),
+      ),
+    ));
+    await _pumpToData(tester, 'Breathing');
+    await tester.dragUntilVisible(
+      find.text('Predictability'),
+      find.byType(ListView),
+      const Offset(0, -200),
+    );
+    // Find the two 0..1 sliders (freq + spread) — filtering out any other
+    // sliders (e.g. the speed/duration slider in ExpressionParamsPanel).
+    final normSliders = find.byWidgetPredicate(
+        (w) => w is Slider && w.min == 0.0 && w.max == 1.0);
+    expect(normSliders, findsNWidgets(2));
+    final freqBefore = tester.widget<Slider>(normSliders.at(0)).value;
+    // Drag the predictability slider (second 0..1 one) to the right.
+    await tester.drag(normSliders.at(1), const Offset(120, 0));
+    await tester.pump();
+    final freqAfter = tester.widget<Slider>(normSliders.at(0)).value;
+    expect(freqAfter, freqBefore,
+        reason: 'Frequency thumb must not move when predictability drags');
+  });
 }
