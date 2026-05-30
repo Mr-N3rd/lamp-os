@@ -1,13 +1,12 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
 import '../../../core/ble/ble_client.dart';
+import '../../../core/ble/lamp_crypto.dart';
 import '../../../core/ble/uuids.dart';
 
-/// Writes [BleUuids.auth] with the lamp's password so subsequent control
-/// writes are accepted by the firmware's per-connection auth gate. The
-/// firmware allows open access when no password is set (lamp.password is
-/// empty), so this is a no-op for [password] == null or "".
+/// Writes [BleUuids.auth] so the firmware grants subsequent control writes on
+/// this connection.  Empty/null password is treated as a factory-default lamp
+/// (firmware grants open access; no write needed).  Non-empty password: sends
+/// a ciphertext frame — the firmware's GCM auth-tag verification on CHAR_AUTH
+/// implicitly authenticates without exposing the password on the wire.
 class AuthClient {
   AuthClient({required this.ble});
 
@@ -18,11 +17,19 @@ class AuthClient {
     required String? password,
   }) async {
     if (password == null || password.isEmpty) return;
+    // Ciphertext body is opaque — firmware's CHAR_AUTH dispatcher only
+    // cares that the GCM tag verifies. Send a tiny constant JSON.
+    final bytes = await LampCrypto.encryptOp(
+      op: const {'auth': true},
+      password: password,
+      saltUuid16: uuidSaltLE16(BleUuids.auth),
+      charShortName: 'auth',
+    );
     await ble.write(
       deviceId,
       BleUuids.controlService,
       BleUuids.auth,
-      Uint8List.fromList(utf8.encode(password)),
+      bytes,
     );
   }
 }
