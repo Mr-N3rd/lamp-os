@@ -17,9 +17,9 @@ class BtOnlyInfoPane extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final nearby = ref.watch(nearbyLampsNotifierProvider);
-    final hit = nearby.firstWhereOrNull((l) => l.id == lampId);
-    if (hit?.onMesh == true) return const SizedBox.shrink();
+    final onMesh = ref.watch(nearbyLampsNotifierProvider.select(
+        (list) => list.firstWhereOrNull((l) => l.id == lampId)?.onMesh));
+    if (onMesh == true) return const SizedBox.shrink();
     return InfoPanel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
