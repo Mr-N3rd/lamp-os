@@ -66,13 +66,19 @@ class _AddLampShellState extends ConsumerState<AddLampShell> {
       AddLampStep.verifying => const AddLampPasswordStep(),
       AddLampStep.done => const AddLampDoneStep(),
     };
+    // Hide progress dots while the user is still on the Scan step — there's
+    // no "process" to track yet, the dots only add noise. They appear once
+    // the user picks a lamp and we advance to Name (step.index > scan).
+    final showDots = step != AddLampStep.scan;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Add a lamp'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(8),
-          child: _ProgressDots(currentIndex: step.index),
-        ),
+        bottom: showDots
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(8),
+                child: _ProgressDots(currentIndex: step.index),
+              )
+            : null,
       ),
       body: body,
     );
