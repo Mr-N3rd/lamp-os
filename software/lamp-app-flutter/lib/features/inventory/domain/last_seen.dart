@@ -11,6 +11,6 @@ String formatLastSeen(int epochMs, DateTime now) {
   if (delta.inDays < 14) return '${delta.inDays}d ago';
   if (delta.inDays < 56) return '${(delta.inDays / 7).floor()} weeks ago';
   final months = (delta.inDays / 30).floor();
-  if (months > 12) return 'over a year ago';
+  if (months >= 12) return 'over a year ago';
   return '$months months ago';
 }

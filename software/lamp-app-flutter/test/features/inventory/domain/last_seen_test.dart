@@ -36,4 +36,7 @@ void main() {
   test('boundary: 1 day', () {
     expect(formatLastSeen(base - 86400000, now), '1d ago');
   });
+  test('boundary: 12 months (~360 days)', () {
+    expect(formatLastSeen(base - 360 * 86400000, now), 'over a year ago');
+  });
 }
