@@ -225,7 +225,7 @@ void main() {
     ));
     await _pumpToData(tester, 'Breathing');
     await tester.dragUntilVisible(
-      find.text('Predictability'),
+      find.text('Variation'),
       find.byType(ListView),
       const Offset(0, -200),
     );
