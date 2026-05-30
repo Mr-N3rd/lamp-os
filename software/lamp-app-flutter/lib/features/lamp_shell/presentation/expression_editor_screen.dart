@@ -397,17 +397,16 @@ class _AppBarTestAction extends StatelessWidget {
   }
 }
 
-/// Two-slider rendering of the interval range that hides the seconds math:
-///   - Frequency (rare ↔ often): log-mapped centre of the range.
-///   - Predictability (predictable ↔ varied): width of the spread around
-///     that centre.
+/// Two-slider Frequency + Predictability control for an expression's
+/// random trigger interval.
 ///
-/// We round-trip through (intervalMin, intervalMax) so the firmware
-/// contract is unchanged. Each slider position is held in local state
-/// (`_freq` / `_spread`) so moving one slider doesn't shift the other's
-/// position via re-derivation from clamped min/max. The local positions
-/// only re-sync from the upstream min/max when the user opens an
-/// existing expression — see `didUpdateWidget`.
+/// The two 0..1 slider positions are the source of truth for the
+/// editor's UI state, seeded once in [initState] from the persisted
+/// `(intervalMin, intervalMax)` via [ExpressionIntervalMath.normsFromInterval].
+/// They are never re-derived from upstream, so dragging Predictability
+/// cannot move the Frequency thumb (and vice versa). Each drag emits a
+/// fresh deterministic `(intervalMin, intervalMax)` via
+/// [ExpressionIntervalMath.intervalFromNorms].
 class _FrequencySpread extends StatefulWidget {
   const _FrequencySpread({
     required this.intervalMin,
