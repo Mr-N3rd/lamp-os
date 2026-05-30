@@ -47,7 +47,6 @@ class _HomeWifiScreenState extends ConsumerState<HomeWifiScreen> {
   }
 
   Future<void> _promptPassword(BuildContext context, WifiScanResult r) async {
-    final ctrl = TextEditingController();
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -55,53 +54,16 @@ class _HomeWifiScreenState extends ConsumerState<HomeWifiScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-          top: 16,
-          left: 16,
-          right: 16,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Join "${r.ssid}"',
-              style: const TextStyle(
-                color: BrandColors.lampWhite,
-                fontWeight: FontWeight.w600,
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              obscureText: r.encrypted,
-              autofocus: true,
-              decoration: InputDecoration(
-                labelText: r.encrypted ? 'Password' : 'Password (none required)',
-              ),
-            ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: () {
-                  final pwd = ctrl.text;
-                  Navigator.of(ctx).pop();
-                  ref
-                      .read(wifiNotifierProvider(widget.lampId).notifier)
-                      .connect(r.ssid, pwd);
-                },
-                child: const Text('Connect'),
-              ),
-            ),
-          ],
-        ),
+      builder: (ctx) => _WifiPasswordSheet(
+        scanResult: r,
+        onConnect: (pwd) {
+          Navigator.of(ctx).pop();
+          ref
+              .read(wifiNotifierProvider(widget.lampId).notifier)
+              .connect(r.ssid, pwd);
+        },
       ),
     );
-    ctrl.dispose();
   }
 
   @override
@@ -318,6 +280,81 @@ class _RssiBars extends StatelessWidget {
             ),
           );
         }),
+      ),
+    );
+  }
+}
+
+/// Password-entry body for the join-network modal sheet. Owns its own
+/// TextEditingController via State, so the controller lives exactly as
+/// long as the sheet's widget subtree — including during the dismiss
+/// animation. Previously the controller was created in
+/// `_promptPassword` and disposed after `await showModalBottomSheet`
+/// returned; the sheet's transitions ran one more rebuild during the
+/// dismiss animation and tried to addListener() on the now-disposed
+/// controller, throwing "TextEditingController used after dispose".
+class _WifiPasswordSheet extends StatefulWidget {
+  const _WifiPasswordSheet({
+    required this.scanResult,
+    required this.onConnect,
+  });
+  final WifiScanResult scanResult;
+  final void Function(String password) onConnect;
+
+  @override
+  State<_WifiPasswordSheet> createState() => _WifiPasswordSheetState();
+}
+
+class _WifiPasswordSheetState extends State<_WifiPasswordSheet> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.scanResult;
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        top: 16,
+        left: 16,
+        right: 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Join "${r.ssid}"',
+            style: const TextStyle(
+              color: BrandColors.lampWhite,
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ctrl,
+            obscureText: r.encrypted,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText:
+                  r.encrypted ? 'Password' : 'Password (none required)',
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              onPressed: () => widget.onConnect(_ctrl.text),
+              child: const Text('Connect'),
+            ),
+          ),
+        ],
       ),
     );
   }
