@@ -115,12 +115,20 @@ class AddLampNotifier extends _$AddLampNotifier {
       if (j['name'] == null) {
         throw const FormatException('auth-rejected');
       }
-    } catch (_) {
+    } on FormatException catch (_) {
       state = state.copyWith(
         status: AddLampStatus.error,
         step: AddLampStep.password,
         error: AddLampError.wrongPassword,
         errorMessage: "Wrong password — the lamp did not accept it.",
+      );
+      return;
+    } catch (e) {
+      state = state.copyWith(
+        status: AddLampStatus.error,
+        step: AddLampStep.password,
+        error: AddLampError.connectFailed,
+        errorMessage: e.toString(),
       );
       return;
     }

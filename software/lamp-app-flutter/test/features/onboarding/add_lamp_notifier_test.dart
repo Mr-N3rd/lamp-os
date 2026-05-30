@@ -87,9 +87,20 @@ void main() {
   });
 
   test('submit() bounces back to password step on wrong password', () async {
-    // Don't seed lampSection — the post-claim read will throw BleNotFound,
-    // which the notifier treats as auth-rejected.
+    // Seed lampSection with empty bytes so the post-claim read finds the
+    // characteristic but returns no data — the auth-gate behavior. The
+    // notifier throws FormatException('auth-rejected'), which the typed
+    // catch maps to AddLampError.wrongPassword.
     final ble = InMemoryBleClient();
+    await ble.connect('dev1');
+    await ble.write(
+      'dev1',
+      BleUuids.controlService,
+      BleUuids.lampSection,
+      Uint8List(0), // empty bytes simulate unauthenticated read result
+    );
+    await ble.disconnect('dev1');
+
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
     );
@@ -111,6 +122,32 @@ void main() {
     final inv = await c.read(inventoryNotifierProvider.future);
     expect(inv, isEmpty,
         reason: 'wrong password must not persist the lamp');
+  });
+
+  test('submit() surfaces connectFailed when post-claim read errors out',
+      () async {
+    // Don't seed anything — the read throws BleNotFound, which is caught
+    // as a generic Exception and surfaced as connectFailed.
+    final ble = InMemoryBleClient();
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(activeLampNotifierProvider.future);
+
+    final n = c.read(addLampNotifierProvider.notifier);
+    await n.select('dev1');
+    n.setName('jacko');
+    n.setPassword('secret');
+    await n.submit();
+
+    final s = c.read(addLampNotifierProvider);
+    expect(s.step, AddLampStep.password);
+    expect(s.status, AddLampStatus.error);
+    expect(s.error, AddLampError.connectFailed);
+    final inv = await c.read(inventoryNotifierProvider.future);
+    expect(inv, isEmpty);
   });
 
   test('add(deviceId, name) skips wizard and adds to inventory', () async {

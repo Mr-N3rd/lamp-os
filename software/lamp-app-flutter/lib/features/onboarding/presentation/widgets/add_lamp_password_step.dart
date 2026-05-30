@@ -75,12 +75,13 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
             ),
           ),
           const Spacer(),
-          if (state.status == AddLampStatus.error)
+          if (state.status == AddLampStatus.error &&
+              state.error != AddLampError.wrongPassword)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
                 state.errorMessage ?? 'Setup failed',
-                style: const TextStyle(color: Colors.redAccent),
+                style: const TextStyle(color: BrandColors.error),
               ),
             ),
           Row(
