@@ -12,6 +12,7 @@ class BaseCard extends StatelessWidget {
   });
 
   final List<LampColor> colors;
+  // ignore: unused_field
   final int activeIndex;
   final VoidCallback onTap;
 
@@ -51,47 +52,18 @@ class BaseCard extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-            Column(
-              children: [
-                for (var i = 0; i < colors.length; i++)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 4),
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: colors[i].toSwatch(),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: i == activeIndex
-                            ? BrandColors.glowPink
-                            : Colors.white.withValues(alpha: 0.12),
-                        width: i == activeIndex ? 2 : 1,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
             const SizedBox(width: 16),
-            Expanded(
+            const Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Base',
                     style: TextStyle(
                       color: BrandColors.lampWhite,
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.4,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Base · ${colors.length} stops',
-                    style: const TextStyle(
-                      color: BrandColors.fogGrey,
-                      fontSize: 12,
                     ),
                   ),
                 ],
