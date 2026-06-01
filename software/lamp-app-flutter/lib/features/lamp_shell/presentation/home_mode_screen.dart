@@ -232,6 +232,20 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
           final mqttHasPwd = state.mqtt.password == '********' ||
               state.mqtt.password.isNotEmpty;
 
+          // Forget fires the wifi_op on the firmware (which clears its
+          // in-memory ssid/password + persists via persistConfigToNvs),
+          // AND mirrors the clear into controlNotifier state so the
+          // Setup row subtitle + this page's "Saved: ..." chip drop
+          // immediately instead of waiting for a section re-read that
+          // doesn't happen (no notify subscription on CHAR_HOME_SECTION).
+          void onForget() {
+            wifiNotifier.forget();
+            final cn =
+                ref.read(controlNotifierProvider(widget.lampId).notifier);
+            cn.setHomeSsid('');
+            cn.setHomePassword('');
+          }
+
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
@@ -240,8 +254,7 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                   'Home Mode quiets the lamp for everyday use — it pauses '
                   'social greetings and switches to a calmer brightness '
                   'while joined to your home Wi-Fi. It also lets Home '
-                  'Assistant control the lamp over MQTT. Mesh discovery '
-                  'keeps working either way.',
+                  'Assistant control the lamp over MQTT.',
                 ),
               ),
               const SizedBox(height: 16),
@@ -255,13 +268,13 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                       '${wifi.ip != null && wifi.ip!.isNotEmpty
                           ? ' (${wifi.ip})'
                           : ''}',
-                  onForget: wifiNotifier.forget,
+                  onForget: onForget,
                 ),
                 const SizedBox(height: 12),
               ] else if (hasSaved) ...[
                 _ConnectionStatusRow(
                   label: 'Saved: ${state.home.ssid}',
-                  onForget: wifiNotifier.forget,
+                  onForget: onForget,
                 ),
                 const SizedBox(height: 12),
               ],
