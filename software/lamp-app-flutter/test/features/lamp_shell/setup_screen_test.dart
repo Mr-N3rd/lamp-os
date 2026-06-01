@@ -77,34 +77,24 @@ void main() {
     expect(find.text('jacko'), findsOneWidget);
   });
 
-  testWidgets('Home Wi-Fi row shows "Not connected" when SSID empty',
-      (tester) async {
+  testWidgets('Home Mode row shows "Off" when SSID empty', (tester) async {
     final c = await _makeContainer();
     addTearDown(c.dispose);
     await tester.pumpWidget(_wrap(c));
     await _pumpToData(tester);
-    expect(find.text('Home Wi-Fi'), findsOneWidget);
-    expect(find.text('Not connected'), findsOneWidget);
+    expect(find.text('Home Mode'), findsOneWidget);
+    expect(find.text('Off'), findsOneWidget);
   });
 
-  testWidgets('Home Wi-Fi row subtitle reflects SSID once set',
+  testWidgets('Home Mode row subtitle reflects SSID + brightness once set',
       (tester) async {
     final c = await _makeContainer(homeSsid: 'home');
     addTearDown(c.dispose);
     await tester.pumpWidget(_wrap(c));
     await _pumpToData(tester);
-    expect(find.text('home'), findsOneWidget);
-  });
-
-  testWidgets('Home Mode row tells the user to set Wi-Fi first when empty',
-      (tester) async {
-    final c = await _makeContainer();
-    addTearDown(c.dispose);
-    await tester.pumpWidget(_wrap(c));
-    await _pumpToData(tester);
-
-    expect(find.text('Home Mode'), findsOneWidget);
-    expect(find.text('Requires home Wi-Fi'), findsOneWidget);
+    // The merged row's subtitle now reads e.g. "home · 60%".
+    expect(find.textContaining('home'), findsWidgets);
+    expect(find.textContaining('%'), findsOneWidget);
   });
 
   testWidgets('Advanced LED row hidden by default', (tester) async {
@@ -154,7 +144,7 @@ void main() {
     );
   });
 
-  testWidgets('toggling Home Wi-Fi switch off clears the SSID',
+  testWidgets('toggling Home Mode switch off clears the SSID',
       (tester) async {
     final c = await _makeContainer(homeSsid: 'home');
     addTearDown(c.dispose);

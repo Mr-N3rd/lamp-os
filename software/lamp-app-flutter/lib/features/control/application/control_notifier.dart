@@ -302,63 +302,56 @@ class ControlNotifier extends _$ControlNotifier {
 
     final ble = ref.read(bleClientProvider);
 
-    // 1. Read the firmware's current full config so we don't blow away fields
-    //    we don't manage (expressions, mqtt, homeMode, knockout, etc.).
-    final blobBytes = await ble.read(
-        _deviceId, BleUuids.controlService, BleUuids.settingsBlob);
-    final blob = jsonDecode(utf8.decode(blobBytes)) as Map<String, dynamic>;
-
-    // 2. Merge our local mutations.
-    final lampNode =
-        (blob['lamp'] as Map<String, dynamic>?) ?? <String, dynamic>{};
-    lampNode['brightness'] = cur.lamp.brightness;
-    lampNode['name'] = cur.lamp.name;
-    lampNode['advancedEnabled'] = cur.lamp.advancedEnabled;
-    blob['lamp'] = lampNode;
-
-    final baseNode =
-        (blob['base'] as Map<String, dynamic>?) ?? <String, dynamic>{};
-    baseNode['ac'] = cur.base.ac;
-    baseNode['bpp'] = cur.base.bpp;
-    baseNode['colors'] = cur.base.colors.map((c) => c.toHex()).toList();
-    baseNode['knockout'] = [
-      for (final e in cur.base.knockout.entries) {'p': e.key, 'b': e.value},
-    ];
-    blob['base'] = baseNode;
-
-    final shadeNode =
-        (blob['shade'] as Map<String, dynamic>?) ?? <String, dynamic>{};
-    shadeNode['bpp'] = cur.shade.bpp;
-    shadeNode['colors'] = cur.shade.colors.map((c) => c.toHex()).toList();
-    blob['shade'] = shadeNode;
-
-    final homeModeNode =
-        (blob['homeMode'] as Map<String, dynamic>?) ?? <String, dynamic>{};
-    homeModeNode['ssid'] = cur.home.ssid;
-    homeModeNode['brightness'] = cur.home.brightness;
-    // Only include password if the user actually typed a new one (i.e. it's
-    // not the firmware's read-time mask sentinel).
-    if (cur.home.password != '********' && cur.home.password.isNotEmpty) {
-      homeModeNode['password'] = cur.home.password;
-    } else {
-      // Strip the field so the firmware keeps the existing value.
-      homeModeNode.remove('password');
-    }
-    blob['homeMode'] = homeModeNode;
-
-    final mqttNode =
-        (blob['mqtt'] as Map<String, dynamic>?) ?? <String, dynamic>{};
-    mqttNode['enabled'] = cur.mqtt.enabled;
-    mqttNode['brokerHost'] = cur.mqtt.brokerHost;
-    mqttNode['brokerPort'] = cur.mqtt.brokerPort;
-    mqttNode['username'] = cur.mqtt.username;
-    mqttNode['topicPrefix'] = cur.mqtt.topicPrefix;
-    if (cur.mqtt.password != '********' && cur.mqtt.password.isNotEmpty) {
-      mqttNode['password'] = cur.mqtt.password;
-    } else {
-      mqttNode.remove('password');
-    }
-    blob['mqtt'] = mqttNode;
+    // Build the full blob from the in-memory ControlState. The firmware
+    // dropped read-support for CHAR_SETTINGS_BLOB once the full config grew
+    // past 512 bytes (firmware comment in ble_control.cpp:745); per-section
+    // characteristics are how we hydrate `cur` at build time, and we have
+    // every field we need to round-trip the blob back.
+    final blob = <String, dynamic>{
+      'lamp': {
+        'brightness': cur.lamp.brightness,
+        'name': cur.lamp.name,
+        'advancedEnabled': cur.lamp.advancedEnabled,
+        // lamp.password is set by the setup-service apply path; never
+        // round-trip it via settingsBlob. Omitted entirely so the firmware
+        // keeps whatever it already has.
+      },
+      'base': {
+        'px': cur.base.px,
+        'ac': cur.base.ac,
+        'bpp': cur.base.bpp,
+        'colors': cur.base.colors.map((c) => c.toHex()).toList(),
+        'knockout': [
+          for (final e in cur.base.knockout.entries) {'p': e.key, 'b': e.value},
+        ],
+      },
+      'shade': {
+        'px': cur.shade.px,
+        'bpp': cur.shade.bpp,
+        'colors': cur.shade.colors.map((c) => c.toHex()).toList(),
+      },
+      'homeMode': <String, dynamic>{
+        'ssid': cur.home.ssid,
+        'brightness': cur.home.brightness,
+        // Only include password if the user actually typed a new one (i.e.
+        // it's not the firmware's read-time mask sentinel). Omitting the
+        // field lets the firmware keep the existing stored value.
+        if (cur.home.password != '********' && cur.home.password.isNotEmpty)
+          'password': cur.home.password,
+      },
+      'mqtt': <String, dynamic>{
+        'enabled': cur.mqtt.enabled,
+        'brokerHost': cur.mqtt.brokerHost,
+        'brokerPort': cur.mqtt.brokerPort,
+        'username': cur.mqtt.username,
+        'topicPrefix': cur.mqtt.topicPrefix,
+        if (cur.mqtt.password != '********' && cur.mqtt.password.isNotEmpty)
+          'password': cur.mqtt.password,
+      },
+      'expressions': [
+        for (final e in cur.expressions.expressions) e.toJson(),
+      ],
+    };
 
     // 3. Write the merged blob. The firmware will fade out + reboot.
     final blobJson = jsonEncode(blob);

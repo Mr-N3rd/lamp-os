@@ -8,6 +8,7 @@ import '../../../core/widgets/settings_row.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/application/control_state.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
+import '../application/wifi_notifier.dart';
 
 /// Setup tab — mobile-style row list. Tapping a row drills into a
 /// sub-pane (HomeWifi, HomeMode, AdvancedLeds, Knockout). The Home Wi-Fi
@@ -59,30 +60,26 @@ class _SetupBody extends ConsumerWidget {
         ),
         const SettingsGroupHeading('Connectivity'),
         SettingsRow(
-          icon: Icons.wifi,
-          title: 'Home Wi-Fi',
-          subtitle: homeOn ? state.home.ssid : 'Not connected',
-          trailing: Switch(
-            value: homeOn,
-            // Tapping the toggle directly when off drills in to pick a
-            // network; turning the toggle off clears the saved SSID.
-            onChanged: (v) {
-              if (!v) {
-                n.setHomeSsid('');
-                n.setHomePassword('');
-              } else {
-                context.push(AppRoutes.homeWifi(lampId));
-              }
-            },
-          ),
-          onTap: () => context.push(AppRoutes.homeWifi(lampId)),
-        ),
-        SettingsRow(
           icon: Icons.home_outlined,
           title: 'Home Mode',
           subtitle: homeOn
-              ? 'Brightness ${state.home.brightness}%'
-              : 'Requires home Wi-Fi',
+              ? '${state.home.ssid} · ${state.home.brightness}%'
+              : 'Off',
+          trailing: Switch(
+            value: homeOn,
+            // Toggling off forgets the saved Wi-Fi (firmware drops creds).
+            // Toggling on drills into the Home Mode pane where the user
+            // picks a network from the live scan.
+            onChanged: (v) {
+              if (!v) {
+                ref.read(wifiNotifierProvider(lampId).notifier).forget();
+                n.setHomeSsid('');
+                n.setHomePassword('');
+              } else {
+                context.push(AppRoutes.homeMode(lampId));
+              }
+            },
+          ),
           onTap: () => context.push(AppRoutes.homeMode(lampId)),
         ),
         const SettingsGroupHeading('LEDs'),
