@@ -698,17 +698,26 @@ void start(lamp::Config* config, Preferences* prefs) {
       NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new AuthCallback());
 
-  s_service->createCharacteristic(CHAR_BRIGHTNESS, NIMBLE_PROPERTY::WRITE)
+  // Live-preview characteristics — slider-rate writes. Declare BOTH
+  // WRITE and WRITE_NR so the client can choose write-without-response
+  // (the app does, via fbp_ble_client.write(withoutResponse: true)).
+  // WRITE alone forces a GATT ACK round trip per write, which capped
+  // throughput at ~5 Hz on the test phone at the ~49ms connection
+  // interval — visibly laggy slider drag.
+  static constexpr uint32_t LIVE_WRITE_PROPS =
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR;
+
+  s_service->createCharacteristic(CHAR_BRIGHTNESS, LIVE_WRITE_PROPS)
       ->setCallbacks(new BrightnessCallback());
-  s_service->createCharacteristic(CHAR_SHADE_COLORS, NIMBLE_PROPERTY::WRITE)
+  s_service->createCharacteristic(CHAR_SHADE_COLORS, LIVE_WRITE_PROPS)
       ->setCallbacks(new ShadeColorsCallback());
-  s_service->createCharacteristic(CHAR_BASE_COLORS, NIMBLE_PROPERTY::WRITE)
+  s_service->createCharacteristic(CHAR_BASE_COLORS, LIVE_WRITE_PROPS)
       ->setCallbacks(new BaseColorsCallback());
-  s_service->createCharacteristic(CHAR_BASE_KNOCKOUT, NIMBLE_PROPERTY::WRITE)
+  s_service->createCharacteristic(CHAR_BASE_KNOCKOUT, LIVE_WRITE_PROPS)
       ->setCallbacks(new BaseKnockoutCallback());
   // Home-mode focus: app signals whether the user is on the Home Mode
   // setup page. See HomeModeFocusCallback above.
-  s_service->createCharacteristic(CHAR_HOME_MODE_FOCUS, NIMBLE_PROPERTY::WRITE)
+  s_service->createCharacteristic(CHAR_HOME_MODE_FOCUS, LIVE_WRITE_PROPS)
       ->setCallbacks(new HomeModeFocusCallback());
   s_service->createCharacteristic(CHAR_EXPRESSION_TEST, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ExpressionTestCallback());

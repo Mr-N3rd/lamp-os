@@ -27,12 +27,24 @@ abstract class BleClient {
   Future<void> disconnect(String deviceId);
   bool isConnected(String deviceId);
   Future<Uint8List> read(String deviceId, String serviceUuid, String charUuid);
+  /// Writes [value] to the characteristic.
+  ///
+  /// [withoutResponse] = true picks the GATT write-no-response op (the
+  /// characteristic must advertise WRITE_NR). The peer doesn't ACK each
+  /// write, which lets a continuous stream of slider-rate writes go out
+  /// at the radio's raw rate instead of round-tripping per write — the
+  /// difference was ~5 Hz vs ~30 Hz of color updates landing on the lamp
+  /// at the standard ~49 ms connection interval. Use it for live-preview
+  /// channels (brightness, colors, knockout, home-mode-focus). Leave
+  /// false for ops where the caller needs to know the write landed
+  /// (auth, settings_blob, expression_op).
   Future<void> write(
     String deviceId,
     String serviceUuid,
     String charUuid,
-    Uint8List value,
-  );
+    Uint8List value, {
+    bool withoutResponse = false,
+  });
   Stream<Uint8List> subscribe(
     String deviceId,
     String serviceUuid,
@@ -92,7 +104,13 @@ class InMemoryBleClient implements BleClient {
   }
 
   @override
-  Future<void> write(String d, String s, String c, Uint8List v) async {
+  Future<void> write(
+    String d,
+    String s,
+    String c,
+    Uint8List v, {
+    bool withoutResponse = false,
+  }) async {
     if (!_connected.contains(d)) throw BleNotConnected(d);
     final key = _key(d, s, c);
     final count = _pendingEncryptionFails[key] ?? 0;

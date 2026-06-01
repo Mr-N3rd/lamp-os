@@ -121,7 +121,21 @@ class ControlNotifier extends _$ControlNotifier {
     // reloads state from the lamp anyway.
     Future<void> safeWrite(String charUuid, Uint8List v) async {
       try {
-        await ble.write(deviceId, BleUuids.controlService, charUuid, v);
+        // withoutResponse: true — these are slider-rate live-preview
+        // writes. Write-with-response forces a per-write GATT ACK round
+        // trip, which at the typical ~49ms connection interval caps
+        // throughput at ~5 writes/sec (observed: drains landing at
+        // 195ms intervals = ~5Hz). Write-without-response lets the
+        // radio fire writes at its raw rate (~33Hz with the 30ms
+        // coalescer debounce). Errors are still caught + dropped — a
+        // failed live-preview write should not crash the UI.
+        await ble.write(
+          deviceId,
+          BleUuids.controlService,
+          charUuid,
+          v,
+          withoutResponse: true,
+        );
       } catch (_) {
         // intentionally dropped — live-preview writes are fire-and-forget
       }
@@ -497,11 +511,14 @@ class ControlNotifier extends _$ControlNotifier {
   Future<void> _safeWriteKnockout(
       BleClient ble, int index, int brightness) async {
     try {
+      // Same write-without-response semantics as the color/brightness
+      // coalescers — knockout writes are also slider-rate live preview.
       await ble.write(
         _deviceId,
         BleUuids.controlService,
         BleUuids.baseKnockout,
         Uint8List.fromList([index, brightness]),
+        withoutResponse: true,
       );
     } catch (_) {
       // intentionally dropped (same contract as the other live-preview writes)

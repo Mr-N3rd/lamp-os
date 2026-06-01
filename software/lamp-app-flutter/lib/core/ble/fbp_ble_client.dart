@@ -91,10 +91,16 @@ class FbpBleClient implements BleClient {
   }
 
   @override
-  Future<void> write(String d, String s, String c, Uint8List v) async {
+  Future<void> write(
+    String d,
+    String s,
+    String c,
+    Uint8List v, {
+    bool withoutResponse = false,
+  }) async {
     try {
       final ch = await _resolve(d, s, c);
-      await ch.write(v, withoutResponse: false);
+      await ch.write(v, withoutResponse: withoutResponse);
     } on fbp.FlutterBluePlusException catch (e) {
       if (e.toString().toLowerCase().contains('encryption')) {
         throw BleEncryptionRequired(d);

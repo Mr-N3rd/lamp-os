@@ -75,6 +75,7 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
       BleUuids.controlService,
       BleUuids.homeModeFocus,
       Uint8List.fromList([active ? 1 : 0]),
+      withoutResponse: true,
     ).catchError((_) {
       // best-effort — BT may already be torn down by route pop
     }));
