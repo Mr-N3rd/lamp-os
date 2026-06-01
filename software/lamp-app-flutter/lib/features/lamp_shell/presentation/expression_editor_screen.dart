@@ -121,19 +121,31 @@ class _ExpressionEditorScreenState
     ControlNotifier notifier,
     LampColor initial,
   ) async {
+    // Pick exactly ONE strip to drive the live preview. Writing to both
+    // shade AND base on every slider tick doubles BLE traffic (two
+    // WriteCoalescers, each ~33 writes/sec) and saturates the link past
+    // its ~20 writes/sec capacity at the typical ~49 ms connection
+    // interval — the user sees a laggy slider. One coalescer is all the
+    // BLE link can sustain smoothly. Route by target so the lamp shows
+    // the color on the strip the expression actually paints to (base-only
+    // expressions preview on base; everything else on shade).
+    final t = widget.targetKey;
+    final previewBase = (t == 2);
     final originalShade = state.shade.colors;
     final originalBase = state.base.colors;
-    final t = widget.targetKey;
 
     // Stop any active expression test so the configurator is back in
-    // charge and the picker's shade/base writes are visible. (Tests
-    // disable the configurator behavior, which would otherwise let
-    // the expression keep painting over our live writes.)
+    // charge and the picker's writes are visible. Tests disable the
+    // configurator behavior, which would otherwise let the expression
+    // keep painting over our live writes.
     notifier.completeExpressionTest();
 
     void writeLive(LampColor c) {
-      if (t == 1 || t == 3) notifier.setShadeColor(c);
-      if (t == 2 || t == 3) notifier.setBaseColors([c]);
+      if (previewBase) {
+        notifier.setBaseColors([c]);
+      } else {
+        notifier.setShadeColor(c);
+      }
     }
 
     final picked = await showColorPickerSheet(
@@ -142,14 +154,13 @@ class _ExpressionEditorScreenState
       onLive: writeLive,
     );
 
-    // Restore lamp's main palette regardless of confirm/cancel — the
-    // picker's writes were for preview only; the expression's palette
-    // is what should actually change (handled by the caller).
-    if ((t == 1 || t == 3) && originalShade.isNotEmpty) {
-      notifier.setShadeColor(originalShade.first);
-    }
-    if (t == 2 || t == 3) {
+    // Restore whichever strip we drove regardless of confirm/cancel.
+    // The picker's writes were for preview only; the expression's
+    // palette is what should actually change (handled by the caller).
+    if (previewBase) {
       notifier.setBaseColors(originalBase);
+    } else if (originalShade.isNotEmpty) {
+      notifier.setShadeColor(originalShade.first);
     }
 
     return picked;

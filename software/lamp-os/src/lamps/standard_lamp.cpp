@@ -526,8 +526,9 @@ void loop() {
     uint8_t level = static_cast<uint8_t>(pendingBrightness);
     pendingBrightness = -1;
 #ifdef LAMP_DEBUG
-    Serial.printf("[loop] drain brightness=%u (home_focus=%d)\n",
-                  (unsigned)level, (int)ble_control::isHomeModePageActive());
+    Serial.printf("[drain] brightness=%u t_us=%lu home_focus=%d\n",
+                  (unsigned)level, (unsigned long)micros(),
+                  (int)ble_control::isHomeModePageActive());
 #endif
     // Route the write to home.brightness vs lamp.brightness based on
     // which page the app is on. When the user is configuring home mode
@@ -540,11 +541,16 @@ void loop() {
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    // Re-derive the effective level through the same gate the compositor
-    // is using so the strip transitions through the intended value rather
-    // than blindly applying the wire byte. (Identical to applyEffective-
-    // Brightness but inlined for the LAMP_DEBUG print.)
-    applyEffectiveBrightness();
+    // Apply the wire value directly — the user just wrote `level`, so
+    // by definition that IS the effective brightness right now. Skipping
+    // the effectiveBrightness() lookup keeps this hot path off the
+    // wifi::homeSsidVisible string-compare loop, matching the pre-
+    // simplification behavior (commit 7023f29) where this drain was
+    // smooth under continuous slider drag.
+    if (shadeStrip) shadeStrip->setBrightness(
+        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    if (baseStrip)  baseStrip->setBrightness(
+        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
   }
 
   if (pendingShadeColorsJson.valid) {
@@ -558,7 +564,8 @@ void loop() {
     buf[len] = '\0';
 
 #ifdef LAMP_DEBUG
-    Serial.printf("[loop] drain shadeColors len=%u\n", (unsigned)len);
+    Serial.printf("[drain] shadeColors len=%u t_us=%lu\n",
+                  (unsigned)len, (unsigned long)micros());
 #endif
 
     JsonDocument doc;
@@ -588,7 +595,8 @@ void loop() {
     buf[len] = '\0';
 
 #ifdef LAMP_DEBUG
-    Serial.printf("[loop] drain baseColors len=%u\n", (unsigned)len);
+    Serial.printf("[drain] baseColors len=%u t_us=%lu\n",
+                  (unsigned)len, (unsigned long)micros());
 #endif
 
     JsonDocument doc;

@@ -261,7 +261,10 @@ class BrightnessCallback : public NimBLECharacteristicCallbacks {
     uint8_t level = static_cast<uint8_t>(val[0]);
     if (level > 100) level = 100;
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE brightness level=%u\n", level);
+    // Pair with [drain] brightness t_us=... in standard_lamp.cpp to
+    // measure BLE→loop latency under continuous slider drag.
+    Serial.printf("[ble] brightness recv level=%u t_us=%lu\n",
+                  level, (unsigned long)micros());
 #endif
     // Zero-alloc on Core 0. The drain in standard_lamp.cpp::loop() reads
     // pendingBrightness on Core 1, updates config + timestamps + strip

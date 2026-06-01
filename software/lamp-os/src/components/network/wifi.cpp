@@ -62,6 +62,12 @@ State state() { return s_state; }
 std::string lastError() { return s_lastError; }
 
 void startScan() {
+#ifdef LAMP_DEBUG
+  // Logged so we can rule scans in/out of any "slow during BT" reports
+  // — scans only fire when BT is disconnected, but a scan started just
+  // before a reconnect can spill ~5s into the BT session.
+  Serial.println("[wifi] scan started");
+#endif
   s_scanResults.clear();
   WiFi.scanDelete();
   WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/false);
