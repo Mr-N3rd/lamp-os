@@ -124,4 +124,13 @@ void notifyLampSection();
  */
 void notifyNearbyLamps();
 
+/**
+ * @brief Returns true while the app's Home Mode setup page has asked the
+ *        lamp to "switch into home mode" for the duration of the page.
+ *        Cleared on explicit exit-preview write OR on BT disconnect.
+ *        Used by effectiveBrightness() in standard_lamp.cpp to apply
+ *        homeMode.brightness while the user is configuring it.
+ */
+bool isHomePreviewActive();
+
 }  // namespace ble_control

@@ -60,6 +60,11 @@ struct PendingKnockoutUpdate {
 };
 
 volatile int8_t pendingBrightness = -1;
+// Flag set from Core 0 (BLE callbacks) when the home-mode preview state
+// changes — either the flag itself flipped, or homeMode.brightness was
+// updated via CHAR_HOME_PREVIEW cmd 0x02. The loop task on Core 1 drains
+// it and calls applyEffectiveBrightness so the strip transitions cleanly.
+volatile bool pendingApplyEffectiveBrightness = false;
 PendingJsonUpdate pendingBaseColorsJson;
 PendingJsonUpdate pendingShadeColorsJson;
 PendingKnockoutUpdate pendingKnockout;
@@ -86,6 +91,7 @@ static void postPendingJson(PendingJsonUpdate& slot, const char* data, size_t le
 void postPendingShadeColorsJson(const char* data, size_t len) { postPendingJson(pendingShadeColorsJson, data, len); }
 void postPendingBaseColorsJson(const char* data, size_t len)  { postPendingJson(pendingBaseColorsJson, data, len); }
 void postPendingBrightness(int8_t level) { pendingBrightness = level; }
+void postPendingApplyEffectiveBrightness() { pendingApplyEffectiveBrightness = true; }
 void postPendingKnockout(uint8_t pixel, uint8_t brightness) {
   portENTER_CRITICAL(&pendingMux);
   pendingKnockout.pixel = pixel;
@@ -356,10 +362,17 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
 
 extern void lamp_register_panic_handler();
 
-// Effective brightness depends on whether we're in home mode (joined to the
-// configured WiFi network). Falls back to the regular lamp brightness while
-// the BLE client has paused WiFi or no SSID is configured.
+// Effective brightness depends on whether we're in home mode. Two ways:
+//   1. App-driven preview: the Home Mode setup page is mounted, the app
+//      has written CHAR_HOME_PREVIEW cmd 0x01. ble_control holds the flag.
+//      Used so the brightness slider on that page has visible effect even
+//      though WiFi is paused for the BT session.
+//   2. Actual home mode: WiFi STA is associated with the saved home SSID.
+// Otherwise falls back to the regular lamp brightness.
 static uint8_t effectiveBrightness() {
+  if (ble_control::isHomePreviewActive()) {
+    return config.homeMode.brightness;
+  }
   if (wifi::isConnected() && !config.homeMode.ssid.empty() &&
       wifi::currentSsid() == config.homeMode.ssid) {
     return config.homeMode.brightness;
@@ -477,6 +490,11 @@ void loop() {
   // verify reconnect hits about 5 s post-reboot.
   if (millis() >= 5000) {
     bt.setMeshState(!lamp::nearbyLamps.getReachableViaBle(60000).empty());
+  }
+
+  if (pendingApplyEffectiveBrightness) {
+    pendingApplyEffectiveBrightness = false;
+    applyEffectiveBrightness();
   }
 
   if (pendingBrightness >= 0) {

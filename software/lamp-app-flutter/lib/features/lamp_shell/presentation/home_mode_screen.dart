@@ -119,9 +119,14 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
     final wifiNotifier =
         ref.read(wifiNotifierProvider(widget.lampId).notifier);
 
-    // SnackBar on connect failure.
+    // SnackBar on connect failure — only for user-initiated connects. The
+    // firmware can also transition to 'failed' on its own (lost AP, etc.)
+    // and we don't want to surface that as a user-visible error from this
+    // page if the user didn't ask to connect.
     ref.listen(wifiNotifierProvider(widget.lampId), (prev, next) {
-      if (prev?.value?.state != 'failed' && next.value?.state == 'failed') {
+      if (_userInitiatedConnect &&
+          prev?.value?.state != 'failed' &&
+          next.value?.state == 'failed') {
         final msg = _errorMessage(next.value?.lastError);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -167,8 +172,13 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
               ref.read(controlNotifierProvider(widget.lampId).notifier);
           final wifi = wifiAsync.value ?? const WifiState();
 
-          // Kick off a scan on first paint when nothing's queued.
+          // Kick off a scan on first paint when nothing's queued AND the
+          // user actually needs to pick a network (no SSID saved yet).
+          // Once a network is saved we don't show the Networks list, so
+          // there's no need to scan.
+          final hasSavedSsid = state.home.ssid.isNotEmpty;
           if (!_didKickoffScan &&
+              !hasSavedSsid &&
               wifi.scanResults.isEmpty &&
               wifi.state == 'idle') {
             _didKickoffScan = true;
@@ -225,62 +235,65 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                 const SizedBox(height: 12),
               ],
 
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Networks',
-                      style: TextStyle(
-                        color: BrandColors.fogGrey,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        letterSpacing: 0.5,
+              // Networks list — only shown when there's no saved SSID
+              // (first-time setup, or after the user taps Forget Network).
+              // Otherwise it's just visual noise.
+              if (!hasSaved && !isConnected) ...[
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Networks',
+                        style: TextStyle(
+                          color: BrandColors.fogGrey,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          letterSpacing: 0.5,
+                        ),
                       ),
                     ),
-                  ),
-                  SizedBox(
-                    width: 36,
-                    height: 36,
-                    child: isScanning
-                        ? const Padding(
-                            padding: EdgeInsets.all(8),
-                            child:
-                                CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : IconButton(
-                            icon: const Icon(Icons.refresh, size: 20),
-                            tooltip: 'Scan for networks',
-                            onPressed: isScanning ? null : wifiNotifier.scan,
-                            padding: EdgeInsets.zero,
-                          ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-
-              if (wifi.scanResults.isEmpty && !isScanning)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Text(
-                    'Tap refresh to scan for networks.',
-                    style: TextStyle(color: BrandColors.fogGrey),
-                    textAlign: TextAlign.center,
-                  ),
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: isScanning
+                          ? const Padding(
+                              padding: EdgeInsets.all(8),
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : IconButton(
+                              icon: const Icon(Icons.refresh, size: 20),
+                              tooltip: 'Scan for networks',
+                              onPressed: isScanning ? null : wifiNotifier.scan,
+                              padding: EdgeInsets.zero,
+                            ),
+                    ),
+                  ],
                 ),
-
-              ...wifi.scanResults.map((r) {
-                final inFlight = r.ssid == wifi.ssid && isConnecting;
-                return ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 0),
-                  leading: _RssiBars(rssi: r.rssi),
-                  title: Text(r.ssid),
-                  trailing: r.encrypted
-                      ? const Icon(Icons.lock_outline,
-                          size: 16, color: BrandColors.slateGrey)
-                      : null,
-                  onTap: inFlight ? null : () => _promptPassword(context, r),
-                );
-              }),
+                const SizedBox(height: 4),
+                if (wifi.scanResults.isEmpty && !isScanning)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'Tap refresh to scan for networks.',
+                      style: TextStyle(color: BrandColors.fogGrey),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ...wifi.scanResults.map((r) {
+                  final inFlight = r.ssid == wifi.ssid && isConnecting;
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 0),
+                    leading: _RssiBars(rssi: r.rssi),
+                    title: Text(r.ssid),
+                    trailing: r.encrypted
+                        ? const Icon(Icons.lock_outline,
+                            size: 16, color: BrandColors.slateGrey)
+                        : null,
+                    onTap: inFlight ? null : () => _promptPassword(context, r),
+                  );
+                }),
+              ],
 
               // ────────────────────────────────────────────────────────
               // Home-mode brightness + MQTT (only meaningful once joined)

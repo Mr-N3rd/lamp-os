@@ -37,6 +37,7 @@ void postPendingWifiOpJson(const char* data, size_t len);
 void postPendingTestActionJson(const char* data, size_t len);
 void postPendingMqttOpJson(const char* data, size_t len);
 void postPendingRemoteOpJson(const char* data, size_t len);
+void postPendingApplyEffectiveBrightness();
 static constexpr size_t MAX_PENDING_JSON = 256;
 static constexpr size_t MAX_PENDING_OP_JSON = 512;
 
@@ -60,11 +61,20 @@ static NimBLECharacteristic* s_nearbyLampsChar  = nullptr;
 static lamp::Config*         s_config      = nullptr;
 static Preferences*          s_prefs       = nullptr;
 static bool                  s_running     = false;
-// True while the Home Mode setup page (in the app) has asked the lamp to
-// "switch into home mode" by bringing up WiFi STA — even though a BT
-// client is connected. Cleared on explicit exit-preview write OR on BT
-// disconnect (defensive cleanup if the app crashed without exiting).
+// True while the Home Mode setup page (in the app) is mounted. While set,
+// effectiveBrightness() in standard_lamp.cpp uses homeMode.brightness so
+// the slider on the Home Mode page has visible effect — even though WiFi
+// is paused for the BT session. Cleared on explicit exit-preview write
+// OR on BT disconnect (defensive cleanup if the app crashed without exit).
+//
+// We don't actually bring up WiFi STA during preview: BT/WiFi coexistence
+// is unreliable enough that an association attempt during a BT session
+// typically times out and stresses the BLE link. The preview-driven
+// effectiveBrightness gate gives the same UX outcome (lamp dims in real
+// time as the user slides) without that risk.
 static bool                  s_homePreviewActive = false;
+
+bool isHomePreviewActive() { return s_homePreviewActive; }
 
 // Per-connection auth state.  Key = connection handle, value = authed.
 static std::map<uint16_t, bool> s_connAuth;
@@ -316,24 +326,31 @@ class HomePreviewCallback : public NimBLECharacteristicCallbacks {
     const uint8_t cmd = static_cast<uint8_t>(val[0]);
     switch (cmd) {
       case 0x00: {
+        // Exit: clear the flag and re-apply brightness so the lamp
+        // transitions back to lamp.brightness (or whatever the existing
+        // wifi-gated effectiveBrightness would resolve to).
         if (s_homePreviewActive) {
           s_homePreviewActive = false;
-          wifi::disconnect();
+          postPendingApplyEffectiveBrightness();
 #ifdef LAMP_DEBUG
-          Serial.println("[ble_control] HOME_PREVIEW exit (wifi paused)");
+          Serial.println("[ble_control] HOME_PREVIEW exit");
 #endif
         }
         break;
       }
       case 0x01: {
+        // Enter: flip the flag so effectiveBrightness returns
+        // homeMode.brightness for the duration of the page. We intentionally
+        // do NOT bring up WiFi STA — BT/WiFi coexistence during an active
+        // BLE session is flaky and association typically times out, which
+        // would surface as a "Connection timed out" error in the app for
+        // a connect the user never initiated.
         if (!s_config) return;
-        if (!s_config->homeMode.enabled) return;
-        if (s_config->homeMode.ssid.empty()) return;
+        if (s_homePreviewActive) break;
         s_homePreviewActive = true;
-        wifi::connect(s_config->homeMode.ssid, s_config->homeMode.password);
+        postPendingApplyEffectiveBrightness();
 #ifdef LAMP_DEBUG
-        Serial.printf("[ble_control] HOME_PREVIEW enter ssid=%s\n",
-                      s_config->homeMode.ssid.c_str());
+        Serial.println("[ble_control] HOME_PREVIEW enter");
 #endif
         break;
       }
@@ -341,7 +358,11 @@ class HomePreviewCallback : public NimBLECharacteristicCallbacks {
         if (val.size() < 2 || !s_config) return;
         uint8_t level = static_cast<uint8_t>(val[1]);
         if (level > 100) level = 100;
+        // In-memory only; persistence happens via the regular settings_blob
+        // save when the user taps Save. Re-apply brightness so the strip
+        // visibly tracks the slider.
         s_config->homeMode.brightness = level;
+        postPendingApplyEffectiveBrightness();
 #ifdef LAMP_DEBUG
         Serial.printf("[ble_control] HOME_PREVIEW brightness=%u\n", level);
 #endif
