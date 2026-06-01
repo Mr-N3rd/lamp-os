@@ -17,7 +17,16 @@ import 'control_state.dart';
 
 part 'control_notifier.g.dart';
 
-const _writeDebounce = Duration(milliseconds: 30);
+// Live-preview write debounce. Sized to match the BLE link's actual
+// drain rate (~20 writes/sec at the ~49ms connection interval Android
+// usually negotiates) with a small margin. 30ms (~33Hz) was over-
+// driving the link → writes queued in fbp/Android → progressive
+// slowdown under continuous slider drag (user observed: taps fast,
+// drag drifts slower). 60ms (~17Hz) stays under the link ceiling so
+// the queue never fills. If updateConnParams is honored firmware-side
+// and the link widens, we could drop this back; for now 60ms is the
+// safe default.
+const _writeDebounce = Duration(milliseconds: 60);
 
 @Riverpod(keepAlive: false, name: 'controlNotifierProvider')
 class ControlNotifier extends _$ControlNotifier {

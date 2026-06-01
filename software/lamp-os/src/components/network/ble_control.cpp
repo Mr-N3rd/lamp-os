@@ -181,6 +181,15 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     server->setDataLen(handle, 251);
     NimBLEDevice::setMTU(TARGET_MTU);
 
+    // Request a tighter connection interval for live-preview throughput.
+    // Android may decline (it weighs power saving), but when accepted
+    // this widens the link from ~20 writes/sec at the default ~49ms
+    // interval to ~33-66 writes/sec at 15-30ms — eliminating the queue
+    // backpressure that made continuous slider drags lag.
+    //   minInterval = 12 (15.0 ms), maxInterval = 24 (30.0 ms),
+    //   latency = 0, supervision timeout = 400 (4.0 s).
+    server->updateConnParams(handle, 12, 24, 0, 400);
+
     lamp::scanPausedForGattClient = true;
     NimBLEDevice::getScan()->stop();
 
