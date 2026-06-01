@@ -214,8 +214,16 @@ lamp::ShowReceiver showReceiver;
 lamp::ShowBehavior shadeShowBehavior;
 lamp::ShowBehavior baseShowBehavior;
 
+// Forward decl — defined later, alongside effectiveBrightness which
+// shares the same gate. initBehaviors uses it to seed compositor.begin.
+static bool calculateEffectiveHomeMode();
+
 void initBehaviors() {
   shadeSocialBehavior = lamp::SocialBehavior(&shade, 1200);
+  // Pause social greetings when the lamp is in home mode — home mode is
+  // the user's "I'm home, calm down" mode. Compositor gates this via
+  // the homeMode flag, kept in sync by reapplyHomeModeState().
+  shadeSocialBehavior.allowedInHomeMode = false;
   shadeConfiguratorBehavior = lamp::ConfiguratorBehavior(&shade, 120);
   shadeConfiguratorBehavior.colors = shade.defaultColors;
   baseConfiguratorBehavior = lamp::ConfiguratorBehavior(&base, 120);
@@ -260,7 +268,7 @@ void initBehaviors() {
   allBehaviors.push_back(&baseFadeOutBehavior);
   allBehaviors.push_back(&shadeFadeOutBehavior);
 
-  compositor.begin(allBehaviors, {&shade, &base}, /*homeMode=*/false);
+  compositor.begin(allBehaviors, {&shade, &base}, calculateEffectiveHomeMode());
   // Record where the initial expression behaviors end so runtime adds insert
   // before higher-priority behaviors (social, configurator, fade-out).
   compositor.setExpressionBandEnd(exprBehaviors.size());
@@ -386,8 +394,50 @@ static void applyEffectiveBrightness() {
   if (baseStrip) baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
 }
 
-static void onWifiStateChanged() {
+// Persist current in-memory config to NVS WITHOUT triggering a reboot.
+// Used for small config updates (wifi creds via wifi_op) that need
+// durability but shouldn't disrupt the active BLE session or restart
+// behaviors. Mirrors the settings_blob save path but omits the
+// fadeOutRebootRequested signal.
+static void persistConfigToNvs() {
+  JsonDocument doc = config.asJsonDocument();
+  String json;
+  serializeJson(doc, json);
+  prefs.begin("lamp", false);
+  prefs.putString("cfg", json.c_str());
+  prefs.end();
+#ifdef LAMP_DEBUG
+  Serial.printf("[loop] persistConfigToNvs wrote %u bytes\n",
+                (unsigned)json.length());
+#endif
+}
+
+// Same gate as effectiveBrightness() — keeps the compositor's homeMode
+// flag (which controls allowedInHomeMode behavior suppression) in
+// lockstep with which brightness the lamp is currently using.
+static bool calculateEffectiveHomeMode() {
+  if (ble_control::isHomePreviewActive()) return true;
+  if (wifi::isConnected() && !config.homeMode.ssid.empty() &&
+      wifi::currentSsid() == config.homeMode.ssid) {
+    return true;
+  }
+  return false;
+}
+
+// Single funnel for "home mode state may have changed" — keeps the
+// compositor's behavior gate and the strip brightness in lockstep so
+// the lamp transitions cleanly when preview flips or WiFi associates /
+// disassociates.
+static void reapplyHomeModeState() {
+  compositor.setHomeMode(calculateEffectiveHomeMode());
   applyEffectiveBrightness();
+}
+
+static void onWifiStateChanged() {
+  // Route through reapplyHomeModeState so the compositor's homeMode flag
+  // (which gates SocialBehavior + other allowedInHomeMode=false behaviors)
+  // transitions in lockstep with effective brightness.
+  reapplyHomeModeState();
   ble_control::notifyWifiState();
 }
 
@@ -494,7 +544,10 @@ void loop() {
 
   if (pendingApplyEffectiveBrightness) {
     pendingApplyEffectiveBrightness = false;
-    applyEffectiveBrightness();
+    // Preview enter/exit (cmd 0x01/0x00) and live home-brightness writes
+    // (cmd 0x02) all funnel here — refresh the compositor homeMode gate
+    // and the strip brightness together.
+    reapplyHomeModeState();
   }
 
   if (pendingBrightness >= 0) {
@@ -709,11 +762,22 @@ void loop() {
         if (!ssid.empty()) {
           config.homeMode.ssid = ssid;
           config.homeMode.password = password;
+          // Configuring home wifi IS opting into home mode — flip
+          // enabled and persist so the lamp survives BT disconnect and
+          // reboot without requiring a separate Save tap. Without this
+          // the onDisconnect wifi-resume gate fails (enabled stays
+          // whatever NVS had — typically false on first setup) and the
+          // lamp never actually joins the home AP once the app closes.
+          config.homeMode.enabled = true;
+          persistConfigToNvs();
           wifi::connect(ssid, password);
         }
       } else if (op && strcmp(op, "forget") == 0) {
         config.homeMode.ssid.clear();
         config.homeMode.password.clear();
+        // Forget is also a durable user choice — persist so a reboot
+        // doesn't bring back the wifi the user just removed.
+        persistConfigToNvs();
         wifi::forget();
       }
     }

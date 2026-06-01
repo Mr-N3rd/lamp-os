@@ -143,6 +143,18 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
           next.value?.state == 'connected';
       if (justConnected && !_autoPoppedAfterConnect) {
         _autoPoppedAfterConnect = true;
+        // Sync state.home.ssid with what the firmware now has — the
+        // wifi_op connect path bypasses the section read, so without
+        // this nudge the Setup row subtitle would render "On · not
+        // configured" even though the lamp is on the network. Password
+        // we leave alone (firmware persists the real value; app uses
+        // the masked sentinel for known-set passwords).
+        final connectedSsid = next.value?.ssid;
+        if (connectedSsid != null && connectedSsid.isNotEmpty) {
+          ref
+              .read(controlNotifierProvider(widget.lampId).notifier)
+              .setHomeSsid(connectedSsid);
+        }
         // Capture the router before the await so we don't re-use the
         // BuildContext across the async gap.
         final router = GoRouter.maybeOf(context);
@@ -208,9 +220,11 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
             children: [
               const InfoPanel(
                 child: Text(
-                  'Join your lamp to your home Wi-Fi so it can participate '
-                  'in the mesh, use a separate home brightness, and accept '
-                  'smart-home control via MQTT.',
+                  'Home Mode quiets the lamp for everyday use — it pauses '
+                  'social greetings and switches to a calmer brightness '
+                  'while joined to your home Wi-Fi. It also lets Home '
+                  'Assistant control the lamp over MQTT. Mesh discovery '
+                  'keeps working either way.',
                 ),
               ),
               const SizedBox(height: 16),

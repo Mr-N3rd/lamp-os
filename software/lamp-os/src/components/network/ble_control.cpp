@@ -72,7 +72,12 @@ static bool                  s_running     = false;
 // typically times out and stresses the BLE link. The preview-driven
 // effectiveBrightness gate gives the same UX outcome (lamp dims in real
 // time as the user slides) without that risk.
-static bool                  s_homePreviewActive = false;
+// volatile: written from Core 0 (BLE callback), read from Core 1 (loop
+// task via effectiveBrightness/reapplyHomeModeState). Without volatile
+// the compiler can cache the read in a register and Core 1 misses the
+// flip on a bare enter/exit write — leaving the lamp stuck on the
+// previous brightness mode until something else triggers a re-read.
+static volatile bool         s_homePreviewActive = false;
 
 bool isHomePreviewActive() { return s_homePreviewActive; }
 
