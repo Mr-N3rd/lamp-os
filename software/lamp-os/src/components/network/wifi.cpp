@@ -41,6 +41,13 @@ static void setState(State next) {
 void begin() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
+  // Loosen the STA's minimum auth threshold from the Arduino default
+  // (WPA2_PSK) to WPA_PSK so we'll happily associate with WPA2/WPA3
+  // mixed-mode APs that advertise WPA3 first and only fall back to WPA2
+  // on negotiation. Symptom of the default being too strict: ESP32
+  // reports WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY (210) against
+  // an AP the user can clearly see and connect to from other devices.
+  WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
   WiFi.disconnect(true, true);  // clear any stale config left over from a previous boot
 }
 
