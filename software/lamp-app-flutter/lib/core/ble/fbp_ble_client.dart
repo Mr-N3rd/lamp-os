@@ -26,6 +26,21 @@ class FbpBleClient implements BleClient {
       autoConnect: false,
       mtu: 247,
     );
+    // Ask Android for a tighter connection interval (11.25-15ms vs the
+    // default ~49ms) — wraps BluetoothGatt.requestConnectionPriority(
+    // CONNECTION_PRIORITY_HIGH). Without this, slider-rate live writes
+    // ceiling at ~11Hz (one write per pair of connection events) even
+    // with WRITE_NR and a rate-paced WriteCoalescer. HIGH costs the
+    // phone some battery while connected, but the lamp is line-powered
+    // and the user is actively interacting — fair trade. iOS ignores;
+    // some Androids decline; either way swallow the error.
+    try {
+      await device.requestConnectionPriority(
+        connectionPriorityRequest: fbp.ConnectionPriority.high,
+      );
+    } catch (_) {
+      // best-effort — not all platforms honor this
+    }
     // Reset the cache on every connect — service handles can change after a
     // reconnect, especially after a firmware reboot that re-registers the
     // GATT database.
