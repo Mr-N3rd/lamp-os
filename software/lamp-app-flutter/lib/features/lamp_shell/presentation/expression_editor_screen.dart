@@ -178,35 +178,10 @@ class _ExpressionEditorScreenState
         title: Text(_existsInState(async.value)
             ? (meta?.name ?? widget.typeKey)
             : 'New ${meta?.name ?? widget.typeKey}'),
-        actions: [
-          // Context action in the AppBar — `Test` is the only one-shot,
-          // non-destructive action specific to this screen. Pattern: page-
-          // specific test/run actions live here; Save and Delete live in
-          // the page body so they aren't easy to mistap.
-          if (async.value != null)
-            _AppBarTestAction(
-              onPressed: () async {
-                // Activates whatever is currently saved firmware-side
-                // for this (type, target). To preview draft changes,
-                // tap Save first (or back out and preview from the
-                // expressions list). Keeping this simple — no draft
-                // upsert here — per the agreed workflow.
-                final draft = ref.read(expressionDraftProvider(
-                    widget.lampId, widget.typeKey, widget.targetKey));
-                final notifier =
-                    ref.read(controlNotifierProvider(widget.lampId).notifier);
-                await notifier.testExpression(ExpressionConfig(
-                  type: draft.type,
-                  enabled: true,
-                  colors: draft.colors,
-                  intervalMin: draft.intervalMin,
-                  intervalMax: draft.intervalMax,
-                  target: draft.target,
-                  parameters: draft.parameters,
-                ));
-              },
-            ),
-        ],
+        // No Test action here — testExpression activates whatever is
+        // *saved* firmware-side, which would be misleading on this
+        // editing screen where the user expects to preview their draft.
+        // Workflow: edit → Save → preview from the expressions list.
       ),
       body: async.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
@@ -418,31 +393,6 @@ class _Header extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// Pill-shaped, AppBar-tinted "Test" action. Placed in `AppBar.actions` per
-/// the agreed pattern: page-specific, non-destructive one-shot actions live
-/// in the title area; Save and Delete sit in the page body where they're
-/// harder to mistap.
-class _AppBarTestAction extends StatelessWidget {
-  const _AppBarTestAction({required this.onPressed});
-  final Future<void> Function() onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      child: TextButton.icon(
-        onPressed: onPressed,
-        icon: const Icon(Icons.play_arrow, size: 18),
-        label: const Text('Test'),
-        style: TextButton.styleFrom(
-          foregroundColor: BrandColors.auroraBlue,
-          shape: const StadiumBorder(),
-        ),
       ),
     );
   }
