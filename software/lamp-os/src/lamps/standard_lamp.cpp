@@ -434,10 +434,17 @@ static void reapplyHomeModeState() {
 }
 
 static void onWifiStateChanged() {
-  // Route through reapplyHomeModeState so the compositor's homeMode flag
-  // (which gates SocialBehavior + other allowedInHomeMode=false behaviors)
-  // transitions in lockstep with effective brightness.
-  reapplyHomeModeState();
+  // This callback fires from Arduino-ESP32's WiFi event task — NOT Core 1.
+  // Calling into compositor.setHomeMode / shadeStrip->setBrightness from
+  // here races Core 1's compositor.tick + frame_buffer.flush, corrupting
+  // the NeoPixel byte buffer and the behavior vector. Symptom: lamp
+  // crash-loops with rst:0x3 (SW_RESET) + _invalid_pc_placeholder on
+  // every BT connect (because BT-connect triggers wifi::disconnect,
+  // which fires this callback).
+  //
+  // Safe path: post the pending flag and let Core 1's loop drain call
+  // reapplyHomeModeState on its own thread.
+  postPendingApplyEffectiveBrightness();
   ble_control::notifyWifiState();
 }
 
