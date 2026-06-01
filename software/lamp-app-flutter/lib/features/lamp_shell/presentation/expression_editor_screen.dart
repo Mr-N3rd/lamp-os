@@ -144,7 +144,7 @@ class _ExpressionEditorScreenState
                     widget.lampId, widget.typeKey, widget.targetKey));
                 final notifier =
                     ref.read(controlNotifierProvider(widget.lampId).notifier);
-                await notifier.testExpression(ExpressionConfig(
+                final entry = ExpressionConfig(
                   type: draft.type,
                   enabled: true,
                   colors: draft.colors,
@@ -152,7 +152,17 @@ class _ExpressionEditorScreenState
                   intervalMax: draft.intervalMax,
                   target: draft.target,
                   parameters: draft.parameters,
-                ));
+                );
+                // Push the draft (colors + parameters) into firmware
+                // in-memory config FIRST. testExpression's wire format
+                // only carries (type, target) — the firmware then
+                // activates the expression using whatever colors are
+                // stored, so without this upsert the preview would show
+                // the previously-saved colors instead of the draft.
+                // Upsert is in-memory only (NVS persistence still goes
+                // through settingsBlob save), so this is cheap.
+                await notifier.upsertExpression(entry);
+                await notifier.testExpression(entry);
               },
             ),
         ],
