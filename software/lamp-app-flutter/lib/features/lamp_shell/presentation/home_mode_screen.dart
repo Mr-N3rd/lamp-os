@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/ble/ble_client.dart';
 import '../../../core/ble/ble_client_provider.dart';
 import '../../../core/ble/uuids.dart';
 import '../../../core/theme/brand_colors.dart';
@@ -14,20 +15,20 @@ import '../../control/presentation/widgets/connecting_view.dart';
 import '../application/wifi_notifier.dart';
 import '../domain/wifi_state.dart';
 
-/// Home Mode pane — everything the lamp does once it's joined to the
-/// user's home Wi-Fi:
-///   - Pick a Wi-Fi network + join it.
-///   - Home-mode brightness (separate from the regular brightness).
-///   - Smart-home (MQTT) hook-up.
+/// Home Mode pane — presence-only detection of a home WiFi network.
 ///
-/// "Home Mode" and "Home Wi-Fi" used to be separate Setup rows pointing at
-/// separate screens — they're a single concept (the lamp is on the home
-/// network and behaving as a home-mode device), so they were merged into
-/// this one pane.
+/// The lamp never associates to the AP. It periodically scans for nearby
+/// SSIDs (background scans gated to BT-disconnected windows so they don't
+/// stress the shared radio) and treats the user's selected SSID being
+/// visible as "I'm at home". No password is stored or transmitted, which
+/// also closes off the spoofed-AP password-capture attack.
 ///
-/// When the user successfully joins a network the screen auto-pops back to
-/// Setup after a short delay so the connection feedback is visible without
-/// trapping the user on the scan list.
+/// While the user is on this page, the firmware unconditionally treats
+/// home mode as ACTIVE via the CHAR_HOME_MODE_FOCUS signal — so the
+/// brightness slider previews the home brightness in real time. When
+/// the user leaves the page, the focus signal clears and the firmware
+/// falls back to "configurator" mode (home mode off) for the rest of
+/// the BT session.
 class HomeModeScreen extends ConsumerStatefulWidget {
   const HomeModeScreen({super.key, required this.lampId});
   final String lampId;
@@ -38,95 +39,64 @@ class HomeModeScreen extends ConsumerStatefulWidget {
 
 class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
   bool _didKickoffScan = false;
-  bool _autoPoppedAfterConnect = false;
-  // Only auto-pop on connects the user kicked off from this page. Without
-  // this gate the `ref.listen` block below fires on its first registration
-  // (where prev == null and next.value.state == 'connected') and pops the
-  // user out immediately — which now happens on every entry once the page
-  // brings Wi-Fi up via enterHomePreview.
-  bool _userInitiatedConnect = false;
-  final _host = TextEditingController();
-  final _port = TextEditingController();
-  final _user = TextEditingController();
-  final _password = TextEditingController();
-  final _topic = TextEditingController();
-  bool _seededMqtt = false;
+
+  // Captured in initState so dispose can fire the focus-off write WITHOUT
+  // touching `ref` after super.dispose() — the previous pattern of
+  // ref.read(...) in dispose was tripping
+  // `_lifecycleState != _ElementLifecycle.defunct` framework asserts
+  // because the Element is mid-teardown by then.
+  late BleClient _ble;
 
   @override
   void initState() {
     super.initState();
-    // Tell the firmware to switch into home mode (bring up Wi-Fi STA with
-    // saved creds) while we're on this page. Credentials are known-good —
-    // the user can only reach this page after a successful Wi-Fi setup.
+    _ble = ref.read(bleClientProvider);
+    // Tell the lamp "user is on the Home Mode page": forces home-mode
+    // gate ON so the brightness slider previews home brightness live,
+    // and routes incoming CHAR_BRIGHTNESS writes to homeMode.brightness.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref
-          .read(controlNotifierProvider(widget.lampId).notifier)
-          .enterHomePreview();
+      _writeFocus(true);
     });
   }
 
   @override
   void dispose() {
-    // Tell the firmware to leave preview mode. Go through the BleClient
-    // directly with captured references — routing through the
-    // ControlNotifier worked unreliably (the notifier is autoDispose, so
-    // there's a tiny window during route pop where the BLE write could
-    // get dropped). bleClientProvider is keepAlive=true and stays valid.
-    final ble = ref.read(bleClientProvider);
-    final lampId = widget.lampId;
-    unawaited(() async {
-      try {
-        await ble.write(
-          lampId,
-          BleUuids.controlService,
-          BleUuids.homePreview,
-          Uint8List.fromList([0x00]),
-        );
-      } catch (_) {
-        // best-effort — BT may already be torn down by the time this fires
-      }
-    }());
-    _host.dispose();
-    _port.dispose();
-    _user.dispose();
-    _password.dispose();
-    _topic.dispose();
+    // Tell the lamp "user is leaving" — fire-and-forget via the captured
+    // BleClient. The firmware also clears the flag on BT disconnect as
+    // a safety net, so a missed exit (app killed mid-page) is recovered.
+    _writeFocus(false);
     super.dispose();
   }
 
-  String _errorMessage(String? lastError) {
-    switch (lastError) {
-      case 'auth':
-        return 'Wrong password';
-      case 'noap':
-        return 'Network not found';
-      case 'timeout':
-        return 'Connection timed out';
-      default:
-        return 'Connection failed';
-    }
+  void _writeFocus(bool active) {
+    unawaited(_ble.write(
+      widget.lampId,
+      BleUuids.controlService,
+      BleUuids.homeModeFocus,
+      Uint8List.fromList([active ? 1 : 0]),
+    ).catchError((_) {
+      // best-effort — BT may already be torn down by route pop
+    }));
   }
 
-  Future<void> _promptPassword(BuildContext context, WifiScanResult r) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: BrandColors.midnightBlack,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => _WifiPasswordSheet(
-        scanResult: r,
-        onConnect: (pwd) {
-          Navigator.of(ctx).pop();
-          _userInitiatedConnect = true;
-          ref
-              .read(wifiNotifierProvider(widget.lampId).notifier)
-              .connect(r.ssid, pwd);
-        },
-      ),
-    );
+  Future<void> _selectSsid(String ssid) async {
+    // 1. Tell the firmware to persist the new home SSID (CHAR_WIFI_OP
+    //    setHomeSsid → persistConfigToNvs firmware-side).
+    await ref.read(wifiNotifierProvider(widget.lampId).notifier)
+        .setHomeSsid(ssid);
+    // 2. Mirror into controlNotifier state so the UI reflects it
+    //    immediately (CHAR_HOME_SECTION has no NOTIFY subscription).
+    if (!mounted) return;
+    ref.read(controlNotifierProvider(widget.lampId).notifier)
+        .setHomeSsid(ssid);
+  }
+
+  void _onForget() {
+    // Firmware clears + persists; mirror to app state.
+    ref.read(wifiNotifierProvider(widget.lampId).notifier).forget();
+    final cn = ref.read(controlNotifierProvider(widget.lampId).notifier);
+    cn.setHomeSsid('');
   }
 
   @override
@@ -135,52 +105,6 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
     final wifiAsync = ref.watch(wifiNotifierProvider(widget.lampId));
     final wifiNotifier =
         ref.read(wifiNotifierProvider(widget.lampId).notifier);
-
-    // SnackBar on connect failure — only for user-initiated connects. The
-    // firmware can also transition to 'failed' on its own (lost AP, etc.)
-    // and we don't want to surface that as a user-visible error from this
-    // page if the user didn't ask to connect.
-    ref.listen(wifiNotifierProvider(widget.lampId), (prev, next) {
-      if (_userInitiatedConnect &&
-          prev?.value?.state != 'failed' &&
-          next.value?.state == 'failed') {
-        final msg = _errorMessage(next.value?.lastError);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-        }
-      }
-      // Auto-pop back to Setup once we've actually joined a network — gives
-      // the user the success state for ~1.2s, then drops them on the Setup
-      // tab which shows Home Mode as enabled with the saved SSID. Gated on
-      // _userInitiatedConnect so an already-connected lamp (or the new
-      // enterHomePreview-driven connect) doesn't bounce the user out on
-      // page entry.
-      final justConnected = _userInitiatedConnect &&
-          prev?.value?.state != 'connected' &&
-          next.value?.state == 'connected';
-      if (justConnected && !_autoPoppedAfterConnect) {
-        _autoPoppedAfterConnect = true;
-        // Sync state.home.ssid with what the firmware now has — the
-        // wifi_op connect path bypasses the section read, so without
-        // this nudge the Setup row subtitle would render "On · not
-        // configured" even though the lamp is on the network. Password
-        // we leave alone (firmware persists the real value; app uses
-        // the masked sentinel for known-set passwords).
-        final connectedSsid = next.value?.ssid;
-        if (connectedSsid != null && connectedSsid.isNotEmpty) {
-          ref
-              .read(controlNotifierProvider(widget.lampId).notifier)
-              .setHomeSsid(connectedSsid);
-        }
-        // Capture the router before the await so we don't re-use the
-        // BuildContext across the async gap.
-        final router = GoRouter.maybeOf(context);
-        Future<void>.delayed(const Duration(milliseconds: 1200), () {
-          if (!mounted) return;
-          router?.pop();
-        });
-      }
-    });
 
     return Scaffold(
       appBar: AppBar(
@@ -201,49 +125,18 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
               ref.read(controlNotifierProvider(widget.lampId).notifier);
           final wifi = wifiAsync.value ?? const WifiState();
 
-          // Kick off a scan on first paint when nothing's queued AND the
-          // user actually needs to pick a network (no SSID saved yet).
-          // Once a network is saved we don't show the Networks list, so
-          // there's no need to scan.
-          final hasSavedSsid = state.home.ssid.isNotEmpty;
-          if (!_didKickoffScan &&
-              !hasSavedSsid &&
-              wifi.scanResults.isEmpty &&
-              wifi.state == 'idle') {
+          final hasSaved = state.home.ssid.isNotEmpty;
+          final isScanning = wifi.state == 'scanning';
+
+          // Kick off a scan on first paint when no SSID is saved (we need
+          // a network list for the user to pick from). When a network IS
+          // saved we don't show the picker, so no scan needed.
+          if (!_didKickoffScan && !hasSaved && wifi.scanResults.isEmpty &&
+              wifi.state != 'scanning') {
             _didKickoffScan = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
               wifiNotifier.scan();
             });
-          }
-
-          // Seed MQTT controllers the first time we land on a hydrated state.
-          if (!_seededMqtt) {
-            _host.text = state.mqtt.brokerHost;
-            _port.text = '${state.mqtt.brokerPort}';
-            _user.text = state.mqtt.username;
-            _topic.text = state.mqtt.topicPrefix;
-            _seededMqtt = true;
-          }
-
-          final isConnected = wifi.state == 'connected';
-          final hasSaved = state.home.ssid.isNotEmpty;
-          final isScanning = wifi.state == 'scanning';
-          final isConnecting = wifi.state == 'connecting';
-          final mqttHasPwd = state.mqtt.password == '********' ||
-              state.mqtt.password.isNotEmpty;
-
-          // Forget fires the wifi_op on the firmware (which clears its
-          // in-memory ssid/password + persists via persistConfigToNvs),
-          // AND mirrors the clear into controlNotifier state so the
-          // Setup row subtitle + this page's "Saved: ..." chip drop
-          // immediately instead of waiting for a section re-read that
-          // doesn't happen (no notify subscription on CHAR_HOME_SECTION).
-          void onForget() {
-            wifiNotifier.forget();
-            final cn =
-                ref.read(controlNotifierProvider(widget.lampId).notifier);
-            cn.setHomeSsid('');
-            cn.setHomePassword('');
           }
 
           return ListView(
@@ -251,43 +144,27 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
             children: [
               const InfoPanel(
                 child: Text(
-                  'Home Mode quiets the lamp for everyday use — it pauses '
-                  'social greetings and switches to a calmer brightness '
-                  'while joined to your home Wi-Fi. It also lets Home '
-                  'Assistant control the lamp over MQTT.',
+                  'Home Mode quiets the lamp for everyday use — when the '
+                  'lamp sees your home Wi-Fi nearby it pauses social '
+                  'greetings and switches to a calmer brightness. The '
+                  "lamp doesn't connect to the network or store its "
+                  'password — it just listens for the name in the air.',
                 ),
               ),
               const SizedBox(height: 16),
 
-              // ────────────────────────────────────────────────────────
-              // Wi-Fi connection
-              // ────────────────────────────────────────────────────────
-              if (isConnected) ...[
+              if (hasSaved) ...[
                 _ConnectionStatusRow(
-                  label: 'Connected to ${wifi.ssid}'
-                      '${wifi.ip != null && wifi.ip!.isNotEmpty
-                          ? ' (${wifi.ip})'
-                          : ''}',
-                  onForget: onForget,
+                  label: 'Home network: ${state.home.ssid}',
+                  onForget: _onForget,
                 ),
                 const SizedBox(height: 12),
-              ] else if (hasSaved) ...[
-                _ConnectionStatusRow(
-                  label: 'Saved: ${state.home.ssid}',
-                  onForget: onForget,
-                ),
-                const SizedBox(height: 12),
-              ],
-
-              // Networks list — only shown when there's no saved SSID
-              // (first-time setup, or after the user taps Forget Network).
-              // Otherwise it's just visual noise.
-              if (!hasSaved && !isConnected) ...[
+              ] else ...[
                 Row(
                   children: [
                     const Expanded(
                       child: Text(
-                        'Networks',
+                        'Pick your home network',
                         style: TextStyle(
                           color: BrandColors.fogGrey,
                           fontWeight: FontWeight.w600,
@@ -308,7 +185,8 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                           : IconButton(
                               icon: const Icon(Icons.refresh, size: 20),
                               tooltip: 'Scan for networks',
-                              onPressed: isScanning ? null : wifiNotifier.scan,
+                              onPressed:
+                                  isScanning ? null : wifiNotifier.scan,
                               padding: EdgeInsets.zero,
                             ),
                     ),
@@ -324,155 +202,59 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                       textAlign: TextAlign.center,
                     ),
                   ),
-                ...wifi.scanResults.map((r) {
-                  final inFlight = r.ssid == wifi.ssid && isConnecting;
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 0),
-                    leading: _RssiBars(rssi: r.rssi),
-                    title: Text(r.ssid),
-                    trailing: r.encrypted
-                        ? const Icon(Icons.lock_outline,
-                            size: 16, color: BrandColors.slateGrey)
-                        : null,
-                    onTap: inFlight ? null : () => _promptPassword(context, r),
-                  );
-                }),
+                ...wifi.scanResults.map((r) => ListTile(
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 0),
+                      leading: _RssiBars(rssi: r.rssi),
+                      title: Text(r.ssid),
+                      trailing: r.encrypted
+                          ? const Icon(Icons.lock_outline,
+                              size: 16, color: BrandColors.slateGrey)
+                          : null,
+                      onTap: () => _selectSsid(r.ssid),
+                    )),
               ],
 
-              // ────────────────────────────────────────────────────────
-              // Home-mode brightness + MQTT (only meaningful once joined)
-              // ────────────────────────────────────────────────────────
-              if (hasSaved || isConnected) ...[
-                const SizedBox(height: 24),
-                const Text(
-                  'Home Mode brightness',
-                  style: TextStyle(
-                    color: BrandColors.headerYellow,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
-                  ),
+              // Home brightness — slider always available; the firmware
+              // routes CHAR_BRIGHTNESS to home.brightness while this page
+              // is open (via CHAR_HOME_MODE_FOCUS), so dragging the
+              // slider previews the home brightness live on the lamp.
+              const SizedBox(height: 24),
+              const Text(
+                'Home Mode brightness',
+                style: TextStyle(
+                  color: BrandColors.headerYellow,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
                 ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Slider(
-                        value: state.home.brightness.toDouble(),
-                        min: 0,
-                        max: 100,
-                        divisions: 100,
-                        onChanged: (v) {
-                          final i = v.round();
-                          notifier.setHomeBrightness(i);
-                          // Live BLE write to CHAR_HOME_PREVIEW. The
-                          // firmware has Wi-Fi STA up (from the page's
-                          // initState enterHomePreview call), so the lamp
-                          // is using home brightness — this updates the
-                          // in-memory value, no NVS write until Save.
-                          notifier.previewHomeBrightness(i);
-                        },
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Slider(
+                      value: state.home.brightness.toDouble(),
+                      min: 0,
+                      max: 100,
+                      divisions: 100,
+                      onChanged: (v) =>
+                          notifier.setHomeBrightness(v.round()),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 48,
+                    child: Text(
+                      '${state.home.brightness}%',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        color: BrandColors.fogGrey,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
                       ),
                     ),
-                    SizedBox(
-                      width: 48,
-                      child: Text(
-                        '${state.home.brightness}%',
-                        textAlign: TextAlign.right,
-                        style: const TextStyle(
-                          color: BrandColors.fogGrey,
-                          fontSize: 12,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  'Smart home (Home Assistant)',
-                  style: TextStyle(
-                    color: BrandColors.headerYellow,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Enable MQTT',
-                      style: TextStyle(
-                          color: BrandColors.lampWhite, fontSize: 14)),
-                  value: state.mqtt.enabled,
-                  onChanged: notifier.setMqttEnabled,
-                ),
-                if (state.mqtt.enabled) ...[
-                  const SizedBox(height: 4),
-                  TextField(
-                    controller: _host,
-                    decoration:
-                        const InputDecoration(labelText: 'Broker host'),
-                    style: const TextStyle(color: BrandColors.lampWhite),
-                    onChanged: notifier.setMqttBrokerHost,
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _port,
-                    keyboardType: TextInputType.number,
-                    decoration:
-                        const InputDecoration(labelText: 'Broker port'),
-                    style: const TextStyle(color: BrandColors.lampWhite),
-                    onChanged: (v) {
-                      final n = int.tryParse(v);
-                      if (n != null) notifier.setMqttBrokerPort(n);
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _user,
-                    decoration:
-                        const InputDecoration(labelText: 'Username'),
-                    style: const TextStyle(color: BrandColors.lampWhite),
-                    onChanged: notifier.setMqttUsername,
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _password,
-                    obscureText: true,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      hintText: mqttHasPwd
-                          ? '(unchanged — type to replace)'
-                          : null,
-                      suffixIcon: mqttHasPwd && _password.text.isEmpty
-                          ? const Padding(
-                              padding: EdgeInsets.only(right: 8),
-                              child: Tooltip(
-                                message:
-                                    'A password is set; leaving this blank keeps it.',
-                                child: Icon(Icons.lock,
-                                    size: 16, color: BrandColors.lumenGreen),
-                              ),
-                            )
-                          : null,
-                    ),
-                    style: const TextStyle(color: BrandColors.lampWhite),
-                    onChanged: (v) {
-                      setState(() {});
-                      notifier
-                          .setMqttPassword(v.isEmpty ? '********' : v);
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _topic,
-                    decoration:
-                        const InputDecoration(labelText: 'Topic prefix'),
-                    style: const TextStyle(color: BrandColors.lampWhite),
-                    onChanged: notifier.setMqttTopicPrefix,
                   ),
                 ],
-              ],
+              ),
             ],
           );
         },
@@ -545,79 +327,6 @@ class _RssiBars extends StatelessWidget {
             ),
           );
         }),
-      ),
-    );
-  }
-}
-
-/// Password-entry body for the join-network modal sheet. Owns its own
-/// TextEditingController via State, so the controller lives exactly as
-/// long as the sheet's widget subtree — including during the dismiss
-/// animation. (Previous bug: creating the controller in the parent and
-/// disposing after `await showModalBottomSheet` returned crashed during
-/// the dismiss transition.)
-class _WifiPasswordSheet extends StatefulWidget {
-  const _WifiPasswordSheet({
-    required this.scanResult,
-    required this.onConnect,
-  });
-  final WifiScanResult scanResult;
-  final void Function(String password) onConnect;
-
-  @override
-  State<_WifiPasswordSheet> createState() => _WifiPasswordSheetState();
-}
-
-class _WifiPasswordSheetState extends State<_WifiPasswordSheet> {
-  final _ctrl = TextEditingController();
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final r = widget.scanResult;
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-        top: 16,
-        left: 16,
-        right: 16,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Join "${r.ssid}"',
-            style: const TextStyle(
-              color: BrandColors.lampWhite,
-              fontWeight: FontWeight.w600,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _ctrl,
-            obscureText: r.encrypted,
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText:
-                  r.encrypted ? 'Password' : 'Password (none required)',
-            ),
-          ),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton(
-              onPressed: () => widget.onConnect(_ctrl.text),
-              child: const Text('Connect'),
-            ),
-          ),
-        ],
       ),
     );
   }

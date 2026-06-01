@@ -79,69 +79,32 @@ class ShadeSection {
       );
 }
 
-/// CHAR_HOME_SECTION payload. Password is masked as "********" on read
-/// (firmware-side, defense-in-depth). Tests + UI should treat that string
-/// as "a password is set; don't change it on save unless the user typed a
-/// new one".
+/// CHAR_HOME_SECTION payload. Presence-only home mode: the lamp never
+/// stores a password (no association — just SSID-visibility detection),
+/// so this section carries only the SSID, brightness, and the soft
+/// on/off toggle.
 class HomeSection {
   const HomeSection({
     required this.ssid,
-    required this.password,
     required this.brightness,
     required this.enabled,
   });
 
   final String ssid;
-  final String password;
   final int brightness;
 
-  /// Soft on/off for Home Mode. When false, the firmware keeps the
-  /// stored SSID/password but does not bring up the Wi-Fi STA at boot
-  /// or after BT disconnect — letting the user keep their credentials
-  /// without the lamp acting as a home-mode device.
-  ///
-  /// Migration: firmwares saved before this field existed have no
-  /// `enabled` key in their NVS JSON. Treat presence of a saved SSID
-  /// as "user wanted home mode on" so existing lamps keep working.
+  /// Soft on/off for Home Mode. When false, the lamp ignores SSID
+  /// visibility and stays in regular mode.
   final bool enabled;
 
   factory HomeSection.fromJson(Map<String, dynamic> json) {
     final ssid = (json['ssid'] as String?) ?? '';
     return HomeSection(
       ssid: ssid,
-      password: (json['password'] as String?) ?? '',
       brightness: (json['brightness'] as num?)?.toInt() ?? 60,
       enabled: (json['enabled'] as bool?) ?? ssid.isNotEmpty,
     );
   }
-}
-
-/// CHAR_MQTT_SECTION payload. Same password-masking caveat as HomeSection.
-class MqttSection {
-  const MqttSection({
-    required this.enabled,
-    required this.brokerHost,
-    required this.brokerPort,
-    required this.username,
-    required this.password,
-    required this.topicPrefix,
-  });
-
-  final bool enabled;
-  final String brokerHost;
-  final int brokerPort;
-  final String username;
-  final String password;
-  final String topicPrefix;
-
-  factory MqttSection.fromJson(Map<String, dynamic> json) => MqttSection(
-        enabled: json['enabled'] as bool? ?? false,
-        brokerHost: (json['brokerHost'] as String?) ?? '',
-        brokerPort: (json['brokerPort'] as num?)?.toInt() ?? 1883,
-        username: (json['username'] as String?) ?? '',
-        password: (json['password'] as String?) ?? '',
-        topicPrefix: (json['topicPrefix'] as String?) ?? '',
-      );
 }
 
 /// A single expression configuration. CHAR_EXPRESSION_SECTION returns an array

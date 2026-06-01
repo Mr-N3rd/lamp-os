@@ -28,11 +28,6 @@ Future<void> seedControlBle(
   String shadeColorsJson = '["#000000FF"]',
   String homeSsid = '',
   int homeBrightness = 60,
-  bool mqttEnabled = false,
-  String mqttBrokerHost = '',
-  int mqttBrokerPort = 1883,
-  String mqttUsername = '',
-  String mqttTopicPrefix = '',
   String expressionsJson = '[]',
 }) async {
   await ble.connect(deviceId);
@@ -65,15 +60,6 @@ Future<void> seedControlBle(
       BleUuids.homeSection,
       Uint8List.fromList(utf8.encode(
         '{"ssid":"$homeSsid","brightness":$homeBrightness}',
-      )));
-  await ble.write(
-      deviceId,
-      BleUuids.controlService,
-      BleUuids.mqttSection,
-      Uint8List.fromList(utf8.encode(
-        '{"enabled":$mqttEnabled,"brokerHost":"$mqttBrokerHost",'
-        '"brokerPort":$mqttBrokerPort,"username":"$mqttUsername",'
-        '"topicPrefix":"$mqttTopicPrefix"}',
       )));
   await ble.write(deviceId, BleUuids.controlService, BleUuids.exprSection,
       Uint8List.fromList(utf8.encode(expressionsJson)));

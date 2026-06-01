@@ -54,8 +54,11 @@ class WifiNotifier extends _$WifiNotifier {
 
   Future<void> scan() => _writeOp({'op': 'scan'});
 
-  Future<void> connect(String ssid, String password) =>
-      _writeOp({'op': 'connect', 'ssid': ssid, 'password': password});
+  /// Tell the lamp which SSID to treat as "home" for presence-based
+  /// home mode. No password — the lamp never associates, only sniffs
+  /// for the SSID in periodic scans.
+  Future<void> setHomeSsid(String ssid) =>
+      _writeOp({'op': 'setHomeSsid', 'ssid': ssid});
 
   Future<void> forget() => _writeOp({'op': 'forget'});
 

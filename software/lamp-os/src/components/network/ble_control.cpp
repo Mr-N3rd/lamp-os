@@ -56,30 +56,29 @@ static NimBLECharacteristic* s_baseSectionChar  = nullptr;
 static NimBLECharacteristic* s_shadeSectionChar = nullptr;
 static NimBLECharacteristic* s_exprSectionChar  = nullptr;
 static NimBLECharacteristic* s_homeSectionChar  = nullptr;
-static NimBLECharacteristic* s_mqttSectionChar  = nullptr;
 static NimBLECharacteristic* s_nearbyLampsChar  = nullptr;
 static lamp::Config*         s_config      = nullptr;
 static Preferences*          s_prefs       = nullptr;
 static bool                  s_running     = false;
-// True while the Home Mode setup page (in the app) is mounted. While set,
-// effectiveBrightness() in standard_lamp.cpp uses homeMode.brightness so
-// the slider on the Home Mode page has visible effect — even though WiFi
-// is paused for the BT session. Cleared on explicit exit-preview write
-// OR on BT disconnect (defensive cleanup if the app crashed without exit).
-//
-// We don't actually bring up WiFi STA during preview: BT/WiFi coexistence
-// is unreliable enough that an association attempt during a BT session
-// typically times out and stresses the BLE link. The preview-driven
-// effectiveBrightness gate gives the same UX outcome (lamp dims in real
-// time as the user slides) without that risk.
-// volatile: written from Core 0 (BLE callback), read from Core 1 (loop
-// task via effectiveBrightness/reapplyHomeModeState). Without volatile
-// the compiler can cache the read in a register and Core 1 misses the
-// flip on a bare enter/exit write — leaving the lamp stuck on the
-// previous brightness mode until something else triggers a re-read.
-static volatile bool         s_homePreviewActive = false;
 
-bool isHomePreviewActive() { return s_homePreviewActive; }
+// Cross-core flags driven from BLE callbacks (Core 0) and read from the
+// loop task (Core 1) via the public accessors below. volatile because
+// the compiler can otherwise cache the read in a register on Core 1 and
+// miss the flip.
+//   s_clientConnected   — a BT client (the app) is currently connected.
+//                         Used by wifi::tick to skip background scans
+//                         during BT sessions, and by the effective-home
+//                         -mode gate to swap to "configurator" semantics.
+//   s_homeModePageActive — the app has signalled (via CHAR_HOME_MODE_FOCUS)
+//                         that the user is on the Home Mode setup page.
+//                         Forces effectiveHomeMode TRUE while BT is up,
+//                         and routes incoming CHAR_BRIGHTNESS writes to
+//                         home.brightness instead of lamp.brightness.
+static volatile bool         s_clientConnected   = false;
+static volatile bool         s_homeModePageActive = false;
+
+bool isClientConnected()   { return s_clientConnected;   }
+bool isHomeModePageActive() { return s_homeModePageActive; }
 
 // Per-connection auth state.  Key = connection handle, value = authed.
 static std::map<uint16_t, bool> s_connAuth;
@@ -185,12 +184,18 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     lamp::scanPausedForGattClient = true;
     NimBLEDevice::getScan()->stop();
 
-    // Pause WiFi STA while a BLE client is talking to us — avoids BT/WiFi
-    // coexistence stress under high GATT write rates.
-    wifi::disconnect();
+    // Track BT-session state. The lamp no longer associates to WiFi
+    // (presence-only home mode), so there's no STA to pause. wifi::tick
+    // skips its background scans while this flag is set so the radio
+    // can stay focused on BT.
+    s_clientConnected = true;
+    s_homeModePageActive = false;
+    // Recompute effective home mode now that the BT session is up — the
+    // gate switches from presence-based to focus-based.
+    postPendingApplyEffectiveBrightness();
 
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] Client connected, handle=%u (scan + wifi paused)\n", handle);
+    Serial.printf("[ble_control] Client connected, handle=%u (BT session active)\n", handle);
 #endif
   }
 
@@ -203,24 +208,13 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     lamp::scanPausedForGattClient = false;
     NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
 
-    // Resume WiFi STA if home mode is configured AND enabled. The
-    // `enabled` gate lets the user keep stored creds with home mode
-    // soft-toggled off. Also resets the per-session home-preview flag —
-    // if the app went away without an explicit preview-off (crash, OS
-    // killing the process, etc.) the flag would otherwise stay set
-    // across the next BT session. Post the re-apply so the strip
-    // transitions out of preview brightness immediately.
-    if (s_homePreviewActive) {
-      s_homePreviewActive = false;
-      postPendingApplyEffectiveBrightness();
-    }
-    if (s_config && s_config->homeMode.enabled &&
-        !s_config->homeMode.ssid.empty()) {
-      wifi::connect(s_config->homeMode.ssid, s_config->homeMode.password);
-    }
+    s_clientConnected = false;
+    s_homeModePageActive = false;
+    // Recompute effective home mode — gate switches back to presence-based.
+    postPendingApplyEffectiveBrightness();
 
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] Client disconnected, handle=%u reason=%d (scan + wifi resumed)\n", handle, reason);
+    Serial.printf("[ble_control] Client disconnected, handle=%u reason=%d\n", handle, reason);
 #endif
   }
 };
@@ -314,73 +308,25 @@ class BaseColorsCallback : public NimBLECharacteristicCallbacks {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Home Mode preview — write-without-response, command-byte routed:
-//   [0x00]            → exit preview (drop WiFi STA, clear flag)
-//   [0x01]            → enter preview (bring up saved home WiFi STA even
-//                       while BT is connected; valid only when homeMode
-//                       is enabled + has a saved SSID)
-//   [0x02, value u8]  → live home-brightness, applied to homeMode.brightness
-//                       in memory only. Persistence still goes through the
-//                       regular settings_blob save.
-// Scoped to the lifetime of the app's Home Mode setup page. The page only
-// loads after the user has successfully validated home WiFi credentials,
-// so it's safe to bring WiFi up here without confirming credentials.
+// Home Mode focus — write-without-response, single u8 bool. The app
+// writes 1 while the user is on the Home Mode setup page and 0 when
+// they leave. Forces effectiveHomeMode TRUE while BT is up (so the user
+// can preview), and routes incoming CHAR_BRIGHTNESS writes to
+// homeMode.brightness. Cleared automatically on BT disconnect (in
+// ControlServerCallbacks::onDisconnect).
 // ---------------------------------------------------------------------------
 
-class HomePreviewCallback : public NimBLECharacteristicCallbacks {
+class HomeModeFocusCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     if (!isAuthed(connInfo.getConnHandle())) return;
     std::string val = c->getValue();
     if (val.empty()) return;
-    const uint8_t cmd = static_cast<uint8_t>(val[0]);
-    switch (cmd) {
-      case 0x00: {
-        // Exit: clear the flag and re-apply brightness so the lamp
-        // transitions back to lamp.brightness (or whatever the existing
-        // wifi-gated effectiveBrightness would resolve to). Always post
-        // the re-apply, even if the flag was already false — a redundant
-        // exit is harmless, but a missed one strands the lamp at the
-        // wrong brightness until the user touches a slider.
-        s_homePreviewActive = false;
-        postPendingApplyEffectiveBrightness();
+    const bool active = val[0] != 0;
+    s_homeModePageActive = active;
+    postPendingApplyEffectiveBrightness();
 #ifdef LAMP_DEBUG
-        Serial.println("[ble_control] HOME_PREVIEW exit");
+    Serial.printf("[ble_control] HOME_MODE_FOCUS %s\n", active ? "on" : "off");
 #endif
-        break;
-      }
-      case 0x01: {
-        // Enter: flip the flag so effectiveBrightness returns
-        // homeMode.brightness for the duration of the page. We intentionally
-        // do NOT bring up WiFi STA — BT/WiFi coexistence during an active
-        // BLE session is flaky and association typically times out, which
-        // would surface as a "Connection timed out" error in the app for
-        // a connect the user never initiated.
-        if (!s_config) return;
-        if (s_homePreviewActive) break;
-        s_homePreviewActive = true;
-        postPendingApplyEffectiveBrightness();
-#ifdef LAMP_DEBUG
-        Serial.println("[ble_control] HOME_PREVIEW enter");
-#endif
-        break;
-      }
-      case 0x02: {
-        if (val.size() < 2 || !s_config) return;
-        uint8_t level = static_cast<uint8_t>(val[1]);
-        if (level > 100) level = 100;
-        // In-memory only; persistence happens via the regular settings_blob
-        // save when the user taps Save. Re-apply brightness so the strip
-        // visibly tracks the slider.
-        s_config->homeMode.brightness = level;
-        postPendingApplyEffectiveBrightness();
-#ifdef LAMP_DEBUG
-        Serial.printf("[ble_control] HOME_PREVIEW brightness=%u\n", level);
-#endif
-        break;
-      }
-      default:
-        break;
-    }
   }
 };
 
@@ -408,24 +354,6 @@ class ExpressionOpCallback : public NimBLECharacteristicCallbacks {
     Serial.printf("[ble_control] WRITE expressionOp len=%u\n", (unsigned)val.size());
 #endif
     postPendingExpressionOpJson(val.data(), val.size());
-  }
-};
-
-class MqttOpCallback : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    static const auto uuid = uuidSaltLE(CHAR_MQTT_OP);
-    const uint16_t handle = connInfo.getConnHandle();
-    const std::string raw = c->getValue();
-    if (raw.size() > MAX_PENDING_OP_JSON + 64) return;  // headroom for prefix+tag
-    std::string json;
-    bool authed = false;
-    if (!decodeIncomingOp(raw, handle, uuid.data(), "mqttOp", json, authed)) return;
-    if (!authed) return;
-    if (json.empty() || json.size() > MAX_PENDING_OP_JSON) return;
-#ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE mqttOp len=%u (decoded)\n", (unsigned)json.size());
-#endif
-    postPendingMqttOpJson(json.data(), json.size());
   }
 };
 
@@ -533,8 +461,6 @@ static const char* wifiStateName(wifi::State s) {
   switch (s) {
     case wifi::IDLE:       return "idle";
     case wifi::SCANNING:   return "scanning";
-    case wifi::CONNECTING: return "connecting";
-    case wifi::CONNECTED:  return "connected";
     case wifi::FAILED:     return "failed";
   }
   return "unknown";
@@ -543,8 +469,9 @@ static const char* wifiStateName(wifi::State s) {
 static std::string buildWifiStateJson(bool includeScanResults) {
   JsonDocument doc;
   doc["state"] = wifiStateName(wifi::state());
-  doc["ssid"] = wifi::currentSsid();
-  doc["ip"] = wifi::currentIp();
+  // (No more "ssid" / "ip" — the lamp never associates in presence-only
+  // mode. App reads home.ssid from CHAR_HOME_SECTION; "is the lamp
+  // currently in home mode" is implicit in the BT-session UX.)
   if (!wifi::lastError().empty()) {
     doc["lastError"] = wifi::lastError();
   }
@@ -652,32 +579,9 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
     Serial.printf("[ble_control] WRITE settingsBlob len=%u (decoded)\n", (unsigned)json.size());
 #endif
 
-    // Merge: the app reads sections with passwords masked as "********"
-    // and on Save explicitly OMITS the field rather than round-tripping
-    // the sentinel (see save() in control_notifier.dart). If we wrote
-    // the incoming blob to NVS verbatim it would silently wipe the
-    // home WiFi and MQTT broker passwords from durable storage —
-    // catastrophic on reboot since the lamp would then call
-    // WiFi.begin(ssid, "") and fail with reason 210 against any
-    // secured AP. So we inject the existing in-memory password values
-    // whenever the blob omits them or sends the "********" sentinel.
-    JsonDocument blobDoc;
-    if (deserializeJson(blobDoc, json.c_str()) == DeserializationError::Ok) {
-      auto preserveSecret = [](JsonObject node,
-                               const char* key,
-                               const std::string& existing) {
-        if (!node) return;
-        const char* incoming = node[key] | "";
-        if (!incoming[0] || strcmp(incoming, "********") == 0) {
-          if (!existing.empty()) node[key] = existing;
-        }
-      };
-      preserveSecret(blobDoc["homeMode"], "password", s_config->homeMode.password);
-      preserveSecret(blobDoc["mqtt"],     "password", s_config->mqtt.password);
-      String merged;
-      serializeJson(blobDoc, merged);
-      json.assign(merged.c_str(), merged.length());
-    }
+    // No secret-preserve merge step anymore — neither homeMode nor mqtt
+    // carries a password field in this build (home mode is presence-only,
+    // MQTT was removed).
 
     s_prefs->begin("lamp", false);
     size_t written = s_prefs->putString("cfg", json.c_str());
@@ -729,12 +633,6 @@ class ExprSectionCallback : public NimBLECharacteristicCallbacks {
   }
 };
 
-class MqttSectionCallback : public NimBLECharacteristicCallbacks {
-  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->asMqttJson().c_str());
-  }
-};
-
 class HomeSectionCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     c->setValue(s_config->asHomeModeJson().c_str());
@@ -752,7 +650,6 @@ void notifyBaseSection()        { notifySection(s_baseSectionChar,  s_config->as
 void notifyShadeSection()       { notifySection(s_shadeSectionChar, s_config->asShadeJson());       }
 void notifyExpressionsSection() { notifySection(s_exprSectionChar,  s_config->asExpressionsJson()); }
 void notifyHomeModeSection()    { notifySection(s_homeSectionChar,  s_config->asHomeModeJson());    }
-void notifyMqttSection()        { notifySection(s_mqttSectionChar,  s_config->asMqttJson());        }
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -806,25 +703,17 @@ void start(lamp::Config* config, Preferences* prefs) {
       ->setCallbacks(new BaseColorsCallback());
   s_service->createCharacteristic(CHAR_BASE_KNOCKOUT, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new BaseKnockoutCallback());
-  // Home-mode preview: app-driven "switch into home mode" for the Home
-  // Mode setup page. See HomePreviewCallback above for the cmd-byte
-  // protocol. Write-without-response: live brightness writes (cmd 0x02)
-  // come in at ~30 ms intervals from the slider drag.
-  s_service->createCharacteristic(CHAR_HOME_PREVIEW, NIMBLE_PROPERTY::WRITE)
-      ->setCallbacks(new HomePreviewCallback());
+  // Home-mode focus: app signals whether the user is on the Home Mode
+  // setup page. See HomeModeFocusCallback above.
+  s_service->createCharacteristic(CHAR_HOME_MODE_FOCUS, NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks(new HomeModeFocusCallback());
   s_service->createCharacteristic(CHAR_EXPRESSION_TEST, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ExpressionTestCallback());
   s_service->createCharacteristic(CHAR_EXPRESSION_OP, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ExpressionOpCallback());
-  // App-layer crypto protects the WiFi password in transit; no link-layer
-  // bonding required.
   s_service->createCharacteristic(CHAR_WIFI_OP,
       NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new WifiOpCallback());
-  // App-layer crypto protects the broker password in transit.
-  s_service->createCharacteristic(CHAR_MQTT_OP,
-      NIMBLE_PROPERTY::WRITE)
-      ->setCallbacks(new MqttOpCallback());
   s_wifiStateChar = s_service->createCharacteristic(
       CHAR_WIFI_STATE,
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
@@ -859,11 +748,6 @@ void start(lamp::Config* config, Preferences* prefs) {
       CHAR_HOME_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_homeSectionChar->setCallbacks(new HomeSectionCallback());
   s_homeSectionChar->setValue(s_config->asHomeModeJson().c_str());
-
-  s_mqttSectionChar = s_service->createCharacteristic(
-      CHAR_MQTT_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  s_mqttSectionChar->setCallbacks(new MqttSectionCallback());
-  s_mqttSectionChar->setValue(s_config->asMqttJson().c_str());
 
   s_nearbyLampsChar = s_service->createCharacteristic(
       CHAR_NEARBY_LAMPS, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
@@ -920,7 +804,6 @@ void stop() {
     s_shadeSectionChar = nullptr;
     s_exprSectionChar = nullptr;
     s_homeSectionChar = nullptr;
-    s_mqttSectionChar = nullptr;
     s_nearbyLampsChar = nullptr;
   }
 

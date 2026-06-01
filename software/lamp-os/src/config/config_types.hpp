@@ -107,41 +107,28 @@ class ExpressionSettings {
 };
 
 /**
- * @brief Home mode: lamp joins this WiFi network as STA. While joined, the
- *        lamp uses `brightness` (this struct's) instead of LampSettings.brightness.
- *        WiFi is paused while a BLE client is connected (coexistence safety).
- * @property enabled - soft on/off. When false the firmware keeps the stored
- *        ssid/password but does NOT bring up the WiFi STA at boot or after
- *        BT disconnect — lets the user keep credentials without the lamp
- *        acting as a home-mode device.
+ * @brief Home mode: presence-only detection of the user's home WiFi.
+ *        The lamp NEVER associates to the AP — it just sniffs beacons
+ *        and treats the SSID being visible as "I'm at home". No password
+ *        is ever stored or transmitted (security: no MITM risk against
+ *        a hostile AP broadcasting the same SSID).
+ *
+ *        While in home mode the lamp uses `brightness` (this struct's)
+ *        instead of LampSettings.brightness, and the compositor pauses
+ *        behaviors flagged allowedInHomeMode=false (e.g. SocialBehavior).
+ *
+ * @property ssid       the SSID to watch for. Set via wifi_op setHomeSsid
+ *                      (which the app sends when the user taps an entry
+ *                      from a scan list). Empty = no home network.
+ * @property brightness brightness to use when home mode is active.
+ * @property enabled    soft on/off. When false the lamp ignores SSID
+ *                      visibility and stays in regular mode.
  */
 class HomeModeSettings {
  public:
   std::string ssid;
-  std::string password;
   uint8_t brightness = 60;
   bool enabled = false;
-};
-
-/**
- * @brief Smart-home MQTT integration. Only runs while WiFi STA is connected
- *        (which means: home mode is configured AND BLE isn't holding the radio).
- *        Compiled in unconditionally; behavior fully gated by `enabled`.
- * @property enabled       master on/off
- * @property brokerHost    broker hostname or IP
- * @property brokerPort    broker port (default 1883)
- * @property username      optional broker auth user
- * @property password      optional broker auth password
- * @property topicPrefix   topic root; empty defaults to "homeassistant"
- */
-class MqttSettings {
- public:
-  bool enabled = false;
-  std::string brokerHost = "";
-  uint16_t brokerPort = 1883;
-  std::string username = "";
-  std::string password = "";
-  std::string topicPrefix = "";
 };
 
 }  // namespace lamp

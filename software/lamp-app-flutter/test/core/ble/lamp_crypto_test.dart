@@ -21,7 +21,7 @@ void main() {
 
     test('produces different salts for different UUIDs', () {
       final a = uuidSaltLE16(BleUuids.wifiOp);
-      final b = uuidSaltLE16(BleUuids.mqttOp);
+      final b = uuidSaltLE16(BleUuids.remoteOp);
       expect(a, isNot(equals(b)));
     });
   });

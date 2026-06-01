@@ -28,9 +28,6 @@ class ControlNotifier extends _$ControlNotifier {
   WriteCoalescer? _brightnessWriter;
   WriteCoalescer? _shadeColorsWriter;
   WriteCoalescer? _baseColorsWriter;
-  // Coalesces slider-drag writes to CHAR_HOME_PREVIEW (cmd 0x02 + value)
-  // while the Home Mode page is mounted.
-  WriteCoalescer? _homePreviewWriter;
 
   // Per-pixel knockout debounce: keyed by pixel index.
   final Map<int, Timer?> _knockoutTimers = {};
@@ -135,7 +132,6 @@ class ControlNotifier extends _$ControlNotifier {
     _brightnessWriter?.dispose();
     _shadeColorsWriter?.dispose();
     _baseColorsWriter?.dispose();
-    _homePreviewWriter?.dispose();
     _brightnessWriter = WriteCoalescer(
       onWrite: (v) => safeWrite(BleUuids.brightness, v),
       debounce: _writeDebounce,
@@ -148,16 +144,11 @@ class ControlNotifier extends _$ControlNotifier {
       onWrite: (v) => safeWrite(BleUuids.baseColors, v),
       debounce: _writeDebounce,
     );
-    _homePreviewWriter = WriteCoalescer(
-      onWrite: (v) => safeWrite(BleUuids.homePreview, v),
-      debounce: _writeDebounce,
-    );
 
     ref.onDispose(() {
       _brightnessWriter?.dispose();
       _shadeColorsWriter?.dispose();
       _baseColorsWriter?.dispose();
-      _homePreviewWriter?.dispose();
       for (final t in _knockoutTimers.values) {
         t?.cancel();
       }
@@ -219,14 +210,12 @@ class ControlNotifier extends _$ControlNotifier {
     final baseJson = await readJson(BleUuids.baseSection);
     final shadeJson = await readJson(BleUuids.shadeSection);
     final homeJson = await readJson(BleUuids.homeSection);
-    final mqttJson = await readJson(BleUuids.mqttSection);
     final exprList = await readJsonList(BleUuids.exprSection);
     return ControlState(
       lamp: LampSection.fromJson(lampJson),
       base: BaseSection.fromJson(baseJson),
       shade: ShadeSection.fromJson(shadeJson),
       home: HomeSection.fromJson(homeJson),
-      mqtt: MqttSection.fromJson(mqttJson),
       expressions: ExpressionsSection.fromJson(exprList),
     );
   }
@@ -249,8 +238,7 @@ class ControlNotifier extends _$ControlNotifier {
     return _isLampDirty(cur.lamp, _original.lamp) ||
         _isBaseDirty(cur.base, _original.base) ||
         _isShadeDirty(cur.shade, _original.shade) ||
-        _isHomeDirty(cur.home, _original.home) ||
-        _isMqttDirty(cur.mqtt, _original.mqtt);
+        _isHomeDirty(cur.home, _original.home);
   }
 
   bool _isLampDirty(LampSection a, LampSection b) =>
@@ -269,17 +257,8 @@ class ControlNotifier extends _$ControlNotifier {
 
   bool _isHomeDirty(HomeSection a, HomeSection b) =>
       a.ssid != b.ssid ||
-      a.password != b.password ||
       a.brightness != b.brightness ||
       a.enabled != b.enabled;
-
-  bool _isMqttDirty(MqttSection a, MqttSection b) =>
-      a.enabled != b.enabled ||
-      a.brokerHost != b.brokerHost ||
-      a.brokerPort != b.brokerPort ||
-      a.username != b.username ||
-      a.password != b.password ||
-      a.topicPrefix != b.topicPrefix;
 
   bool _colorsEqual(List<LampColor> a, List<LampColor> b) {
     if (a.length != b.length) return false;
@@ -344,21 +323,10 @@ class ControlNotifier extends _$ControlNotifier {
         'ssid': cur.home.ssid,
         'brightness': cur.home.brightness,
         'enabled': cur.home.enabled,
-        // Only include password if the user actually typed a new one (i.e.
-        // it's not the firmware's read-time mask sentinel). Omitting the
-        // field lets the firmware keep the existing stored value.
-        if (cur.home.password != '********' && cur.home.password.isNotEmpty)
-          'password': cur.home.password,
+        // Presence-only home mode — no password field; the lamp never
+        // associates to the AP.
       },
-      'mqtt': <String, dynamic>{
-        'enabled': cur.mqtt.enabled,
-        'brokerHost': cur.mqtt.brokerHost,
-        'brokerPort': cur.mqtt.brokerPort,
-        'username': cur.mqtt.username,
-        'topicPrefix': cur.mqtt.topicPrefix,
-        if (cur.mqtt.password != '********' && cur.mqtt.password.isNotEmpty)
-          'password': cur.mqtt.password,
-      },
+      // (MQTT block omitted — the integration was removed firmware-side.)
       'expressions': [
         for (final e in cur.expressions.expressions) e.toJson(),
       ],
@@ -603,20 +571,6 @@ class ControlNotifier extends _$ControlNotifier {
     state = AsyncData(cur.copyWith(
       home: HomeSection(
         ssid: ssid,
-        password: cur.home.password,
-        brightness: cur.home.brightness,
-        enabled: cur.home.enabled,
-      ),
-    ));
-  }
-
-  Future<void> setHomePassword(String password) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      home: HomeSection(
-        ssid: cur.home.ssid,
-        password: password,
         brightness: cur.home.brightness,
         enabled: cur.home.enabled,
       ),
@@ -630,11 +584,18 @@ class ControlNotifier extends _$ControlNotifier {
     state = AsyncData(cur.copyWith(
       home: HomeSection(
         ssid: cur.home.ssid,
-        password: cur.home.password,
         brightness: clamped,
         enabled: cur.home.enabled,
       ),
     ));
+    // Live-write via CHAR_BRIGHTNESS — the firmware routes the value to
+    // homeMode.brightness vs lamp.brightness based on whether the app
+    // has signalled it's on the Home Mode page (CHAR_HOME_MODE_FOCUS).
+    // Calling setHomeBrightness while NOT on the Home Mode page would
+    // (incorrectly) update lamp.brightness firmware-side; the UI only
+    // wires this mutator into the Home Mode slider, so that path is
+    // structurally avoided.
+    _brightnessWriter?.schedule(Uint8List.fromList([clamped]));
   }
 
   Future<void> setHomeEnabled(bool enabled) async {
@@ -643,149 +604,8 @@ class ControlNotifier extends _$ControlNotifier {
     state = AsyncData(cur.copyWith(
       home: HomeSection(
         ssid: cur.home.ssid,
-        password: cur.home.password,
         brightness: cur.home.brightness,
         enabled: enabled,
-      ),
-    ));
-  }
-
-  // ---------------------------------------------------------------------------
-  // Home-mode "preview" — bring the lamp into home mode while the Home Mode
-  // setup page is mounted. The firmware brings up the saved Wi-Fi STA so the
-  // home brightness slider has live effect; on dispose it drops Wi-Fi again.
-  // ---------------------------------------------------------------------------
-
-  /// Tell the firmware to enter home-mode preview: bring up Wi-Fi STA with
-  /// the saved home creds (even while BT is connected). Best-effort write
-  /// — firmware tolerates a missed enter (the live brightness writes simply
-  /// won't have a visible effect until Wi-Fi is up).
-  Future<void> enterHomePreview() async {
-    final ble = ref.read(bleClientProvider);
-    try {
-      await ble.write(
-        _deviceId,
-        BleUuids.controlService,
-        BleUuids.homePreview,
-        Uint8List.fromList([0x01]),
-      );
-    } catch (_) {
-      // best-effort
-    }
-  }
-
-  /// Tell the firmware to exit home-mode preview: drop the Wi-Fi STA so
-  /// the rest of the BT control session runs without coexistence pressure.
-  /// Safe to call after the BT session has already gone away (the write
-  /// just no-ops).
-  Future<void> exitHomePreview() async {
-    final ble = ref.read(bleClientProvider);
-    try {
-      await ble.write(
-        _deviceId,
-        BleUuids.controlService,
-        BleUuids.homePreview,
-        Uint8List.fromList([0x00]),
-      );
-    } catch (_) {
-      // best-effort — BT may already be torn down by page pop
-    }
-  }
-
-  /// Push a live home-brightness value to the firmware while the Home Mode
-  /// page is mounted. The firmware updates `homeMode.brightness` in memory
-  /// only; persistence happens via the regular settingsBlob save flow.
-  void previewHomeBrightness(int v) {
-    final clamped = v.clamp(0, 100);
-    _homePreviewWriter?.schedule(Uint8List.fromList([0x02, clamped]));
-  }
-
-  Future<void> setMqttEnabled(bool v) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      mqtt: MqttSection(
-        enabled: v,
-        brokerHost: cur.mqtt.brokerHost,
-        brokerPort: cur.mqtt.brokerPort,
-        username: cur.mqtt.username,
-        password: cur.mqtt.password,
-        topicPrefix: cur.mqtt.topicPrefix,
-      ),
-    ));
-  }
-
-  Future<void> setMqttBrokerHost(String host) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      mqtt: MqttSection(
-        enabled: cur.mqtt.enabled,
-        brokerHost: host,
-        brokerPort: cur.mqtt.brokerPort,
-        username: cur.mqtt.username,
-        password: cur.mqtt.password,
-        topicPrefix: cur.mqtt.topicPrefix,
-      ),
-    ));
-  }
-
-  Future<void> setMqttBrokerPort(int port) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      mqtt: MqttSection(
-        enabled: cur.mqtt.enabled,
-        brokerHost: cur.mqtt.brokerHost,
-        brokerPort: port,
-        username: cur.mqtt.username,
-        password: cur.mqtt.password,
-        topicPrefix: cur.mqtt.topicPrefix,
-      ),
-    ));
-  }
-
-  Future<void> setMqttUsername(String username) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      mqtt: MqttSection(
-        enabled: cur.mqtt.enabled,
-        brokerHost: cur.mqtt.brokerHost,
-        brokerPort: cur.mqtt.brokerPort,
-        username: username,
-        password: cur.mqtt.password,
-        topicPrefix: cur.mqtt.topicPrefix,
-      ),
-    ));
-  }
-
-  Future<void> setMqttPassword(String password) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      mqtt: MqttSection(
-        enabled: cur.mqtt.enabled,
-        brokerHost: cur.mqtt.brokerHost,
-        brokerPort: cur.mqtt.brokerPort,
-        username: cur.mqtt.username,
-        password: password,
-        topicPrefix: cur.mqtt.topicPrefix,
-      ),
-    ));
-  }
-
-  Future<void> setMqttTopicPrefix(String topicPrefix) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      mqtt: MqttSection(
-        enabled: cur.mqtt.enabled,
-        brokerHost: cur.mqtt.brokerHost,
-        brokerPort: cur.mqtt.brokerPort,
-        username: cur.mqtt.username,
-        password: cur.mqtt.password,
-        topicPrefix: topicPrefix,
       ),
     ));
   }

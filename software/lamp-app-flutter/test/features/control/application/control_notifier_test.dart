@@ -542,7 +542,6 @@ void main() {
         ));
     final state = await c.read(controlNotifierProvider(_devId).future);
     expect(state.home.brightness, 60);
-    expect(state.mqtt.brokerPort, 1883);
   });
 
   test('setLampName flips isDirty and lands in the blob on save', () async {

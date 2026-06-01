@@ -6,7 +6,10 @@
 
 namespace wifi {
 
-enum State { IDLE, SCANNING, CONNECTING, CONNECTED, FAILED };
+// State retained for the scan UI in the app. The lamp NEVER associates to
+// a home AP (presence-only mode), so CONNECTING/CONNECTED never fire — the
+// only meaningful transitions are IDLE <-> SCANNING.
+enum State { IDLE, SCANNING, FAILED };
 
 struct ScanResult {
   std::string ssid;
@@ -15,29 +18,30 @@ struct ScanResult {
 };
 
 void begin();
-void connect(const std::string& ssid, const std::string& password);
-void disconnect();
-void forget();
+void forget();   // clear last-error / scan cache (used by wifi_op forget)
 
-bool isConnected();
 State state();
-std::string currentSsid();
-std::string currentIp();
-std::string lastError();  // "auth" | "noap" | "scan" | "timeout" | "" — app maps for UI
+std::string lastError();   // "scan" | "" — only ever set when a scan fails
 
 void startScan();
-std::vector<ScanResult> consumeScanResults();  // empty if not done; drains on return
+std::vector<ScanResult> consumeScanResults();  // drains; used by the UI notify
 
 using StateChangeCallback = void (*)();
 void setStateChangeCallback(StateChangeCallback cb);
 
 void tick();
 
+// Home-presence detection. The lamp periodically scans (when no BT client
+// is connected — scans during BT sessions stress the shared radio) and
+// caches the visible SSIDs. `homeSsidVisible(ssid)` returns true if a
+// recent scan saw the given SSID. No association, no credentials, no
+// password ever leaves the lamp.
+bool homeSsidVisible(const std::string& ssid);
+
 // Channel coordination for ESP-NOW grid.
-// When not associated to a home AP, pin the radio to LAMP_ESPNOW_CHANNEL
-// so all grid peers share a channel. When associated, the AP's channel
-// wins — peers on different home APs / channels can't see each other,
-// which is acceptable for v1 (events deploy with home mode off).
+// We never associate to an AP in presence-only mode, so the radio always
+// sits on the grid channel. This function is a no-op kept for ABI compat
+// but stays callable from existing call sites.
 void ensureGridChannel();
 
 }  // namespace wifi

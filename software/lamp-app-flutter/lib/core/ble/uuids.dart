@@ -23,9 +23,11 @@ abstract class BleUuids {
   static const shadeSection   = '5f64f4de-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const exprSection    = '5f64f4df-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const homeSection    = '5f64f4e0-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const mqttSection    = '5f64f4e1-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const mqttOp         = '5f64f4e2-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const nearbyLamps    = '5f64f4e3-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const remoteOp       = '5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const homePreview    = '5f64f4e5-d6d9-4a44-9b3f-3a8d6f7e6b40';
+  // home_mode_focus (write-without-response): single u8 bool. App writes
+  // 1 while on the Home Mode setup page, 0 when leaving. Firmware uses
+  // this to (a) force effectiveHomeMode TRUE during BT preview, and
+  // (b) route CHAR_BRIGHTNESS writes to home.brightness vs lamp.brightness.
+  static const homeModeFocus  = '5f64f4e5-d6d9-4a44-9b3f-3a8d6f7e6b40';
 }
