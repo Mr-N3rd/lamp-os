@@ -8,7 +8,6 @@ import '../../../core/widgets/settings_row.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/application/control_state.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
-import '../application/wifi_notifier.dart';
 
 /// Setup tab — mobile-style row list. Tapping a row drills into a
 /// sub-pane (HomeWifi, HomeMode, AdvancedLeds, Knockout). The Home Wi-Fi
@@ -47,7 +46,16 @@ class _SetupBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final n = ref.read(controlNotifierProvider(lampId).notifier);
-    final homeOn = state.home.ssid.isNotEmpty;
+    final hasSsid = state.home.ssid.isNotEmpty;
+    final enabled = state.home.enabled;
+    final String homeSubtitle;
+    if (enabled) {
+      homeSubtitle = hasSsid
+          ? '${state.home.ssid} · ${state.home.brightness}%'
+          : 'On · not configured';
+    } else {
+      homeSubtitle = hasSsid ? 'Off · ${state.home.ssid} saved' : 'Off';
+    }
     return ListView(
       padding: const EdgeInsets.only(top: 8, bottom: 32),
       children: [
@@ -62,20 +70,16 @@ class _SetupBody extends ConsumerWidget {
         SettingsRow(
           icon: Icons.home_outlined,
           title: 'Home Mode',
-          subtitle: homeOn
-              ? '${state.home.ssid} · ${state.home.brightness}%'
-              : 'Off',
+          subtitle: homeSubtitle,
           trailing: Switch(
-            value: homeOn,
-            // Toggling off forgets the saved Wi-Fi (firmware drops creds).
-            // Toggling on drills into the Home Mode pane where the user
-            // picks a network from the live scan.
+            value: enabled,
+            // Soft toggle: flips the enabled flag without wiping the saved
+            // SSID/password. Destructive "Forget network" lives inside the
+            // Home Mode pane. First-time on (no SSID yet): drill into the
+            // pane so the user can pick a network.
             onChanged: (v) {
-              if (!v) {
-                ref.read(wifiNotifierProvider(lampId).notifier).forget();
-                n.setHomeSsid('');
-                n.setHomePassword('');
-              } else {
+              n.setHomeEnabled(v);
+              if (v && !hasSsid) {
                 context.push(AppRoutes.homeMode(lampId));
               }
             },

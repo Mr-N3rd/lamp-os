@@ -62,6 +62,16 @@ constexpr const char* CHAR_NEARBY_LAMPS    = "5f64f4e3-d6d9-4a44-9b3f-3a8d6f7e6b
 //    "char":"brightness",      // names a local pending-slot post function
 //    ...payload-shape varies per char...}
 constexpr const char* CHAR_REMOTE_OP       = "5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// home_preview (write-without-response): transient home-mode toggle scoped
+// to the Home Mode setup page. Cmd byte routes:
+//   0x00 → exit preview (drop WiFi STA, clear flag)
+//   0x01 → enter preview (bring up saved home WiFi STA even while BT is
+//          connected — credentials are known-good by the time the user
+//          reaches the page)
+//   0x02 [value] → live home-brightness, applied to homeMode.brightness
+//          in memory only (no NVS write; persistence still goes through
+//          settings_blob save).
+constexpr const char* CHAR_HOME_PREVIEW    = "5f64f4e5-d6d9-4a44-9b3f-3a8d6f7e6b40";
 
 /**
  * @brief Start the BLE GATT control service.

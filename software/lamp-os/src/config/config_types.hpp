@@ -110,12 +110,17 @@ class ExpressionSettings {
  * @brief Home mode: lamp joins this WiFi network as STA. While joined, the
  *        lamp uses `brightness` (this struct's) instead of LampSettings.brightness.
  *        WiFi is paused while a BLE client is connected (coexistence safety).
+ * @property enabled - soft on/off. When false the firmware keeps the stored
+ *        ssid/password but does NOT bring up the WiFi STA at boot or after
+ *        BT disconnect — lets the user keep credentials without the lamp
+ *        acting as a home-mode device.
  */
 class HomeModeSettings {
  public:
   std::string ssid;
   std::string password;
   uint8_t brightness = 60;
+  bool enabled = false;
 };
 
 /**

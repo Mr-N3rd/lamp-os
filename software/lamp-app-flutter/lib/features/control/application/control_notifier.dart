@@ -28,6 +28,9 @@ class ControlNotifier extends _$ControlNotifier {
   WriteCoalescer? _brightnessWriter;
   WriteCoalescer? _shadeColorsWriter;
   WriteCoalescer? _baseColorsWriter;
+  // Coalesces slider-drag writes to CHAR_HOME_PREVIEW (cmd 0x02 + value)
+  // while the Home Mode page is mounted.
+  WriteCoalescer? _homePreviewWriter;
 
   // Per-pixel knockout debounce: keyed by pixel index.
   final Map<int, Timer?> _knockoutTimers = {};
@@ -132,6 +135,7 @@ class ControlNotifier extends _$ControlNotifier {
     _brightnessWriter?.dispose();
     _shadeColorsWriter?.dispose();
     _baseColorsWriter?.dispose();
+    _homePreviewWriter?.dispose();
     _brightnessWriter = WriteCoalescer(
       onWrite: (v) => safeWrite(BleUuids.brightness, v),
       debounce: _writeDebounce,
@@ -144,11 +148,16 @@ class ControlNotifier extends _$ControlNotifier {
       onWrite: (v) => safeWrite(BleUuids.baseColors, v),
       debounce: _writeDebounce,
     );
+    _homePreviewWriter = WriteCoalescer(
+      onWrite: (v) => safeWrite(BleUuids.homePreview, v),
+      debounce: _writeDebounce,
+    );
 
     ref.onDispose(() {
       _brightnessWriter?.dispose();
       _shadeColorsWriter?.dispose();
       _baseColorsWriter?.dispose();
+      _homePreviewWriter?.dispose();
       for (final t in _knockoutTimers.values) {
         t?.cancel();
       }
@@ -261,7 +270,8 @@ class ControlNotifier extends _$ControlNotifier {
   bool _isHomeDirty(HomeSection a, HomeSection b) =>
       a.ssid != b.ssid ||
       a.password != b.password ||
-      a.brightness != b.brightness;
+      a.brightness != b.brightness ||
+      a.enabled != b.enabled;
 
   bool _isMqttDirty(MqttSection a, MqttSection b) =>
       a.enabled != b.enabled ||
@@ -333,6 +343,7 @@ class ControlNotifier extends _$ControlNotifier {
       'homeMode': <String, dynamic>{
         'ssid': cur.home.ssid,
         'brightness': cur.home.brightness,
+        'enabled': cur.home.enabled,
         // Only include password if the user actually typed a new one (i.e.
         // it's not the firmware's read-time mask sentinel). Omitting the
         // field lets the firmware keep the existing stored value.
@@ -594,6 +605,7 @@ class ControlNotifier extends _$ControlNotifier {
         ssid: ssid,
         password: cur.home.password,
         brightness: cur.home.brightness,
+        enabled: cur.home.enabled,
       ),
     ));
   }
@@ -606,6 +618,7 @@ class ControlNotifier extends _$ControlNotifier {
         ssid: cur.home.ssid,
         password: password,
         brightness: cur.home.brightness,
+        enabled: cur.home.enabled,
       ),
     ));
   }
@@ -619,8 +632,72 @@ class ControlNotifier extends _$ControlNotifier {
         ssid: cur.home.ssid,
         password: cur.home.password,
         brightness: clamped,
+        enabled: cur.home.enabled,
       ),
     ));
+  }
+
+  Future<void> setHomeEnabled(bool enabled) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      home: HomeSection(
+        ssid: cur.home.ssid,
+        password: cur.home.password,
+        brightness: cur.home.brightness,
+        enabled: enabled,
+      ),
+    ));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Home-mode "preview" — bring the lamp into home mode while the Home Mode
+  // setup page is mounted. The firmware brings up the saved Wi-Fi STA so the
+  // home brightness slider has live effect; on dispose it drops Wi-Fi again.
+  // ---------------------------------------------------------------------------
+
+  /// Tell the firmware to enter home-mode preview: bring up Wi-Fi STA with
+  /// the saved home creds (even while BT is connected). Best-effort write
+  /// — firmware tolerates a missed enter (the live brightness writes simply
+  /// won't have a visible effect until Wi-Fi is up).
+  Future<void> enterHomePreview() async {
+    final ble = ref.read(bleClientProvider);
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.homePreview,
+        Uint8List.fromList([0x01]),
+      );
+    } catch (_) {
+      // best-effort
+    }
+  }
+
+  /// Tell the firmware to exit home-mode preview: drop the Wi-Fi STA so
+  /// the rest of the BT control session runs without coexistence pressure.
+  /// Safe to call after the BT session has already gone away (the write
+  /// just no-ops).
+  Future<void> exitHomePreview() async {
+    final ble = ref.read(bleClientProvider);
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.homePreview,
+        Uint8List.fromList([0x00]),
+      );
+    } catch (_) {
+      // best-effort — BT may already be torn down by page pop
+    }
+  }
+
+  /// Push a live home-brightness value to the firmware while the Home Mode
+  /// page is mounted. The firmware updates `homeMode.brightness` in memory
+  /// only; persistence happens via the regular settingsBlob save flow.
+  void previewHomeBrightness(int v) {
+    final clamped = v.clamp(0, 100);
+    _homePreviewWriter?.schedule(Uint8List.fromList([0x02, clamped]));
   }
 
   Future<void> setMqttEnabled(bool v) async {

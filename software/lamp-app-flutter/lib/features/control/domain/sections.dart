@@ -88,17 +88,32 @@ class HomeSection {
     required this.ssid,
     required this.password,
     required this.brightness,
+    required this.enabled,
   });
 
   final String ssid;
   final String password;
   final int brightness;
 
-  factory HomeSection.fromJson(Map<String, dynamic> json) => HomeSection(
-        ssid: (json['ssid'] as String?) ?? '',
-        password: (json['password'] as String?) ?? '',
-        brightness: (json['brightness'] as num?)?.toInt() ?? 60,
-      );
+  /// Soft on/off for Home Mode. When false, the firmware keeps the
+  /// stored SSID/password but does not bring up the Wi-Fi STA at boot
+  /// or after BT disconnect — letting the user keep their credentials
+  /// without the lamp acting as a home-mode device.
+  ///
+  /// Migration: firmwares saved before this field existed have no
+  /// `enabled` key in their NVS JSON. Treat presence of a saved SSID
+  /// as "user wanted home mode on" so existing lamps keep working.
+  final bool enabled;
+
+  factory HomeSection.fromJson(Map<String, dynamic> json) {
+    final ssid = (json['ssid'] as String?) ?? '';
+    return HomeSection(
+      ssid: ssid,
+      password: (json['password'] as String?) ?? '',
+      brightness: (json['brightness'] as num?)?.toInt() ?? 60,
+      enabled: (json['enabled'] as bool?) ?? ssid.isNotEmpty,
+    );
+  }
 }
 
 /// CHAR_MQTT_SECTION payload. Same password-masking caveat as HomeSection.

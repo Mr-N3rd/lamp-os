@@ -144,19 +144,29 @@ void main() {
     );
   });
 
-  testWidgets('toggling Home Mode switch off clears the SSID',
+  testWidgets(
+      'toggling Home Mode switch off flips enabled but preserves the SSID',
       (tester) async {
     final c = await _makeContainer(homeSsid: 'home');
     addTearDown(c.dispose);
     await tester.pumpWidget(_wrap(c));
     await _pumpToData(tester);
 
+    // With homeSsid: 'home', HomeSection.fromJson defaults enabled=true
+    // (legacy lamps without the `enabled` field migrate to "ssid present
+    // => home mode on"). The switch should reflect that.
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.home.enabled,
+      isTrue,
+    );
+
     await tester.tap(find.byType(Switch).first);
     await tester.pump();
 
-    expect(
-      c.read(controlNotifierProvider(_devId)).value!.home.ssid,
-      isEmpty,
-    );
+    final home = c.read(controlNotifierProvider(_devId)).value!.home;
+    expect(home.enabled, isFalse);
+    // Soft toggle preserves credentials — Forget Network lives inside the
+    // Home Mode pane.
+    expect(home.ssid, 'home');
   });
 }

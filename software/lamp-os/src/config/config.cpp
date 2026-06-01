@@ -134,6 +134,10 @@ Config::Config(Preferences* inPrefs) {
     homeMode.ssid = std::string(homeModeNode["ssid"] | "");
     homeMode.password = std::string(homeModeNode["password"] | "");
     homeMode.brightness = homeModeNode["brightness"] | 60;
+    // Migration: lamps configured before `enabled` existed have no
+    // "enabled" key in their NVS-stored JSON. Treat "has SSID" as proxy
+    // for "user wanted home mode on" so they keep working post-update.
+    homeMode.enabled = homeModeNode["enabled"] | !homeMode.ssid.empty();
   }
 
   // Load MQTT (smart-home / Home Assistant) config
@@ -235,6 +239,7 @@ JsonDocument Config::asJsonDocument() {
     homeModeNode["password"] = homeMode.password;
   }
   homeModeNode["brightness"] = homeMode.brightness;
+  homeModeNode["enabled"] = homeMode.enabled;
 
   JsonObject mqttNode = doc["mqtt"].to<JsonObject>();
   mqttNode["enabled"] = mqtt.enabled;
@@ -328,6 +333,7 @@ String Config::asHomeModeJson() {
     doc["password"] = "********";
   }
   doc["brightness"] = homeMode.brightness;
+  doc["enabled"] = homeMode.enabled;
   String out;
   serializeJson(doc, out);
   return out;

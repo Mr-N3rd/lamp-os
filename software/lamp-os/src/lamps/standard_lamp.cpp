@@ -400,9 +400,11 @@ void setup() {
   base.begin(lamp::buildGradientWithStops(config.base.px, config.base.colors), config.base.px, baseStrip);
   initBehaviors();
 
-  // Kick off WiFi STA if home mode is configured. BLE onConnect/onDisconnect
-  // pauses/resumes WiFi for coexistence — this is the boot-time entry.
-  if (!config.homeMode.ssid.empty()) {
+  // Kick off WiFi STA if home mode is configured AND enabled. BLE
+  // onConnect/onDisconnect pauses/resumes WiFi for coexistence — this is
+  // the boot-time entry. The `enabled` gate lets the user keep stored
+  // credentials with home mode soft-toggled off.
+  if (config.homeMode.enabled && !config.homeMode.ssid.empty()) {
     wifi::connect(config.homeMode.ssid, config.homeMode.password);
   } else {
     // Not joining a home AP — pin the radio to the grid channel so peers can

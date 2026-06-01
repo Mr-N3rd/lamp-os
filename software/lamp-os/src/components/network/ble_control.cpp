@@ -60,6 +60,11 @@ static NimBLECharacteristic* s_nearbyLampsChar  = nullptr;
 static lamp::Config*         s_config      = nullptr;
 static Preferences*          s_prefs       = nullptr;
 static bool                  s_running     = false;
+// True while the Home Mode setup page (in the app) has asked the lamp to
+// "switch into home mode" by bringing up WiFi STA — even though a BT
+// client is connected. Cleared on explicit exit-preview write OR on BT
+// disconnect (defensive cleanup if the app crashed without exiting).
+static bool                  s_homePreviewActive = false;
 
 // Per-connection auth state.  Key = connection handle, value = authed.
 static std::map<uint16_t, bool> s_connAuth;
@@ -183,8 +188,15 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     lamp::scanPausedForGattClient = false;
     NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
 
-    // Resume WiFi STA if home mode is configured.
-    if (s_config && !s_config->homeMode.ssid.empty()) {
+    // Resume WiFi STA if home mode is configured AND enabled. The
+    // `enabled` gate lets the user keep stored creds with home mode
+    // soft-toggled off. Also resets the per-session home-preview flag —
+    // the Home Mode page's preview-on may have brought WiFi up; if the
+    // phone walked away without an explicit preview-off, the flag would
+    // otherwise stay set across the next BT session.
+    s_homePreviewActive = false;
+    if (s_config && s_config->homeMode.enabled &&
+        !s_config->homeMode.ssid.empty()) {
       wifi::connect(s_config->homeMode.ssid, s_config->homeMode.password);
     }
 
@@ -281,6 +293,65 @@ class BaseColorsCallback : public NimBLECharacteristicCallbacks {
 // ---------------------------------------------------------------------------
 // Base knockout — write-without-response, 2 bytes: [pixelIndex u8, brightness% u8]
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Home Mode preview — write-without-response, command-byte routed:
+//   [0x00]            → exit preview (drop WiFi STA, clear flag)
+//   [0x01]            → enter preview (bring up saved home WiFi STA even
+//                       while BT is connected; valid only when homeMode
+//                       is enabled + has a saved SSID)
+//   [0x02, value u8]  → live home-brightness, applied to homeMode.brightness
+//                       in memory only. Persistence still goes through the
+//                       regular settings_blob save.
+// Scoped to the lifetime of the app's Home Mode setup page. The page only
+// loads after the user has successfully validated home WiFi credentials,
+// so it's safe to bring WiFi up here without confirming credentials.
+// ---------------------------------------------------------------------------
+
+class HomePreviewCallback : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    if (!isAuthed(connInfo.getConnHandle())) return;
+    std::string val = c->getValue();
+    if (val.empty()) return;
+    const uint8_t cmd = static_cast<uint8_t>(val[0]);
+    switch (cmd) {
+      case 0x00: {
+        if (s_homePreviewActive) {
+          s_homePreviewActive = false;
+          wifi::disconnect();
+#ifdef LAMP_DEBUG
+          Serial.println("[ble_control] HOME_PREVIEW exit (wifi paused)");
+#endif
+        }
+        break;
+      }
+      case 0x01: {
+        if (!s_config) return;
+        if (!s_config->homeMode.enabled) return;
+        if (s_config->homeMode.ssid.empty()) return;
+        s_homePreviewActive = true;
+        wifi::connect(s_config->homeMode.ssid, s_config->homeMode.password);
+#ifdef LAMP_DEBUG
+        Serial.printf("[ble_control] HOME_PREVIEW enter ssid=%s\n",
+                      s_config->homeMode.ssid.c_str());
+#endif
+        break;
+      }
+      case 0x02: {
+        if (val.size() < 2 || !s_config) return;
+        uint8_t level = static_cast<uint8_t>(val[1]);
+        if (level > 100) level = 100;
+        s_config->homeMode.brightness = level;
+#ifdef LAMP_DEBUG
+        Serial.printf("[ble_control] HOME_PREVIEW brightness=%u\n", level);
+#endif
+        break;
+      }
+      default:
+        break;
+    }
+  }
+};
 
 class BaseKnockoutCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
@@ -677,6 +748,12 @@ void start(lamp::Config* config, Preferences* prefs) {
       ->setCallbacks(new BaseColorsCallback());
   s_service->createCharacteristic(CHAR_BASE_KNOCKOUT, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new BaseKnockoutCallback());
+  // Home-mode preview: app-driven "switch into home mode" for the Home
+  // Mode setup page. See HomePreviewCallback above for the cmd-byte
+  // protocol. Write-without-response: live brightness writes (cmd 0x02)
+  // come in at ~30 ms intervals from the slider drag.
+  s_service->createCharacteristic(CHAR_HOME_PREVIEW, NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks(new HomePreviewCallback());
   s_service->createCharacteristic(CHAR_EXPRESSION_TEST, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ExpressionTestCallback());
   s_service->createCharacteristic(CHAR_EXPRESSION_OP, NIMBLE_PROPERTY::WRITE)

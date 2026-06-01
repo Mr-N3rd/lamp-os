@@ -34,6 +34,12 @@ class HomeModeScreen extends ConsumerStatefulWidget {
 class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
   bool _didKickoffScan = false;
   bool _autoPoppedAfterConnect = false;
+  // Only auto-pop on connects the user kicked off from this page. Without
+  // this gate the `ref.listen` block below fires on its first registration
+  // (where prev == null and next.value.state == 'connected') and pops the
+  // user out immediately — which now happens on every entry once the page
+  // brings Wi-Fi up via enterHomePreview.
+  bool _userInitiatedConnect = false;
   final _host = TextEditingController();
   final _port = TextEditingController();
   final _user = TextEditingController();
@@ -42,7 +48,28 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
   bool _seededMqtt = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Tell the firmware to switch into home mode (bring up Wi-Fi STA with
+    // saved creds) while we're on this page. Credentials are known-good —
+    // the user can only reach this page after a successful Wi-Fi setup.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref
+          .read(controlNotifierProvider(widget.lampId).notifier)
+          .enterHomePreview();
+    });
+  }
+
+  @override
   void dispose() {
+    // Tell the firmware to drop Wi-Fi again so the rest of the BT session
+    // runs without coexistence pressure. Fire-and-forget: the firmware
+    // also cleans up on BT disconnect, so a missed exit (e.g. user killed
+    // the app) is recovered automatically.
+    ref
+        .read(controlNotifierProvider(widget.lampId).notifier)
+        .exitHomePreview();
     _host.dispose();
     _port.dispose();
     _user.dispose();
@@ -76,6 +103,7 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
         scanResult: r,
         onConnect: (pwd) {
           Navigator.of(ctx).pop();
+          _userInitiatedConnect = true;
           ref
               .read(wifiNotifierProvider(widget.lampId).notifier)
               .connect(r.ssid, pwd);
@@ -101,8 +129,12 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
       }
       // Auto-pop back to Setup once we've actually joined a network — gives
       // the user the success state for ~1.2s, then drops them on the Setup
-      // tab which shows Home Mode as enabled with the saved SSID.
-      final justConnected = prev?.value?.state != 'connected' &&
+      // tab which shows Home Mode as enabled with the saved SSID. Gated on
+      // _userInitiatedConnect so an already-connected lamp (or the new
+      // enterHomePreview-driven connect) doesn't bounce the user out on
+      // page entry.
+      final justConnected = _userInitiatedConnect &&
+          prev?.value?.state != 'connected' &&
           next.value?.state == 'connected';
       if (justConnected && !_autoPoppedAfterConnect) {
         _autoPoppedAfterConnect = true;
@@ -272,8 +304,16 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                         min: 0,
                         max: 100,
                         divisions: 100,
-                        onChanged: (v) =>
-                            notifier.setHomeBrightness(v.round()),
+                        onChanged: (v) {
+                          final i = v.round();
+                          notifier.setHomeBrightness(i);
+                          // Live BLE write to CHAR_HOME_PREVIEW. The
+                          // firmware has Wi-Fi STA up (from the page's
+                          // initState enterHomePreview call), so the lamp
+                          // is using home brightness — this updates the
+                          // in-memory value, no NVS write until Save.
+                          notifier.previewHomeBrightness(i);
+                        },
                       ),
                     ),
                     SizedBox(
@@ -309,70 +349,72 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                   value: state.mqtt.enabled,
                   onChanged: notifier.setMqttEnabled,
                 ),
-                const SizedBox(height: 4),
-                TextField(
-                  controller: _host,
-                  decoration:
-                      const InputDecoration(labelText: 'Broker host'),
-                  style: const TextStyle(color: BrandColors.lampWhite),
-                  onChanged: notifier.setMqttBrokerHost,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _port,
-                  keyboardType: TextInputType.number,
-                  decoration:
-                      const InputDecoration(labelText: 'Broker port'),
-                  style: const TextStyle(color: BrandColors.lampWhite),
-                  onChanged: (v) {
-                    final n = int.tryParse(v);
-                    if (n != null) notifier.setMqttBrokerPort(n);
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _user,
-                  decoration:
-                      const InputDecoration(labelText: 'Username'),
-                  style: const TextStyle(color: BrandColors.lampWhite),
-                  onChanged: notifier.setMqttUsername,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _password,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: 'Password',
-                    hintText: mqttHasPwd
-                        ? '(unchanged — type to replace)'
-                        : null,
-                    suffixIcon: mqttHasPwd && _password.text.isEmpty
-                        ? const Padding(
-                            padding: EdgeInsets.only(right: 8),
-                            child: Tooltip(
-                              message:
-                                  'A password is set; leaving this blank keeps it.',
-                              child: Icon(Icons.lock,
-                                  size: 16, color: BrandColors.lumenGreen),
-                            ),
-                          )
-                        : null,
+                if (state.mqtt.enabled) ...[
+                  const SizedBox(height: 4),
+                  TextField(
+                    controller: _host,
+                    decoration:
+                        const InputDecoration(labelText: 'Broker host'),
+                    style: const TextStyle(color: BrandColors.lampWhite),
+                    onChanged: notifier.setMqttBrokerHost,
                   ),
-                  style: const TextStyle(color: BrandColors.lampWhite),
-                  onChanged: (v) {
-                    setState(() {});
-                    notifier
-                        .setMqttPassword(v.isEmpty ? '********' : v);
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _topic,
-                  decoration:
-                      const InputDecoration(labelText: 'Topic prefix'),
-                  style: const TextStyle(color: BrandColors.lampWhite),
-                  onChanged: notifier.setMqttTopicPrefix,
-                ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _port,
+                    keyboardType: TextInputType.number,
+                    decoration:
+                        const InputDecoration(labelText: 'Broker port'),
+                    style: const TextStyle(color: BrandColors.lampWhite),
+                    onChanged: (v) {
+                      final n = int.tryParse(v);
+                      if (n != null) notifier.setMqttBrokerPort(n);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _user,
+                    decoration:
+                        const InputDecoration(labelText: 'Username'),
+                    style: const TextStyle(color: BrandColors.lampWhite),
+                    onChanged: notifier.setMqttUsername,
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _password,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      labelText: 'Password',
+                      hintText: mqttHasPwd
+                          ? '(unchanged — type to replace)'
+                          : null,
+                      suffixIcon: mqttHasPwd && _password.text.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.only(right: 8),
+                              child: Tooltip(
+                                message:
+                                    'A password is set; leaving this blank keeps it.',
+                                child: Icon(Icons.lock,
+                                    size: 16, color: BrandColors.lumenGreen),
+                              ),
+                            )
+                          : null,
+                    ),
+                    style: const TextStyle(color: BrandColors.lampWhite),
+                    onChanged: (v) {
+                      setState(() {});
+                      notifier
+                          .setMqttPassword(v.isEmpty ? '********' : v);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _topic,
+                    decoration:
+                        const InputDecoration(labelText: 'Topic prefix'),
+                    style: const TextStyle(color: BrandColors.lampWhite),
+                    onChanged: notifier.setMqttTopicPrefix,
+                  ),
+                ],
               ],
             ],
           );

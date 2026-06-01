@@ -27,4 +27,5 @@ abstract class BleUuids {
   static const mqttOp         = '5f64f4e2-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const nearbyLamps    = '5f64f4e3-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const remoteOp       = '5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b40';
+  static const homePreview    = '5f64f4e5-d6d9-4a44-9b3f-3a8d6f7e6b40';
 }
