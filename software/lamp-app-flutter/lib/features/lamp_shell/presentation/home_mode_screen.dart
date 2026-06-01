@@ -1,7 +1,12 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/ble/ble_client_provider.dart';
+import '../../../core/ble/uuids.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/control_notifier.dart';
@@ -63,13 +68,25 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
 
   @override
   void dispose() {
-    // Tell the firmware to drop Wi-Fi again so the rest of the BT session
-    // runs without coexistence pressure. Fire-and-forget: the firmware
-    // also cleans up on BT disconnect, so a missed exit (e.g. user killed
-    // the app) is recovered automatically.
-    ref
-        .read(controlNotifierProvider(widget.lampId).notifier)
-        .exitHomePreview();
+    // Tell the firmware to leave preview mode. Go through the BleClient
+    // directly with captured references — routing through the
+    // ControlNotifier worked unreliably (the notifier is autoDispose, so
+    // there's a tiny window during route pop where the BLE write could
+    // get dropped). bleClientProvider is keepAlive=true and stays valid.
+    final ble = ref.read(bleClientProvider);
+    final lampId = widget.lampId;
+    unawaited(() async {
+      try {
+        await ble.write(
+          lampId,
+          BleUuids.controlService,
+          BleUuids.homePreview,
+          Uint8List.fromList([0x00]),
+        );
+      } catch (_) {
+        // best-effort — BT may already be torn down by the time this fires
+      }
+    }());
     _host.dispose();
     _port.dispose();
     _user.dispose();

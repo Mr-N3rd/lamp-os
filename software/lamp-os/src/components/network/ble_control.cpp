@@ -206,10 +206,14 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     // Resume WiFi STA if home mode is configured AND enabled. The
     // `enabled` gate lets the user keep stored creds with home mode
     // soft-toggled off. Also resets the per-session home-preview flag —
-    // the Home Mode page's preview-on may have brought WiFi up; if the
-    // phone walked away without an explicit preview-off, the flag would
-    // otherwise stay set across the next BT session.
-    s_homePreviewActive = false;
+    // if the app went away without an explicit preview-off (crash, OS
+    // killing the process, etc.) the flag would otherwise stay set
+    // across the next BT session. Post the re-apply so the strip
+    // transitions out of preview brightness immediately.
+    if (s_homePreviewActive) {
+      s_homePreviewActive = false;
+      postPendingApplyEffectiveBrightness();
+    }
     if (s_config && s_config->homeMode.enabled &&
         !s_config->homeMode.ssid.empty()) {
       wifi::connect(s_config->homeMode.ssid, s_config->homeMode.password);
@@ -333,14 +337,15 @@ class HomePreviewCallback : public NimBLECharacteristicCallbacks {
       case 0x00: {
         // Exit: clear the flag and re-apply brightness so the lamp
         // transitions back to lamp.brightness (or whatever the existing
-        // wifi-gated effectiveBrightness would resolve to).
-        if (s_homePreviewActive) {
-          s_homePreviewActive = false;
-          postPendingApplyEffectiveBrightness();
+        // wifi-gated effectiveBrightness would resolve to). Always post
+        // the re-apply, even if the flag was already false — a redundant
+        // exit is harmless, but a missed one strands the lamp at the
+        // wrong brightness until the user touches a slider.
+        s_homePreviewActive = false;
+        postPendingApplyEffectiveBrightness();
 #ifdef LAMP_DEBUG
-          Serial.println("[ble_control] HOME_PREVIEW exit");
+        Serial.println("[ble_control] HOME_PREVIEW exit");
 #endif
-        }
         break;
       }
       case 0x01: {
