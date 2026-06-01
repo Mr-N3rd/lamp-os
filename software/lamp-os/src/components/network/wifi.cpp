@@ -43,10 +43,12 @@ static void setState(State next) {
 }
 
 void begin() {
-  // WIFI_STA mode is required for WiFi.scanNetworks() to work even though
-  // we never call WiFi.begin(). Without STA mode, scans return zero APs.
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true, true);  // wipe any stale SDK creds from a previous boot
+  // Order matters: `WiFi.disconnect(true, _)` passes wifioff=true which
+  // calls WiFi.mode(WIFI_OFF) on its way out, so STA mode has to be
+  // (re-)enabled AFTER any disconnect call — otherwise WiFi.scanNetworks
+  // returns 0 (no STA to scan from).
+  WiFi.disconnect(true, true);   // wipe any stale SDK creds from a previous boot
+  WiFi.mode(WIFI_STA);            // enable STA so scanNetworks works
   esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
 }
 
