@@ -652,6 +652,33 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
     Serial.printf("[ble_control] WRITE settingsBlob len=%u (decoded)\n", (unsigned)json.size());
 #endif
 
+    // Merge: the app reads sections with passwords masked as "********"
+    // and on Save explicitly OMITS the field rather than round-tripping
+    // the sentinel (see save() in control_notifier.dart). If we wrote
+    // the incoming blob to NVS verbatim it would silently wipe the
+    // home WiFi and MQTT broker passwords from durable storage —
+    // catastrophic on reboot since the lamp would then call
+    // WiFi.begin(ssid, "") and fail with reason 210 against any
+    // secured AP. So we inject the existing in-memory password values
+    // whenever the blob omits them or sends the "********" sentinel.
+    JsonDocument blobDoc;
+    if (deserializeJson(blobDoc, json.c_str()) == DeserializationError::Ok) {
+      auto preserveSecret = [](JsonObject node,
+                               const char* key,
+                               const std::string& existing) {
+        if (!node) return;
+        const char* incoming = node[key] | "";
+        if (!incoming[0] || strcmp(incoming, "********") == 0) {
+          if (!existing.empty()) node[key] = existing;
+        }
+      };
+      preserveSecret(blobDoc["homeMode"], "password", s_config->homeMode.password);
+      preserveSecret(blobDoc["mqtt"],     "password", s_config->mqtt.password);
+      String merged;
+      serializeJson(blobDoc, merged);
+      json.assign(merged.c_str(), merged.length());
+    }
+
     s_prefs->begin("lamp", false);
     size_t written = s_prefs->putString("cfg", json.c_str());
     s_prefs->end();
