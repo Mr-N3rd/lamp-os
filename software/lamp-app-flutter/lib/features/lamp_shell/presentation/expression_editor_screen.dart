@@ -109,6 +109,52 @@ class _ExpressionEditorScreenState
         parameters: p,
       );
 
+  /// Open the color picker with live preview wired to the lamp. While
+  /// the user drags R/G/B sliders, the picked color streams through
+  /// `setShadeColor` / `setBaseColors` (chosen by the expression's
+  /// target) so the lamp tracks visibly. On close — confirm OR cancel
+  /// — restore the lamp's main shade/base palette so the picker session
+  /// doesn't permanently contaminate it. Returns the user's picked
+  /// color, or null on cancel.
+  Future<LampColor?> _pickColorLive(
+    ControlState state,
+    ControlNotifier notifier,
+    LampColor initial,
+  ) async {
+    final originalShade = state.shade.colors;
+    final originalBase = state.base.colors;
+    final t = widget.targetKey;
+
+    // Stop any active expression test so the configurator is back in
+    // charge and the picker's shade/base writes are visible. (Tests
+    // disable the configurator behavior, which would otherwise let
+    // the expression keep painting over our live writes.)
+    notifier.completeExpressionTest();
+
+    void writeLive(LampColor c) {
+      if (t == 1 || t == 3) notifier.setShadeColor(c);
+      if (t == 2 || t == 3) notifier.setBaseColors([c]);
+    }
+
+    final picked = await showColorPickerSheet(
+      context,
+      initial: initial,
+      onLive: writeLive,
+    );
+
+    // Restore lamp's main palette regardless of confirm/cancel — the
+    // picker's writes were for preview only; the expression's palette
+    // is what should actually change (handled by the caller).
+    if ((t == 1 || t == 3) && originalShade.isNotEmpty) {
+      notifier.setShadeColor(originalShade.first);
+    }
+    if (t == 2 || t == 3) {
+      notifier.setBaseColors(originalBase);
+    }
+
+    return picked;
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(controlNotifierProvider(widget.lampId));
@@ -140,11 +186,16 @@ class _ExpressionEditorScreenState
           if (async.value != null)
             _AppBarTestAction(
               onPressed: () async {
+                // Activates whatever is currently saved firmware-side
+                // for this (type, target). To preview draft changes,
+                // tap Save first (or back out and preview from the
+                // expressions list). Keeping this simple — no draft
+                // upsert here — per the agreed workflow.
                 final draft = ref.read(expressionDraftProvider(
                     widget.lampId, widget.typeKey, widget.targetKey));
                 final notifier =
                     ref.read(controlNotifierProvider(widget.lampId).notifier);
-                final entry = ExpressionConfig(
+                await notifier.testExpression(ExpressionConfig(
                   type: draft.type,
                   enabled: true,
                   colors: draft.colors,
@@ -152,17 +203,7 @@ class _ExpressionEditorScreenState
                   intervalMax: draft.intervalMax,
                   target: draft.target,
                   parameters: draft.parameters,
-                );
-                // Push the draft (colors + parameters) into firmware
-                // in-memory config FIRST. testExpression's wire format
-                // only carries (type, target) — the firmware then
-                // activates the expression using whatever colors are
-                // stored, so without this upsert the preview would show
-                // the previously-saved colors instead of the draft.
-                // Upsert is in-memory only (NVS persistence still goes
-                // through settingsBlob save), so this is cheap.
-                await notifier.upsertExpression(entry);
-                await notifier.testExpression(entry);
+                ));
               },
             ),
         ],
@@ -203,10 +244,8 @@ class _ExpressionEditorScreenState
                     _ColorChip(
                       color: draft.colors[i],
                       onEdit: () async {
-                        final picked = await showColorPickerSheet(
-                          context,
-                          initial: draft.colors[i],
-                        );
+                        final picked = await _pickColorLive(
+                            state, notifier, draft.colors[i]);
                         if (picked == null) return;
                         final next = [...draft.colors];
                         next[i] = picked;
@@ -223,11 +262,10 @@ class _ExpressionEditorScreenState
                     icon: const Icon(Icons.add, size: 18),
                     label: const Text('Add color'),
                     onPressed: () async {
-                      final picked = await showColorPickerSheet(
-                        context,
-                        initial:
-                            const LampColor(r: 0xFF, g: 0xFF, b: 0xFF, w: 0),
-                      );
+                      final picked = await _pickColorLive(
+                          state,
+                          notifier,
+                          const LampColor(r: 0xFF, g: 0xFF, b: 0xFF, w: 0));
                       if (picked == null) return;
                       _updateDraft((d) => _withColors(d, [...d.colors, picked]));
                     },
