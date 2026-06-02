@@ -15,7 +15,29 @@ Config::Config(Preferences* inPrefs) {
   prefs->end();
 
 #ifdef LAMP_DEBUG
-  Serial.println(json);
+  // Print a compact, secret-free summary instead of the raw NVS JSON.
+  // The raw payload would leak `lamp.password` to anyone on the serial
+  // console (USB physical access). If you need the full shape while
+  // debugging a parse bug, attach a temporary `Serial.println(json)`
+  // for that session — don't roll back this redaction.
+  {
+    JsonDocument peek;
+    if (deserializeJson(peek, json) == DeserializationError::Ok) {
+      const char* loadedName = peek["lamp"]["name"] | "<unset>";
+      const char* pwField = peek["lamp"]["password"] | "";
+      const bool hasPassword = pwField != nullptr && pwField[0] != '\0';
+      const int exprCount = peek["expressions"].is<JsonArray>()
+                                ? (int)peek["expressions"].as<JsonArray>().size()
+                                : 0;
+      Serial.printf(
+          "[cfg] loaded name=%s pw=%s expressions=%d nvs_bytes=%u\n",
+          loadedName, hasPassword ? "set" : "unset", exprCount,
+          (unsigned)json.length());
+    } else {
+      Serial.printf("[cfg] loaded nvs_bytes=%u (parse failed; full dump suppressed)\n",
+                    (unsigned)json.length());
+    }
+  }
 #endif
 
   if (error) {
@@ -44,6 +66,14 @@ Config::Config(Preferences* inPrefs) {
   if (base.bpp != 3 && base.bpp != 4) {
     base.bpp = 4;  // defensive: only 3 or 4 valid
   }
+  // byteOrder is the source of truth for strip type. When absent (legacy
+  // payloads), default-derive from bpp so behavior is unchanged for
+  // existing lamps. See docs/firmware-proposals/2026-05-29-neo-bgr-byte-order.md.
+  const char* baseBoCstr = baseNode["byteOrder"] | "";
+  base.byteOrder = baseBoCstr;
+  if (base.byteOrder.empty()) {
+    base.byteOrder = (base.bpp == 4) ? "GRBW" : "GRB";
+  }
 
   JsonArray baseColors = baseNode["colors"];
   int colorCollectionSize = baseColors.size();
@@ -57,16 +87,15 @@ Config::Config(Preferences* inPrefs) {
       base.colors.push_back(hexStringToColor(baseColor));
     }
   }
+  // Knockout: positional uint8 array, one entry per pixel. Index = pixel;
+  // value = brightness % (0..100, default 100). Matches `asBaseJson` /
+  // `asJsonDocument` emit shape.
   JsonArray baseKnockoutPixels = baseNode["knockout"];
-  if (baseKnockoutPixels.size()) {
-    for (JsonObject baseKnockoutPixel : baseKnockoutPixels) {
-      int pixelIndex = baseKnockoutPixel["p"] | 0;
-      if (pixelIndex > 49) {
-        continue;
-      }
-
-      base.knockoutPixels[pixelIndex] = baseKnockoutPixel["b"] | 100;
-    }
+  for (size_t i = 0;
+       i < baseKnockoutPixels.size() && i < base.knockoutPixels.size();
+       i++) {
+    int value = baseKnockoutPixels[i] | 100;
+    base.knockoutPixels[i] = (uint8_t)value;
   }
 
   JsonObject shadeNode = doc["shade"];
@@ -77,6 +106,11 @@ Config::Config(Preferences* inPrefs) {
   shade.bpp = shadeNode["bpp"] | 4;
   if (shade.bpp != 3 && shade.bpp != 4) {
     shade.bpp = 4;
+  }
+  const char* shadeBoCstr = shadeNode["byteOrder"] | "";
+  shade.byteOrder = shadeBoCstr;
+  if (shade.byteOrder.empty()) {
+    shade.byteOrder = (shade.bpp == 4) ? "GRBW" : "GRB";
   }
   JsonArray shadeColors = shadeNode["colors"];
   if (shadeColors.size()) {
@@ -173,30 +207,22 @@ JsonDocument Config::asJsonDocument() {
   baseNode["px"] = base.px;
   baseNode["ac"] = base.ac;
   baseNode["bpp"] = base.bpp;
+  baseNode["byteOrder"] = base.byteOrder;
   JsonArray baseColorsNode = baseNode["colors"].to<JsonArray>();
   for (int i = 0; i < base.colors.size(); i++) {
     baseColorsNode[i] = colorToHexString(base.colors[i]);
   }
+  // Positional uint8 array, same shape as asBaseJson — keeps the on-disk
+  // NVS format consistent with the BLE per-section read.
   JsonArray baseKnockoutNode = baseNode["knockout"].to<JsonArray>();
-  int currentIdx = 0;
   for (int i = 0; i < base.knockoutPixels.size(); i++) {
-    int value = base.knockoutPixels[i];
-
-    // only send values that aren't 100% brightness as an optimization
-    if (value == 100) {
-      continue;
-    }
-
-    JsonObject baseKnockoutObjectNode = baseKnockoutNode[currentIdx].to<JsonObject>();
-    baseKnockoutObjectNode["p"] = i;
-    baseKnockoutObjectNode["b"] = value;
-
-    currentIdx++;
+    baseKnockoutNode.add((int)base.knockoutPixels[i]);
   }
 
   JsonObject shadeNode = doc["shade"].to<JsonObject>();
   shadeNode["px"] = shade.px;
   shadeNode["bpp"] = shade.bpp;
+  shadeNode["byteOrder"] = shade.byteOrder;
   JsonArray shadeColorsNode = shadeNode["colors"].to<JsonArray>();
   for (int i = 0; i < shade.colors.size(); i++) {
     shadeColorsNode[i] = colorToHexString(shade.colors[i]);
@@ -229,8 +255,6 @@ JsonDocument Config::asJsonDocument() {
   homeModeNode["brightness"] = homeMode.brightness;
   homeModeNode["enabled"] = homeMode.enabled;
 
-  // (MQTT block intentionally omitted — the integration was removed.)
-
   return doc;
 };
 
@@ -252,17 +276,19 @@ String Config::asBaseJson() {
   doc["px"] = base.px;
   doc["ac"] = base.ac;
   doc["bpp"] = base.bpp;
+  doc["byteOrder"] = base.byteOrder;
   JsonArray colorsNode = doc["colors"].to<JsonArray>();
   for (size_t i = 0; i < base.colors.size(); i++) {
     colorsNode.add(colorToHexString(base.colors[i]));
   }
+  // Knockout: positional uint8 array, one entry per pixel.
+  //   wire shape: "knockout":[100,100,6,9,...] (length = knockoutPixels.size())
+  // Index = pixel; value = brightness % (0..100). Caps the base section at
+  // ~200 bytes regardless of pattern density so a dense knockout fits
+  // under the per-characteristic ATT cap.
   JsonArray knockoutNode = doc["knockout"].to<JsonArray>();
   for (size_t i = 0; i < base.knockoutPixels.size(); i++) {
-    int value = base.knockoutPixels[i];
-    if (value == 100) continue;  // omit defaults
-    JsonObject entry = knockoutNode.add<JsonObject>();
-    entry["p"] = i;
-    entry["b"] = value;
+    knockoutNode.add((int)base.knockoutPixels[i]);
   }
   String out;
   serializeJson(doc, out);
@@ -273,6 +299,7 @@ String Config::asShadeJson() {
   JsonDocument doc;
   doc["px"] = shade.px;
   doc["bpp"] = shade.bpp;
+  doc["byteOrder"] = shade.byteOrder;
   JsonArray colorsNode = doc["colors"].to<JsonArray>();
   for (size_t i = 0; i < shade.colors.size(); i++) {
     colorsNode.add(colorToHexString(shade.colors[i]));

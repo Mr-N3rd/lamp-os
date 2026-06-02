@@ -20,7 +20,7 @@ enum MsgType : uint8_t {
   MSG_COLORS = 0x02,
   // Forwarded BLE control write. Payload is JSON tagged with a `char` field
   // naming the local control surface to invoke (brightness, shadeColors,
-  // baseColors, knockout, expressionOp, settings, mqtt, ...). The local
+  // baseColors, knockout, expressionOp, settings, ...). The local
   // pending-slot post functions handle the routing; downstream drain in
   // loop() runs unchanged.
   MSG_CONTROL_OP = 0x03,

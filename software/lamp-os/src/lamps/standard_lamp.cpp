@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -71,6 +72,11 @@ PendingOpJsonUpdate pendingExpressionOpJson;
 PendingOpJsonUpdate pendingWifiOpJson;
 PendingOpJsonUpdate pendingTestActionJson;
 PendingOpJsonUpdate pendingRemoteOpJson;
+// settings_blob processing moved to the loop drain so it serialises with
+// the other pending-op drains (especially expressionOp) on the same core.
+// Decrypt + auth still happen on Core 0's BLE callback; the merge +
+// putString + fadeOut happens here. See drain block in loop().
+PendingOpJsonUpdate pendingSettingsBlobJson;
 // Slot for ESP-NOW-inbound CONTROL_OP payloads. ShowReceiver runs the recv
 // callback on the WiFi task; it memcpys the payload here and the loop task
 // drains + dispatches. Mirrors the BLE Core 0 → loop pattern.
@@ -125,6 +131,15 @@ void postPendingTestActionJson(const char* data, size_t len) {
   portEXIT_CRITICAL(&pendingMux);
 }
 
+void postPendingSettingsBlobJson(const char* data, size_t len) {
+  if (len > MAX_PENDING_OP_JSON) return;
+  portENTER_CRITICAL(&pendingMux);
+  pendingSettingsBlobJson.length = static_cast<uint16_t>(len);
+  memcpy(pendingSettingsBlobJson.json, data, len);
+  pendingSettingsBlobJson.valid = true;
+  portEXIT_CRITICAL(&pendingMux);
+}
+
 void postPendingRemoteOpJson(const char* data, size_t len) {
   if (len > MAX_PENDING_OP_JSON) return;
   portENTER_CRITICAL(&pendingMux);
@@ -132,12 +147,6 @@ void postPendingRemoteOpJson(const char* data, size_t len) {
   memcpy(pendingRemoteOpJson.json, data, len);
   pendingRemoteOpJson.valid = true;
   portEXIT_CRITICAL(&pendingMux);
-}
-
-void postPendingMqttOpJson(const char* /*data*/, size_t /*len*/) {
-  // MQTT was removed in the home-mode simplification — kept as a no-op so
-  // the BLE-side / remote-op dispatchers that still reference this symbol
-  // link cleanly. Drop the payload on the floor.
 }
 
 // Apply a remote-op payload locally (either from BLE remoteOp drain when
@@ -183,7 +192,6 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len) {
     postPendingExpressionOpJson(out.data(), out.size());
 
   }
-  // (MQTT forwarding removed.)
   // settings forwarding is intentionally deferred — it triggers a remote
   // reboot whose UX over the grid needs more thought. Follow-up plan.
 }
@@ -427,9 +435,8 @@ static void onWifiStateChanged() {
   // Calling into compositor.setHomeMode / shadeStrip->setBrightness from
   // here races Core 1's compositor.tick + frame_buffer.flush, corrupting
   // the NeoPixel byte buffer and the behavior vector. Symptom: lamp
-  // crash-loops with rst:0x3 (SW_RESET) + _invalid_pc_placeholder on
-  // every BT connect (because BT-connect triggers wifi::disconnect,
-  // which fires this callback).
+  // crash-loops with rst:0x3 (SW_RESET) + _invalid_pc_placeholder during
+  // background scan completion or any other WiFi state transition.
   //
   // Safe path: post the pending flag and let Core 1's loop drain call
   // reapplyHomeModeState on its own thread.
@@ -450,8 +457,18 @@ void setup() {
   bt.begin(config.lamp.name, config.base.colors[config.base.ac], config.shade.colors[0]);
   bt.activateGattServices(&config, &prefs);
 
-  const uint16_t shadeFmt = (config.shade.bpp == 3) ? NEO_GRB : NEO_GRBW;
-  const uint16_t baseFmt = (config.base.bpp == 3) ? NEO_GRB : NEO_GRBW;
+  // Map the section's byteOrder string to the NeoPixel format flag. The
+  // bpp-derived fallback covers lamps that didn't carry the new field in
+  // their NVS payload (see config.cpp's loader — byteOrder is back-filled
+  // there, so this branch shouldn't fire in practice).
+  auto pickStripFmt = [](const std::string& order, uint8_t bpp) -> uint16_t {
+    if (order == "GRBW") return NEO_GRBW;
+    if (order == "GRB")  return NEO_GRB;
+    if (order == "BGR")  return NEO_BGR;
+    return (bpp == 4) ? NEO_GRBW : NEO_GRB;
+  };
+  const uint16_t shadeFmt = pickStripFmt(config.shade.byteOrder, config.shade.bpp);
+  const uint16_t baseFmt  = pickStripFmt(config.base.byteOrder,  config.base.bpp);
   shadeStrip = new Adafruit_NeoPixel(LAMP_MAX_STRIP_PIXELS_SHADE, LAMP_SHADE_PIN, shadeFmt + NEO_KHZ800);
   baseStrip = new Adafruit_NeoPixel(LAMP_MAX_STRIP_PIXELS_BASE, LAMP_BASE_PIN, baseFmt + NEO_KHZ800);
   applyEffectiveBrightness();
@@ -479,9 +496,6 @@ void setup() {
     portEXIT_CRITICAL(&pendingMux);
   });
 
-  // (MQTT / Home Assistant integration removed in the home-mode
-  // simplification — see plan. Re-add if the user wants smart-home
-  // control later.)
 };
 
 void loop() {
@@ -489,30 +503,12 @@ void loop() {
   // (JsonDocument parse, std::vector, gradient construction) happens here,
   // NOT in BLE callbacks on Core 0.
 
-  // Reflect mesh state on the manufacturer-data advertisement so the phone
-  // app's scanner can light a "mesh" dot beside this lamp.
-  //
-  // "On mesh" = we've heard at least one other lamp on BLE adv in the last
-  // 60 s. BLE-reachable is the most reliable proxy — it's the same signal
-  // SocialBehavior uses to greet neighbours and doesn't require Wi-Fi STA
-  // to be configured (ESP-NOW peer-to-peer falls back to channel 1 when
-  // STA isn't up, which doesn't reliably match other lamps).
-  //
-  // The setMeshState helper is idempotent: it only re-applies
-  // setManufacturerData when the flag flips, so calling it every loop
-  // tick is fine — once we're past the post-boot stabilisation window.
-  //
-  // Skip the first 5 seconds after boot. Otherwise the very first
-  // loop tick flips s_meshStateInitialized false→true and rebuilds
-  // the advertisement packet via setAdvertisementData, and the first
-  // HELLO from a neighbour 1-2 sec later flips meshFlag 0→1 and
-  // rebuilds it AGAIN. Both rebuilds momentarily stop + restart
-  // advertising on the BLE host task, which destabilises any phone
-  // that's mid-connection — the exact failure pattern the AddLamp
-  // verify reconnect hits about 5 s post-reboot.
-  if (millis() >= 5000) {
-    bt.setMeshState(!lamp::nearbyLamps.getReachableViaBle(60000).empty());
-  }
+  // Debounced flush of any pending BLE advertisement color update. The
+  // drain blocks below call bt.setAdvertisedColors() freely (it's a
+  // fast cache write); the actual NimBLE setAdvertisementData() call
+  // is rate-limited inside tickAdvertising() to avoid the host-task
+  // race that panics the lamp on rapid color picker drags.
+  bt.tickAdvertising();
 
   if (pendingApplyEffectiveBrightness) {
     pendingApplyEffectiveBrightness = false;
@@ -578,6 +574,11 @@ void loop() {
           colors.push_back(lamp::hexStringToColor(v));
         }
         shadeConfiguratorBehavior.colors = lamp::buildGradientWithStops(shade.pixelCount, colors);
+        // Reflect the new shade in the BLE adv so phones and v1
+        // neighbours see it without having to connect. Use the first
+        // stop — shade in this build is a single color.
+        bt.setAdvertisedColors(
+            config.base.colors[config.base.ac], colors[0]);
       }
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
@@ -609,6 +610,11 @@ void loop() {
           colors.push_back(lamp::hexStringToColor(v));
         }
         baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, colors);
+        // Reflect the new base in the BLE adv — first stop is what
+        // the adv carries (we don't know the user's active-stop index
+        // from this drain, and the first stop is what bt.begin used
+        // initially).
+        bt.setAdvertisedColors(colors[0], config.shade.colors[0]);
       }
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
@@ -674,13 +680,101 @@ void loop() {
         }
         if (!cfg.type.empty()) {
           expressionManager.upsertExpression(cfg, &compositor);
+          // Mirror into config.expressions so the next settings_blob save
+          // persists the user's latest edits. expressionManager is the
+          // runtime animator; config is what gets serialized to NVS.
+          auto& exprs = config.expressions.expressions;
+          bool found = false;
+          for (auto& e : exprs) {
+            if (e.type == cfg.type && e.target == cfg.target) {
+              e = cfg;
+              found = true;
+              break;
+            }
+          }
+          if (!found) exprs.push_back(cfg);
         }
       } else if (op && strcmp(op, "remove") == 0) {
         const char* type = doc["type"].as<const char*>();
         int tgt = doc["target"] | 0;
         if (type && tgt >= 1 && tgt <= 3) {
           expressionManager.removeExpression(type, static_cast<lamp::ExpressionTarget>(tgt), &compositor);
+          // Mirror removal into config.expressions.
+          auto& exprs = config.expressions.expressions;
+          exprs.erase(std::remove_if(exprs.begin(), exprs.end(),
+                        [&](const lamp::ExpressionConfig& e) {
+                          return e.type == type && e.target == tgt;
+                        }),
+                      exprs.end());
         }
+      }
+    }
+  }
+
+  // settings_blob drain — runs AFTER expressionOp drain so that any
+  // just-arrived expression edits are already mirrored into
+  // config.expressions before we serialize and persist. Uses
+  // config.asJsonDocument() as the base (current canonical state) and
+  // overlays the incoming partial-blob's top-level keys; anything the
+  // app omits is preserved from current state.
+  if (pendingSettingsBlobJson.valid) {
+    char buf[MAX_PENDING_OP_JSON + 1];
+    uint16_t len;
+    portENTER_CRITICAL(&pendingMux);
+    len = pendingSettingsBlobJson.length;
+    memcpy(buf, pendingSettingsBlobJson.json, len);
+    pendingSettingsBlobJson.valid = false;
+    portEXIT_CRITICAL(&pendingMux);
+    buf[len] = '\0';
+
+#ifdef LAMP_DEBUG
+    Serial.printf("[loop] drain settingsBlob len=%u\n", (unsigned)len);
+#endif
+
+    JsonDocument incomingDoc;
+    if (deserializeJson(incomingDoc, buf, len) != DeserializationError::Ok) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] settingsBlob: incoming JSON parse failed\n");
+#endif
+    } else {
+      JsonDocument fullDoc = config.asJsonDocument();
+      JsonObject full = fullDoc.as<JsonObject>();
+      // One-level-deep nested merge for object-valued top-level keys:
+      // when the app ships a partial section (e.g. `base` with colors
+      // but no knockout, because knockout is too big for the BLE ATT
+      // cap), preserve the fields it didn't ship by overlaying the
+      // incoming fields onto the existing section object rather than
+      // wholesale-replacing it. Without this, `config.base.knockout`
+      // gets clobbered on every save and pixel-knockout doesn't
+      // survive a power cycle. Arrays + scalars still replace.
+      for (JsonPair kv : incomingDoc.as<JsonObject>()) {
+        if (kv.value().is<JsonObject>() && full[kv.key()].is<JsonObject>()) {
+          JsonObject dst = full[kv.key()].as<JsonObject>();
+          for (JsonPair inner : kv.value().as<JsonObject>()) {
+            dst[inner.key()] = inner.value();
+          }
+        } else {
+          full[kv.key()] = kv.value();
+        }
+      }
+      String mergedJson;
+      serializeJson(fullDoc, mergedJson);
+
+      prefs.begin("lamp", false);
+      size_t written = prefs.putString("cfg", mergedJson.c_str());
+      prefs.end();
+
+      if (written > 0) {
+#ifdef LAMP_DEBUG
+        Serial.printf("[loop] settingsBlob: persisted %u bytes, fading out for reboot\n",
+                      (unsigned)written);
+#endif
+        ble_control::notifyStateChange();
+        lamp::fadeOutRebootRequested = true;
+      } else {
+#ifdef LAMP_DEBUG
+        Serial.printf("[loop] settingsBlob: putString failed\n");
+#endif
       }
     }
   }
@@ -741,28 +835,12 @@ void loop() {
       const char* op = doc["op"].as<const char*>();
       if (op && strcmp(op, "scan") == 0) {
         wifi::startScan();
-      } else if (op && strcmp(op, "setHomeSsid") == 0) {
-        // Presence-only home mode — store the SSID the user chose from a
-        // scan. No password. No association. The lamp will check whether
-        // this SSID is visible in subsequent background scans to decide
-        // whether to apply home mode (see calculateEffectiveHomeMode).
-        std::string ssid(doc["ssid"] | "");
-        if (!ssid.empty()) {
-          config.homeMode.ssid = ssid;
-          config.homeMode.enabled = true;
-          persistConfigToNvs();
-          postPendingApplyEffectiveBrightness();
-        }
-      } else if (op && strcmp(op, "forget") == 0) {
-        config.homeMode.ssid.clear();
-        persistConfigToNvs();
-        wifi::forget();
-        postPendingApplyEffectiveBrightness();
       }
+      // setHomeSsid + forget moved to the unified draft + settings_blob
+      // path. The app holds the SSID locally and persists it via the blob
+      // along with everything else — wifiOp is now scan-only.
     }
   }
-
-  // (MQTT op drain removed.)
 
   // Drain inbound ESP-NOW CONTROL_OP (deferred from ShowReceiver's WiFi
   // task) — JSON parse + local dispatch.

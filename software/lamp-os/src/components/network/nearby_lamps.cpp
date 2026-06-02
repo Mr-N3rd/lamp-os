@@ -111,6 +111,20 @@ std::vector<NearbyLamp> NearbyLamps::getReachableViaBle(uint32_t maxAgeMs) {
   return out;
 }
 
+bool NearbyLamps::hasAnyReachableViaBle(uint32_t maxAgeMs) {
+  uint32_t now = millis();
+  bool found = false;
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  for (const auto& e : store_) {
+    if (e.lastSeenViaBleMs != 0 && (now - e.lastSeenViaBleMs) <= maxAgeMs) {
+      found = true;
+      break;
+    }
+  }
+  xSemaphoreGive(mutex_);
+  return found;
+}
+
 std::vector<NearbyLamp> NearbyLamps::getReachableViaEspNow(uint32_t maxAgeMs) {
   uint32_t now = millis();
   std::vector<NearbyLamp> out;

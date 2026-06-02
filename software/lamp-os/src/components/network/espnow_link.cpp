@@ -21,9 +21,10 @@ bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
 
   // WiFi STA mode is already up via wifi::begin() in standard_lamp setup;
   // do NOT call WiFi.mode/disconnect/setSleep here — that would clobber the
-  // wifi module's STA association to home WiFi. Channel coordination is
-  // wifi::ensureGridChannel()'s job; we just set peer.channel=0 below so the
-  // peer record tracks "whatever channel the radio is on right now".
+  // radio state the wifi module relies on for periodic presence scans.
+  // Channel coordination is wifi::ensureGridChannel()'s job; we just set
+  // peer.channel=0 below so the peer record tracks "whatever channel the
+  // radio is on right now".
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("[espnow] esp_now_init failed");

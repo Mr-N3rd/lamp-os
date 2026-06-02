@@ -71,6 +71,11 @@ class NearbyLamps {
   // SocialBehavior: only entries whose lastSeenViaBleMs is within maxAgeMs.
   std::vector<NearbyLamp> getReachableViaBle(uint32_t maxAgeMs);
 
+  // Cheap "is anyone in BLE range" check — early-exits on first hit, no
+  // heap allocation. For callers that only care about presence (e.g.
+  // mesh-state advertisement flag), not the full snapshot.
+  bool hasAnyReachableViaBle(uint32_t maxAgeMs);
+
   // Grid view / remote-config: only entries whose lastSeenViaEspNowMs
   // is within maxAgeMs.
   std::vector<NearbyLamp> getReachableViaEspNow(uint32_t maxAgeMs);

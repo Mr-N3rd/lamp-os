@@ -42,20 +42,26 @@ class LampSettings {
 /**
  * @brief Settings used for the bulb neopixels
  * @property px - the total pixel count
- * @property bpp - bytes per pixel: 4 = NEO_GRBW (RGBWW), 3 = NEO_GRB (RGB)
+ * @property bpp - bytes per pixel: 4 = RGBW-class strip, 3 = RGB-class strip
+ * @property byteOrder - NeoPixel wire byte order. Recognized values:
+ *   "GRBW" (4 bpp), "GRB" (3 bpp), "BGR" (3 bpp). Empty string falls back
+ *   to a bpp-derived default ("GRBW" for bpp==4, "GRB" otherwise) so old
+ *   NVS payloads without the field load unchanged.
  * @property colors - a list of up to 5 colors to use
  */
 class ShadeSettings {
  public:
   uint8_t px = 38;
   uint8_t bpp = 4;
+  std::string byteOrder = "";
   std::vector<Color> colors = {Color(0x00, 0x00, 0x00, 0xFF)};
 };
 
 /**
  * @brief Settings used for the base neopixels
  * @property px - the total pixel count
- * @property bpp - bytes per pixel: 4 = NEO_GRBW (RGBWW), 3 = NEO_GRB (RGB)
+ * @property bpp - bytes per pixel: 4 = RGBW-class strip, 3 = RGB-class strip
+ * @property byteOrder - NeoPixel wire byte order; see ShadeSettings.
  * @property colors - a list of up to 5 colors to use
  * @property knockoutPixels - a list of knockout pixels to profile the lamp base
  * @property ac - the preferred color index in a gradient
@@ -64,6 +70,7 @@ class BaseSettings {
  public:
   uint8_t px = 35;
   uint8_t bpp = 4;
+  std::string byteOrder = "";
   std::vector<Color> colors = {Color(0x30, 0x07, 0x83, 0x00)};
   std::vector<uint8_t> knockoutPixels = std::vector<uint8_t>(50, (uint8_t)100);
   uint8_t ac = 0;

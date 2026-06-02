@@ -35,8 +35,8 @@ void postPendingKnockout(uint8_t pixel, uint8_t brightness);
 void postPendingExpressionOpJson(const char* data, size_t len);
 void postPendingWifiOpJson(const char* data, size_t len);
 void postPendingTestActionJson(const char* data, size_t len);
-void postPendingMqttOpJson(const char* data, size_t len);
 void postPendingRemoteOpJson(const char* data, size_t len);
+void postPendingSettingsBlobJson(const char* data, size_t len);
 void postPendingApplyEffectiveBrightness();
 static constexpr size_t MAX_PENDING_JSON = 256;
 static constexpr size_t MAX_PENDING_OP_JSON = 512;
@@ -591,28 +591,18 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
     Serial.printf("[ble_control] WRITE settingsBlob len=%u (decoded)\n", (unsigned)json.size());
 #endif
 
-    // No secret-preserve merge step anymore — neither homeMode nor mqtt
-    // carries a password field in this build (home mode is presence-only,
-    // MQTT was removed).
-
-    s_prefs->begin("lamp", false);
-    size_t written = s_prefs->putString("cfg", json.c_str());
-    s_prefs->end();
-
-    if (written > 0) {
+    // Hand off to Core 1's loop drain — runs AFTER expressionOp drain so
+    // any just-arrived expression edits are mirrored into
+    // config.expressions before settings_blob serializes + persists.
+    // See standard_lamp.cpp's settings_blob drain block.
+    if (json.size() > MAX_PENDING_OP_JSON) {
 #ifdef LAMP_DEBUG
-      Serial.printf("[ble_control] settings_blob: persisted %zu bytes, fading out for reboot\n", written);
+      Serial.printf("[ble_control] settings_blob too large for pending slot: %u > %u\n",
+                    (unsigned)json.size(), (unsigned)MAX_PENDING_OP_JSON);
 #endif
-      notifyStateChange();
-      // Signal FadeOutBehavior to play the fade-to-black animation and then
-      // call ESP.restart() on its last frame. Better UX than abrupt reboot,
-      // and gives any in-flight GATT ack time to land.
-      lamp::fadeOutRebootRequested = true;
-    } else {
-#ifdef LAMP_DEBUG
-      Serial.printf("[ble_control] settings_blob: putString failed\n");
-#endif
+      return;
     }
+    postPendingSettingsBlobJson(json.data(), json.size());
   }
 };
 
@@ -745,6 +735,10 @@ void start(lamp::Config* config, Preferences* prefs) {
   // the cached value from live config. NimBLE returns the cached value on a
   // GATT read, so we also seed the initial values here to handle the first read
   // before any onRead fires.
+  //
+  // The default per-characteristic ATT cap is set to 1024 via
+  // `-D BLE_ATT_ATTR_MAX_LEN=1024` in platformio.ini — the persisted-knockout
+  // base section can reach ~672 bytes, exceeding NimBLE's stock 512 cap.
   s_lampSectionChar = s_service->createCharacteristic(
       CHAR_LAMP_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_lampSectionChar->setCallbacks(new LampSectionCallback());
