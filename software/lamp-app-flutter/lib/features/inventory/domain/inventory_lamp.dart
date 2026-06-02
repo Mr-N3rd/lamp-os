@@ -15,6 +15,14 @@ abstract class InventoryLamp with _$InventoryLamp {
     /// before this field existed — consumers fall back to a deviceId hash.
     int? critterIndex,
     int? lastSeenEpochMs,
+    /// Cached last-seen colors written by `controlNotifier._updateSeen`
+    /// on every successful connect-and-read and every settled slider
+    /// drag. Persisted via `inventory.v1` in SharedPreferences and read
+    /// back by `resolveLampColors` to render My Lamps / picker tiles.
+    ///
+    /// Shape: `[R, G, B, W]` (4 ints). Legacy entries written before
+    /// this field grew the W byte may be `[R, G, B]` (length 3) — the
+    /// resolver treats those as `W = 0`, preserving the prior render.
     List<int>? lastShadeColor,
     List<int>? lastBaseColor,
   }) = _InventoryLamp;

@@ -81,23 +81,21 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
     }));
   }
 
-  Future<void> _selectSsid(String ssid) async {
-    // 1. Tell the firmware to persist the new home SSID (CHAR_WIFI_OP
-    //    setHomeSsid → persistConfigToNvs firmware-side).
-    await ref.read(wifiNotifierProvider(widget.lampId).notifier)
-        .setHomeSsid(ssid);
-    // 2. Mirror into controlNotifier state so the UI reflects it
-    //    immediately (CHAR_HOME_SECTION has no NOTIFY subscription).
-    if (!mounted) return;
+  void _selectSsid(String ssid) {
+    // Draft-only: hold the SSID in controlNotifier state and let global
+    // Save Changes persist it via settings_blob (the firmware merges
+    // homeMode.ssid on blob writes). No live firmware effect to preview
+    // for an SSID — home-mode detection runs off the saved value.
     ref.read(controlNotifierProvider(widget.lampId).notifier)
         .setHomeSsid(ssid);
   }
 
   void _onForget() {
-    // Firmware clears + persists; mirror to app state.
-    ref.read(wifiNotifierProvider(widget.lampId).notifier).forget();
-    final cn = ref.read(controlNotifierProvider(widget.lampId).notifier);
-    cn.setHomeSsid('');
+    // Same draft-only flow: clear the SSID in app state; Save Changes
+    // persists. Users who want the lamp to drop home mode *immediately*
+    // can hit Save Changes after Forget.
+    ref.read(controlNotifierProvider(widget.lampId).notifier)
+        .setHomeSsid('');
   }
 
   @override

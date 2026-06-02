@@ -171,14 +171,16 @@ void main() {
     expect(find.text('Add a lamp'), findsOneWidget);
   });
 
-  testWidgets('shows "Other nearby lamps" section for unknown nearby lamps',
+  testWidgets(
+      'never renders the "Other nearby lamps" section, even when there are unowned BLE devices in range',
       (tester) async {
+    // Discovery of unowned lamps belongs to the Add Lamp flow now — the
+    // switch-lamp picker shows owned lamps only.
     final c = await withInventory(const [
       InventoryLamp(id: 'a', name: 'jacko'),
     ]);
     addTearDown(c.dispose);
 
-    // Inject a nearby lamp that is not in inventory by setting state directly.
     c.read(nearbyLampsNotifierProvider.notifier).state = [
       const NearbyLamp(
         id: 'unknown-1',
@@ -189,28 +191,6 @@ void main() {
         shadeRgb: 0x00FF00,
         lastSeenEpochMs: 0,
       ),
-    ];
-
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: c,
-      child: const MaterialApp(
-        home: Scaffold(body: LampPickerSheet(currentLampId: 'a')),
-      ),
-    ));
-    await settle(tester);
-
-    expect(find.text('Other nearby lamps'), findsOneWidget);
-    expect(find.text("alice's lamp"), findsOneWidget);
-    // Should show "add" pill (not factory default)
-    expect(find.text('add'), findsOneWidget);
-  });
-
-  testWidgets('factory-default nearby lamp shows "adopt" pill', (tester) async {
-    final c = await withInventory(const []);
-    addTearDown(c.dispose);
-
-    // Factory default: name='standard', baseRgb=0x300783, shadeRgb=0x000000
-    c.read(nearbyLampsNotifierProvider.notifier).state = [
       const NearbyLamp(
         id: 'factory-1',
         name: 'standard',
@@ -225,12 +205,16 @@ void main() {
     await tester.pumpWidget(UncontrolledProviderScope(
       container: c,
       child: const MaterialApp(
-        home: Scaffold(body: LampPickerSheet(currentLampId: '')),
+        home: Scaffold(body: LampPickerSheet(currentLampId: 'a')),
       ),
     ));
     await settle(tester);
 
-    expect(find.text('adopt'), findsOneWidget);
+    // Neither the header nor any of the nearby tiles should appear.
+    expect(find.text('Other nearby lamps'), findsNothing);
+    expect(find.text("alice's lamp"), findsNothing);
+    expect(find.text('standard'), findsNothing);
+    expect(find.text('adopt'), findsNothing);
     expect(find.text('add'), findsNothing);
   });
 

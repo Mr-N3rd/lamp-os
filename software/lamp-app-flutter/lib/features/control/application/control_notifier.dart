@@ -14,19 +14,29 @@ import '../domain/lamp_color.dart';
 import '../domain/sections.dart';
 import 'auth_client.dart';
 import 'control_state.dart';
+import 'lamp_save_status.dart';
 
 part 'control_notifier.g.dart';
 
-// Live-preview write debounce. Sized to match the BLE link's actual
-// drain rate (~20 writes/sec at the ~49ms connection interval Android
-// usually negotiates) with a small margin. 30ms (~33Hz) was over-
-// driving the link → writes queued in fbp/Android → progressive
-// slowdown under continuous slider drag (user observed: taps fast,
-// drag drifts slower). 60ms (~17Hz) stays under the link ceiling so
-// the queue never fills. If updateConnParams is honored firmware-side
-// and the link widens, we could drop this back; for now 60ms is the
-// safe default.
+// Live-preview write debounce. WriteCoalescer fires on a timer, not
+// on completion of the previous write — so this value has to stay
+// at or below the slowest link the producer might face. Tried 30ms
+// (paired with HIGH connection priority + WRITE_NR): drag felt
+// smoother but Android happily queued writes the radio/lamp couldn't
+// drain fast enough — visible as a post-release tail where the lamp
+// kept changing colors after the user stopped dragging. 60ms (~17Hz
+// per channel) stays under the sustained drain rate on a HIGH-priority
+// link without queue buildup. A proper backpressure refactor of
+// WriteCoalescer (one-in-flight, coalesce-to-latest) would let us
+// drop this safely; until then 60ms is the floor.
 const _writeDebounce = Duration(milliseconds: 60);
+
+/// Fallback used when `shade.colors` comes back empty from the lamp.
+/// Firmware enforces exactly one shade color today, but a corrupted NVS
+/// payload (or a future firmware change) could yield 0 or 2+ — defensive
+/// fallback avoids a `StateError` from `.single` blowing up the connect /
+/// post-save reconnect paths.
+const _blackShade = LampColor(r: 0, g: 0, b: 0, w: 0);
 
 @Riverpod(keepAlive: false, name: 'controlNotifierProvider')
 class ControlNotifier extends _$ControlNotifier {
@@ -64,21 +74,39 @@ class ControlNotifier extends _$ControlNotifier {
   // would reassign and a final field throws LateInitializationError.
   late String _deviceId;
 
+  // Cached provider references captured in build(). Timer / writer
+  // callbacks fire asynchronously and could land AFTER ref.onDispose
+  // has run; calling `ref.read(...)` then throws. The underlying
+  // BleClient + InventoryNotifier instances both live in keepAlive
+  // providers, so a cached pointer stays valid for the lifetime of
+  // those providers (the whole app) regardless of this notifier's
+  // own dispose timing.
+  late BleClient _ble;
+  late InventoryNotifier _inv;
+
   // ---------------------------------------------------------------------------
   // Inventory color-cache helpers
   // ---------------------------------------------------------------------------
 
-  List<int> _rgbList(LampColor c) => [c.r, c.g, c.b];
+  /// RGBW list shape persisted in inventory (and read back by
+  /// `resolveLampColors`). Includes the warm-white byte so warm-heavy
+  /// edits render correctly on the My Lamps / picker tiles — the BLE
+  /// adv carries only RGB triplets, so the cache is the only source
+  /// of W for offline / between-edit rendering.
+  List<int> _rgbwList(LampColor c) => [c.r, c.g, c.b, c.w];
 
   Future<void> _updateSeen({
     LampColor? shade,
     LampColor? base,
   }) async {
-    await ref.read(inventoryNotifierProvider.notifier).updateSeen(
-          _deviceId,
-          shade: shade == null ? null : _rgbList(shade),
-          base: base == null ? null : _rgbList(base),
-        );
+    // Use cached notifier ref so the trailing-flush path
+    // (`_seenFlushTimer` + the `ref.onDispose` final flush) can't
+    // touch a disposed Riverpod ref.
+    await _inv.updateSeen(
+      _deviceId,
+      shade: shade == null ? null : _rgbwList(shade),
+      base: base == null ? null : _rgbwList(base),
+    );
   }
 
   /// Coalesces "last-seen color" updates into one trailing disk write.
@@ -105,7 +133,11 @@ class ControlNotifier extends _$ControlNotifier {
   Future<ControlState> build(String deviceId) async {
     _deviceId = deviceId;
 
-    final ble = ref.read(bleClientProvider);
+    // Cache provider refs once. Used by Timer / coalescer callbacks
+    // that can fire after this notifier's onDispose has run.
+    _ble = ref.read(bleClientProvider);
+    _inv = ref.read(inventoryNotifierProvider.notifier);
+    final ble = _ble;
     final inv = await ref.read(inventoryNotifierProvider.future);
     final lamp = inv.firstWhere(
       (l) => l.id == deviceId,
@@ -198,7 +230,9 @@ class ControlNotifier extends _$ControlNotifier {
     });
 
     await _updateSeen(
-      shade: fresh.shade.colors.single,
+      shade: fresh.shade.colors.isEmpty
+          ? _blackShade
+          : fresh.shade.colors.first,
       base: fresh.base.colors[fresh.base.ac],
     );
 
@@ -248,20 +282,34 @@ class ControlNotifier extends _$ControlNotifier {
   // ---------------------------------------------------------------------------
 
   /// True when the current state differs from the snapshot loaded at build().
-  ///
-  /// Note: `expressions` is intentionally NOT included. Expressions persist
-  /// independently of the settings-blob save flow — `upsertExpression` and
-  /// `removeExpression` write to `CHAR_EXPRESSION_OP` which the firmware
-  /// persists to NVS immediately. Adding expressions to isDirty would
-  /// double-fire Save semantics and surface a Save button on the expressions
-  /// tab where there's nothing left to save.
   bool get isDirty {
     final cur = state.value;
     if (cur == null) return false;
     return _isLampDirty(cur.lamp, _original.lamp) ||
         _isBaseDirty(cur.base, _original.base) ||
         _isShadeDirty(cur.shade, _original.shade) ||
-        _isHomeDirty(cur.home, _original.home);
+        _isHomeDirty(cur.home, _original.home) ||
+        _isExpressionsDirty(
+            cur.expressions.expressions, _original.expressions.expressions);
+  }
+
+  /// Diagnostic: returns the name of the first section that's dirty, or
+  /// `null` when everything's clean. Useful for tracking down false-positive
+  /// `isDirty` reports (e.g. "Save changes pill appeared on a fresh
+  /// connect" — call this from a logging hook to see WHICH section drifted).
+  /// Cheap; same comparisons as `isDirty`, just labelled.
+  String? get dirtyReason {
+    final cur = state.value;
+    if (cur == null) return null;
+    if (_isLampDirty(cur.lamp, _original.lamp)) return 'lamp';
+    if (_isBaseDirty(cur.base, _original.base)) return 'base';
+    if (_isShadeDirty(cur.shade, _original.shade)) return 'shade';
+    if (_isHomeDirty(cur.home, _original.home)) return 'home';
+    if (_isExpressionsDirty(
+        cur.expressions.expressions, _original.expressions.expressions)) {
+      return 'expressions';
+    }
+    return null;
   }
 
   bool _isLampDirty(LampSection a, LampSection b) =>
@@ -272,11 +320,16 @@ class ControlNotifier extends _$ControlNotifier {
   bool _isBaseDirty(BaseSection a, BaseSection b) =>
       a.ac != b.ac ||
       a.bpp != b.bpp ||
+      a.byteOrder != b.byteOrder ||
+      a.px != b.px ||
       !_colorsEqual(a.colors, b.colors) ||
       !_knockoutEqual(a.knockout, b.knockout);
 
   bool _isShadeDirty(ShadeSection a, ShadeSection b) =>
-      a.bpp != b.bpp || !_colorsEqual(a.colors, b.colors);
+      a.bpp != b.bpp ||
+      a.byteOrder != b.byteOrder ||
+      a.px != b.px ||
+      !_colorsEqual(a.colors, b.colors);
 
   bool _isHomeDirty(HomeSection a, HomeSection b) =>
       a.ssid != b.ssid ||
@@ -299,14 +352,42 @@ class ControlNotifier extends _$ControlNotifier {
     return true;
   }
 
+  bool _isExpressionsDirty(
+      List<ExpressionConfig> a, List<ExpressionConfig> b) {
+    if (a.length != b.length) return true;
+    for (var i = 0; i < a.length; i++) {
+      if (!_expressionEqual(a[i], b[i])) return true;
+    }
+    return false;
+  }
+
+  bool _expressionEqual(ExpressionConfig a, ExpressionConfig b) {
+    if (a.type != b.type ||
+        a.enabled != b.enabled ||
+        a.target != b.target ||
+        a.intervalMin != b.intervalMin ||
+        a.intervalMax != b.intervalMax) {
+      return false;
+    }
+    if (!_colorsEqual(a.colors, b.colors)) return false;
+    if (a.parameters.length != b.parameters.length) return false;
+    for (final e in a.parameters.entries) {
+      if (b.parameters[e.key] != e.value) return false;
+    }
+    return true;
+  }
+
+
   // ---------------------------------------------------------------------------
   // Persistence
   // ---------------------------------------------------------------------------
 
   /// Persists current state to the lamp's NVS by writing CHAR_SETTINGS_BLOB.
-  /// The lamp will fade out + reboot in response; the app catches the
-  /// expected disconnect and schedules a reconnect by invalidating itself
-  /// after a 5-second delay.
+  /// The settings_blob payload includes the full `expressions[]` array, so
+  /// expression edits ride this same path — no separate `expressionOp` flush
+  /// is needed at save time (those writes already updated firmware in-memory
+  /// during live preview). The lamp fades out + reboots in response; the app
+  /// catches the expected disconnect and reconnects after a 5-second delay.
   Future<void> save() async {
     final cur = state.value;
     if (cur == null) return;
@@ -314,46 +395,64 @@ class ControlNotifier extends _$ControlNotifier {
 
     final ble = ref.read(bleClientProvider);
 
-    // Build the full blob from the in-memory ControlState. The firmware
-    // dropped read-support for CHAR_SETTINGS_BLOB once the full config grew
-    // past 512 bytes (firmware comment in ble_control.cpp:745); per-section
-    // characteristics are how we hydrate `cur` at build time, and we have
-    // every field we need to round-trip the blob back.
-    final blob = <String, dynamic>{
-      'lamp': {
+    // Build a PARTIAL blob — only the sections that have changed since
+    // the last load/save. The firmware merges incoming top-level keys
+    // with the existing NVS config, so anything we omit is preserved.
+    // This is essential to keep the encrypted payload under fbp's
+    // 512-byte ATT limit; the full blob with several expressions can
+    // easily hit 600+ bytes.
+    final blob = <String, dynamic>{};
+    if (_isLampDirty(cur.lamp, _original.lamp)) {
+      blob['lamp'] = {
         'brightness': cur.lamp.brightness,
         'name': cur.lamp.name,
         'advancedEnabled': cur.lamp.advancedEnabled,
         // lamp.password is set by the setup-service apply path; never
-        // round-trip it via settingsBlob. Omitted entirely so the firmware
-        // keeps whatever it already has.
-      },
-      'base': {
+        // round-trip it via settingsBlob.
+      };
+    }
+    if (_isBaseDirty(cur.base, _original.base)) {
+      blob['base'] = {
         'px': cur.base.px,
         'ac': cur.base.ac,
         'bpp': cur.base.bpp,
+        'byteOrder': cur.base.byteOrder,
         'colors': cur.base.colors.map((c) => c.toHex()).toList(),
-        'knockout': [
-          for (final e in cur.base.knockout.entries) {'p': e.key, 'b': e.value},
-        ],
-      },
-      'shade': {
+        // knockout omitted — firmware mirrors per-pixel writes into
+        // config.base.knockoutPixels in the CHAR_BASE_KNOCKOUT drain
+        // and the blob drain uses config.asJsonDocument() as the base
+        // for persistence, so the up-to-date knockout map is already
+        // in the persisted JSON. Sending it here would only inflate
+        // the encrypted payload past the 512-byte ATT cap when many
+        // pixels are customized.
+      };
+    }
+    if (_isShadeDirty(cur.shade, _original.shade)) {
+      blob['shade'] = {
         'px': cur.shade.px,
         'bpp': cur.shade.bpp,
+        'byteOrder': cur.shade.byteOrder,
         'colors': cur.shade.colors.map((c) => c.toHex()).toList(),
-      },
-      'homeMode': <String, dynamic>{
+      };
+    }
+    if (_isHomeDirty(cur.home, _original.home)) {
+      blob['homeMode'] = <String, dynamic>{
         'ssid': cur.home.ssid,
         'brightness': cur.home.brightness,
         'enabled': cur.home.enabled,
-        // Presence-only home mode — no password field; the lamp never
-        // associates to the AP.
-      },
-      // (MQTT block omitted — the integration was removed firmware-side.)
-      'expressions': [
-        for (final e in cur.expressions.expressions) e.toJson(),
-      ],
-    };
+        // Presence-only home mode — no password field.
+      };
+    }
+    // expressions[] omitted unconditionally — same rationale as base.knockout
+    // above. CHAR_EXPRESSION_OP writes mirror into config.expressions
+    // firmware-side, so the persisted state is already current. This is
+    // what keeps the blob under the 512-byte ATT cap with 5+ expressions.
+    if (blob.isEmpty) {
+      // Nothing dirty — shouldn't have reached here (UI gates on isDirty)
+      // but be defensive: no-op write would just trigger a reboot for no
+      // reason.
+      return;
+    }
 
     // 3. Write the merged blob. The firmware will fade out + reboot.
     final blobJson = jsonEncode(blob);
@@ -377,7 +476,12 @@ class ControlNotifier extends _$ControlNotifier {
           );
     try {
       await ble.write(
-          _deviceId, BleUuids.controlService, BleUuids.settingsBlob, payload);
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.settingsBlob,
+        payload,
+        allowLongWrite: true,
+      );
     } catch (e) {
       // Expected: the reboot disconnects mid-write. Anything else is a real
       // failure; rethrow so the UI can surface it.
@@ -392,9 +496,17 @@ class ControlNotifier extends _$ControlNotifier {
     //    re-run build() on the same notifier instance and the `late final`
     //    fields above would throw LateInitializationError. Doing the reload
     //    inline keeps the writers + connection subscription intact.
+    //
+    //    Flip lampSaveStatus → true so ConnectingView shows
+    //    "Saving changes…" during the reconnect window instead of the
+    //    generic "Connecting…" message.
+    ref.read(lampSaveStatusProvider(_deviceId).notifier).start();
     state = const AsyncLoading<ControlState>();
     Future<void>.delayed(const Duration(seconds: 5), () async {
-      if (!ref.mounted) return;
+      if (!ref.mounted) {
+        // Best-effort cleanup if the notifier got disposed mid-reconnect.
+        return;
+      }
       try {
         final inv = await ref.read(inventoryNotifierProvider.future);
         final lamp = inv.firstWhere(
@@ -412,11 +524,15 @@ class ControlNotifier extends _$ControlNotifier {
         _original = fresh;
         state = AsyncData(fresh);
         await _updateSeen(
-          shade: fresh.shade.colors.single,
+          shade: fresh.shade.colors.isEmpty
+          ? _blackShade
+          : fresh.shade.colors.first,
           base: fresh.base.colors[fresh.base.ac],
         );
+        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
       } catch (e, st) {
         if (ref.mounted) state = AsyncError(e, st);
+        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
       }
     });
   }
@@ -440,7 +556,12 @@ class ControlNotifier extends _$ControlNotifier {
     if (cur == null) return;
     final colors = [color];
     state = AsyncData(cur.copyWith(
-      shade: ShadeSection(px: cur.shade.px, bpp: cur.shade.bpp, colors: colors),
+      shade: ShadeSection(
+        px: cur.shade.px,
+        bpp: cur.shade.bpp,
+        byteOrder: cur.shade.byteOrder,
+        colors: colors,
+      ),
     ));
     _shadeColorsWriter?.schedule(_encodeColors(colors));
     _queueSeen(shade: color);
@@ -454,6 +575,7 @@ class ControlNotifier extends _$ControlNotifier {
         px: cur.base.px,
         ac: cur.base.ac.clamp(0, colors.isEmpty ? 0 : colors.length - 1),
         bpp: cur.base.bpp,
+        byteOrder: cur.base.byteOrder,
         colors: colors,
         knockout: cur.base.knockout,
       ),
@@ -475,6 +597,7 @@ class ControlNotifier extends _$ControlNotifier {
         px: cur.base.px,
         ac: clamped,
         bpp: cur.base.bpp,
+        byteOrder: cur.base.byteOrder,
         colors: cur.base.colors,
         knockout: cur.base.knockout,
       ),
@@ -499,6 +622,7 @@ class ControlNotifier extends _$ControlNotifier {
         px: cur.base.px,
         ac: cur.base.ac,
         bpp: cur.base.bpp,
+        byteOrder: cur.base.byteOrder,
         colors: cur.base.colors,
         knockout: next,
       ),
@@ -512,8 +636,9 @@ class ControlNotifier extends _$ControlNotifier {
     _knockoutTimers[index] = Timer(const Duration(milliseconds: 30), () {
       final v = _knockoutPending.remove(index);
       if (v == null) return;
-      final ble = ref.read(bleClientProvider);
-      unawaited(_safeWriteKnockout(ble, index, v));
+      // Cached BleClient avoids a `ref.read` from a Timer callback
+      // that could fire after the notifier's onDispose ran.
+      unawaited(_safeWriteKnockout(_ble, index, v));
     });
   }
 
@@ -553,6 +678,7 @@ class ControlNotifier extends _$ControlNotifier {
         px: cur.base.px,
         ac: cur.base.ac,
         bpp: cur.base.bpp,
+        byteOrder: cur.base.byteOrder,
         colors: cur.base.colors,
         knockout: const {},
       ),
@@ -636,15 +762,20 @@ class ControlNotifier extends _$ControlNotifier {
     ));
   }
 
-  Future<void> setBaseBpp(int bpp) async {
+  /// Pick the wire byte order for the base strip. Recognized values:
+  /// `GRBW` (4 bpp), `GRB` (3 bpp), `BGR` (3 bpp). `bpp` is updated to
+  /// match so the wire payload stays internally consistent for any
+  /// future firmware that only reads `bpp`.
+  Future<void> setBaseByteOrder(String order) async {
     final cur = state.value;
     if (cur == null) return;
-    final clamped = (bpp == 3 || bpp == 4) ? bpp : 4;
+    final normalized = _normalizeByteOrder(order);
     state = AsyncData(cur.copyWith(
       base: BaseSection(
         px: cur.base.px,
         ac: cur.base.ac,
-        bpp: clamped,
+        bpp: _bppForByteOrder(normalized),
+        byteOrder: normalized,
         colors: cur.base.colors,
         knockout: cur.base.knockout,
       ),
@@ -660,20 +791,22 @@ class ControlNotifier extends _$ControlNotifier {
         px: clamped,
         ac: cur.base.ac,
         bpp: cur.base.bpp,
+        byteOrder: cur.base.byteOrder,
         colors: cur.base.colors,
         knockout: cur.base.knockout,
       ),
     ));
   }
 
-  Future<void> setShadeBpp(int bpp) async {
+  Future<void> setShadeByteOrder(String order) async {
     final cur = state.value;
     if (cur == null) return;
-    final clamped = (bpp == 3 || bpp == 4) ? bpp : 4;
+    final normalized = _normalizeByteOrder(order);
     state = AsyncData(cur.copyWith(
       shade: ShadeSection(
         px: cur.shade.px,
-        bpp: clamped,
+        bpp: _bppForByteOrder(normalized),
+        byteOrder: normalized,
         colors: cur.shade.colors,
       ),
     ));
@@ -687,18 +820,31 @@ class ControlNotifier extends _$ControlNotifier {
       shade: ShadeSection(
         px: clamped,
         bpp: cur.shade.bpp,
+        byteOrder: cur.shade.byteOrder,
         colors: cur.shade.colors,
       ),
     ));
   }
 
+  static String _normalizeByteOrder(String order) {
+    final up = order.toUpperCase();
+    // Keep the strict allow-list small. Adafruit_NeoPixel supports more
+    // permutations; expand here once a strip actually needs one.
+    if (up == 'GRBW' || up == 'GRB' || up == 'BGR') return up;
+    return 'GRBW';
+  }
+
+  static int _bppForByteOrder(String order) =>
+      order == 'GRBW' || order == 'BGRW' || order == 'RGBW' ? 4 : 3;
+
   // ---------------------------------------------------------------------------
   // Expressions
   // ---------------------------------------------------------------------------
 
-  /// Add or update an expression. The key is the (type, target) tuple, so
-  /// upserting twice with the same type+target replaces the entry. Writes the
-  /// op to CHAR_EXPRESSION_OP which persists to NVS firmware-side.
+  /// Add or update an expression. Live-previews via CHAR_EXPRESSION_OP — the
+  /// firmware updates its in-memory expressionManager (not NVS); persistence
+  /// to NVS happens on the next global Save via the settings_blob payload
+  /// which carries the full expressions array.
   Future<void> upsertExpression(ExpressionConfig entry) async {
     final cur = state.value;
     if (cur == null) return;
@@ -721,7 +867,8 @@ class ControlNotifier extends _$ControlNotifier {
     await _writeExpressionOp({'op': 'upsert', 'entry': entry.toJson()});
   }
 
-  /// Remove the expression keyed by (type, target). No-op if absent.
+  /// Remove the expression keyed by (type, target). Live-previews via
+  /// CHAR_EXPRESSION_OP; NVS persistence happens on the next global Save.
   Future<void> removeExpression({
     required String type,
     required int target,
@@ -739,6 +886,41 @@ class ControlNotifier extends _$ControlNotifier {
       'type': type,
       'target': target,
     });
+  }
+
+  /// Live-previews `entry` in the firmware's in-memory expressionManager
+  /// WITHOUT touching app state. Paired with [revertExpressionPreview] for
+  /// the editor's Test action: write draft → trigger → revert on close.
+  /// Because CHAR_EXPRESSION_OP doesn't persist to NVS, the revert is fully
+  /// in-memory and leaves the saved state untouched.
+  Future<void> previewExpression(ExpressionConfig entry) async {
+    await _writeExpressionOp({'op': 'upsert', 'entry': entry.toJson()});
+  }
+
+  /// Restore the firmware's in-memory entry at (type, target) back to the
+  /// last-loaded snapshot (`_original`). If the key didn't exist in the
+  /// snapshot we issue a `remove` instead. Used by the editor to undo a
+  /// transient Test-time preview.
+  Future<void> revertExpressionPreview({
+    required String type,
+    required int target,
+  }) async {
+    ExpressionConfig? prev;
+    for (final e in _original.expressions.expressions) {
+      if (e.type == type && e.target == target) {
+        prev = e;
+        break;
+      }
+    }
+    if (prev != null) {
+      await _writeExpressionOp({'op': 'upsert', 'entry': prev.toJson()});
+    } else {
+      await _writeExpressionOp({
+        'op': 'remove',
+        'type': type,
+        'target': target,
+      });
+    }
   }
 
   /// Live-preview an expression configuration without persisting it.

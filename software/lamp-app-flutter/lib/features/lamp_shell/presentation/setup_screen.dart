@@ -98,20 +98,9 @@ class _SetupBody extends ConsumerWidget {
             icon: Icons.memory,
             title: 'Advanced LED setup',
             subtitle:
-                'Base ${state.base.px}×${state.base.bpp == 4 ? "RGBW" : "RGB"} · '
-                'Shade ${state.shade.px}×${state.shade.bpp == 4 ? "RGBW" : "RGB"}',
+                'Base ${state.base.px}×${state.base.byteOrder} · '
+                'Shade ${state.shade.px}×${state.shade.byteOrder}',
             onTap: () => context.push(AppRoutes.advancedLeds(lampId)),
-          ),
-        if (state.lamp.advancedEnabled) const SettingsGroupHeading('Advanced'),
-        if (state.lamp.advancedEnabled)
-          SettingsRow(
-            icon: Icons.science_outlined,
-            title: 'Advanced enabled',
-            subtitle: 'Hide to lock advanced settings until next 5-tap unlock',
-            trailing: Switch(
-              value: true,
-              onChanged: (_) => n.setLampAdvancedEnabled(false),
-            ),
           ),
       ],
     );
@@ -119,38 +108,63 @@ class _SetupBody extends ConsumerWidget {
 }
 
 /// Lightweight rename modal — keeps the row tappable without taking the
-/// user to a full sub-screen for a one-field edit.
+/// user to a full sub-screen for a one-field edit. Hosted by a
+/// `StatefulWidget` so the `TextEditingController` has a lifecycle to
+/// dispose on (a plain `showDialog` closure leaks the controller).
 Future<void> _showRenameDialog(
   BuildContext context,
   String initial,
   ValueChanged<String> onSave,
-) async {
-  final ctrl = TextEditingController(text: initial);
-  await showDialog<void>(
-    context: context,
-    builder: (ctx) => AlertDialog(
+) =>
+    showDialog<void>(
+      context: context,
+      builder: (_) => _RenameDialog(initial: initial, onSave: onSave),
+    );
+
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initial, required this.onSave});
+  final String initial;
+  final ValueChanged<String> onSave;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _ctrl =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
       backgroundColor: BrandColors.midnightBlack,
       title: const Text('Rename lamp',
           style: TextStyle(color: BrandColors.lampWhite)),
       content: TextField(
-        controller: ctrl,
+        controller: _ctrl,
         autofocus: true,
         decoration: const InputDecoration(labelText: 'Name'),
         style: const TextStyle(color: BrandColors.lampWhite),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(ctx).pop(),
+          onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
         FilledButton(
           onPressed: () {
-            onSave(ctrl.text.trim());
-            Navigator.of(ctx).pop();
+            widget.onSave(_ctrl.text.trim());
+            Navigator.of(context).pop();
           },
           child: const Text('Save'),
         ),
       ],
-    ),
-  );
+    );
+  }
 }

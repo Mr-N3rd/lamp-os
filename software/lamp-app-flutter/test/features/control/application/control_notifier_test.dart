@@ -181,7 +181,12 @@ void main() {
         charShortName: 'settingsBlob');
     final parsed = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
     expect((parsed['lamp'] as Map)['brightness'], 80);
-    expect(parsed['expressions'], isNotNull); // unchanged field preserved
+    // Partial blob: only the dirty section is sent; unchanged sections
+    // are omitted and preserved firmware-side via the NVS merge step.
+    expect(parsed.containsKey('expressions'), isFalse);
+    expect(parsed.containsKey('base'), isFalse);
+    expect(parsed.containsKey('shade'), isFalse);
+    expect(parsed.containsKey('homeMode'), isFalse);
   });
 
   test('setBrightness optimistically updates and writes after debounce',
@@ -329,8 +334,10 @@ void main() {
 
     final inv = await c.read(inventoryNotifierProvider.future);
     final lamp = inv.firstWhere((l) => l.id == _devId);
-    expect(lamp.lastShadeColor, [0x00, 0x00, 0x00]); // seeded shade
-    expect(lamp.lastBaseColor, [0x30, 0x07, 0x83]); // seeded base[0]
+    // RGBW: both seeded colors carry W=0xFF in the fixture
+    // (`#300783FF`, `#000000FF` — see test/_support/seed.dart).
+    expect(lamp.lastShadeColor, [0x00, 0x00, 0x00, 0xFF]);
+    expect(lamp.lastBaseColor, [0x30, 0x07, 0x83, 0xFF]);
   });
 
   test('setShadeColor refreshes the inventory color cache', () async {
@@ -364,7 +371,7 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 600));
 
     final inv = await c.read(inventoryNotifierProvider.future);
-    expect(inv.first.lastShadeColor, [0xFF, 0x88, 0x00]);
+    expect(inv.first.lastShadeColor, [0xFF, 0x88, 0x00, 0x00]);
   });
 
   test('setBaseColors refreshes the inventory color cache', () async {
@@ -398,7 +405,7 @@ void main() {
     final inv = await c.read(inventoryNotifierProvider.future);
     final lamp = inv.firstWhere((l) => l.id == _devId);
     // ac was 0 (seeded), so we expect colors[0]
-    expect(lamp.lastBaseColor, [0x11, 0x22, 0x33]);
+    expect(lamp.lastBaseColor, [0x11, 0x22, 0x33, 0x00]);
   });
 
   test('setKnockoutPixel adds the entry to local state', () async {
@@ -481,12 +488,11 @@ void main() {
     expect(written, [3, 50]);
   });
 
-  test('save() encodes knockout map into the settings blob', () async {
+  test('save() does NOT ship knockout in the blob (firmware overlays it)',
+      () async {
     final ble = InMemoryBleClient();
     await _seed(ble);
     await ble.connect(_devId);
-    // Seed the blob shape — note absence of knockout in the blob; we want
-    // save() to inject it from local state.
     await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
         Uint8List.fromList(utf8.encode(
           '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
@@ -514,7 +520,6 @@ void main() {
 
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.settingsBlob);
-    // settingsBlob is now encrypted when controlPassword is set.
     expect(written[0], LampCrypto.magicCiphertext);
     final plain = await LampCrypto.decryptOpForTesting(
         written,
@@ -522,8 +527,13 @@ void main() {
         saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
         charShortName: 'settingsBlob');
     final parsed = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
-    final knockout = (parsed['base'] as Map)['knockout'] as List;
-    expect(knockout, [{'p': 3, 'b': 50}]);
+    // Knockout is dirty so the `base` section is in the partial blob, but
+    // the `knockout` field is NOT — the firmware overlays it from in-memory
+    // state (CHAR_BASE_KNOCKOUT writes already updated config.base.knockoutPixels).
+    // This keeps the encrypted payload small enough to fit the 512-byte
+    // ATT cap even with all 50 pixels customized.
+    expect(parsed.containsKey('base'), isTrue);
+    expect((parsed['base'] as Map).containsKey('knockout'), isFalse);
   });
 
   test('build() loads home + mqtt sections into state', () async {

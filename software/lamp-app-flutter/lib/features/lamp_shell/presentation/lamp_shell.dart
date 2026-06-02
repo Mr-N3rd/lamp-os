@@ -78,6 +78,12 @@ class _LampShellState extends ConsumerState<LampShell> {
 
     return Scaffold(
       appBar: AppBar(
+        // The LampChip in `title` already opens the switcher modal on tap
+        // — that's the on-screen nav. Skip GoRouter's auto-injected back
+        // arrow (now present because LampShell is pushed on top of My
+        // Lamps) so the AppBar doesn't carry two redundant nav controls.
+        // Android system back-gesture still pops to My Lamps.
+        automaticallyImplyLeading: false,
         title: LampChip(
           name: name,
           status: status,
@@ -87,12 +93,13 @@ class _LampShellState extends ConsumerState<LampShell> {
           ),
         ),
         actions: [
-          // Save is visible on Control and Setup. Setup edits (name, home
-          // WiFi, MQTT, advanced) ride the same isDirty + settings-blob
-          // save flow. Expressions has its own per-entry persistence via
-          // CHAR_EXPRESSION_OP, and Info is read-only — neither needs a
-          // global Save.
-          if (_tab == LampTab.control || _tab == LampTab.setup)
+          // Save is visible on every editing tab (Colors, Setup,
+          // Expressions). All three ride the same isDirty + settings-blob
+          // save flow — Expressions edits live-preview via
+          // CHAR_EXPRESSION_OP for instant feedback but only persist to
+          // NVS when the global Save Changes pill is tapped. Info is
+          // read-only, so the action is hidden there.
+          if (_tab != LampTab.info)
             _SaveAction(lampId: widget.lampId),
         ],
       ),
@@ -131,7 +138,7 @@ class _LampShellState extends ConsumerState<LampShell> {
           onDestinationSelected: (i) =>
               setState(() => _tab = LampTab.values[i]),
           destinations: [
-            _gradientDestination(Icons.tune, 'Control', _tab == LampTab.control),
+            _gradientDestination(Icons.tune, 'Colors', _tab == LampTab.control),
             _gradientDestination(
                 Icons.auto_awesome, 'Expressions', _tab == LampTab.expressions),
             _gradientDestination(

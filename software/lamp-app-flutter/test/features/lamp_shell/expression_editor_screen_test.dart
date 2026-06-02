@@ -63,16 +63,14 @@ void main() {
     expect(find.text('Breathing'), findsOneWidget);
     expect(find.text('Target: Both'), findsOneWidget);
 
-    // Save button may be below the fold — scroll to reveal it. The
-    // editor no longer has a Test button (testing happens from the
-    // expressions list after Save).
+    // Add button (new expression — existing entries say "Save") may be
+    // below the fold; scroll to reveal it.
     await tester.dragUntilVisible(
-      find.text('Save'),
+      find.text('Add'),
       find.byType(ListView),
       const Offset(0, -200),
     );
-    expect(find.text('Save'), findsOneWidget);
-    expect(find.text('Test'), findsNothing);
+    expect(find.text('Add'), findsOneWidget);
   });
 
   testWidgets('Save adds the entry to ControlState.expressions',
@@ -103,11 +101,11 @@ void main() {
     ));
     await _pumpToData(tester, 'Breathing');
     await tester.dragUntilVisible(
-      find.text('Save'),
+      find.text('Add'),
       find.byType(ListView),
       const Offset(0, -200),
     );
-    await tester.tap(find.text('Save'));
+    await tester.tap(find.text('Add'));
     // Drain microtasks for the async upsert.
     for (var i = 0; i < 30; i++) {
       await tester.pump(const Duration(milliseconds: 16));
@@ -135,11 +133,13 @@ void main() {
     await tester.pumpWidget(UncontrolledProviderScope(
       container: c,
       child: const MaterialApp(
+        // glitchy is a trigger-based expression that surfaces the
+        // FrequencySpread widget. Breathing is continuous and hides it.
         home: ExpressionEditorScreen(
-            lampId: _devId, typeKey: 'breathing', targetKey: 3),
+            lampId: _devId, typeKey: 'glitchy', targetKey: 3),
       ),
     ));
-    await _pumpToData(tester, 'Breathing');
+    await _pumpToData(tester, 'Glitchy');
     await tester.dragUntilVisible(
       find.text('less'), find.byType(ListView), const Offset(0, -200));
     expect(find.text('less'), findsOneWidget);
@@ -155,11 +155,12 @@ void main() {
     await tester.pumpWidget(UncontrolledProviderScope(
       container: c,
       child: const MaterialApp(
+        // FrequencySpread is only rendered for trigger-based expressions.
         home: ExpressionEditorScreen(
-            lampId: _devId, typeKey: 'breathing', targetKey: 3),
+            lampId: _devId, typeKey: 'glitchy', targetKey: 3),
       ),
     ));
-    await _pumpToData(tester, 'Breathing');
+    await _pumpToData(tester, 'Glitchy');
     await tester.dragUntilVisible(
       find.text('rare'), find.byType(ListView), const Offset(0, -200));
     expect(find.text('rare'), findsOneWidget);
@@ -173,13 +174,14 @@ void main() {
     await tester.pumpWidget(UncontrolledProviderScope(
       container: c,
       child: const MaterialApp(
+        // FrequencySpread is only rendered for trigger-based expressions.
         home: ExpressionEditorScreen(
-            lampId: _devId, typeKey: 'breathing', targetKey: 3),
+            lampId: _devId, typeKey: 'glitchy', targetKey: 3),
       ),
     ));
-    await _pumpToData(tester, 'Breathing');
+    await _pumpToData(tester, 'Glitchy');
     await tester.dragUntilVisible(
-      find.text('Variation'),
+      find.text('Predictability'),
       find.byType(ListView),
       const Offset(0, -200),
     );

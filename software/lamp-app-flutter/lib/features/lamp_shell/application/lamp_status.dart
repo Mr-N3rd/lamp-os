@@ -25,7 +25,8 @@ StatusKind statusFor({
     }
   }
   if (hit == null) return StatusKind.offline;
-  // v2-firmware lamps advertise their mesh state — surface that even when
-  // we don't hold a live BLE link to this lamp.
-  return hit.onMesh ? StatusKind.mesh : StatusKind.bluetooth;
+  // `isMesh` = "firmware speaks the app's mesh protocol". Lamps with
+  // the current build show as `mesh` whenever in range; legacy v1
+  // firmware (BT-only) shows as `bluetooth`.
+  return hit.isMesh ? StatusKind.mesh : StatusKind.bluetooth;
 }

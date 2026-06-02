@@ -78,7 +78,7 @@ void main() {
         baseRgb: 0,
         shadeRgb: 0,
         lastSeenEpochMs: 0,
-        onMesh: false,
+        isMesh: false,
       ),
     ];
     await tester.pumpWidget(UncontrolledProviderScope(
@@ -105,7 +105,7 @@ void main() {
         baseRgb: 0,
         shadeRgb: 0,
         lastSeenEpochMs: 0,
-        onMesh: true,
+        isMesh: true,
       ),
     ];
     await tester.pumpWidget(UncontrolledProviderScope(

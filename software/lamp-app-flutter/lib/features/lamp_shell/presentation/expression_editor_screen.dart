@@ -44,6 +44,15 @@ class _ExpressionEditorScreenState
   /// touching `ref` after the widget is deactivated (which Riverpod blocks).
   late final ControlNotifier _controlNotifier;
 
+  /// Tracks whether Test was fired during this editor session. If so AND
+  /// the user didn't commit via Save, dispose() must roll back the firmware's
+  /// in-memory expression entry — the Test write seeded the draft into the
+  /// firmware's expressionManager (live-preview channel, NOT NVS), and
+  /// leaving without saving means that seeded state is now out-of-sync with
+  /// app state and the last-saved NVS.
+  bool _testFired = false;
+  bool _savedThisSession = false;
+
   bool _existsInState(ControlState? state) =>
       state != null &&
       state.expressions.expressions
@@ -64,6 +73,17 @@ class _ExpressionEditorScreenState
     // `disabled=true`, so subsequent shade/base color writes are received
     // by the lamp but never drawn.
     _controlNotifier.completeExpressionTest();
+    // If Test was fired but the user didn't Save, roll the firmware's
+    // in-memory entry back to whatever was last globally-saved. Otherwise
+    // the lamp would keep auto-triggering the uncommitted draft until the
+    // next reboot. (No-op if Test was never fired; idempotent if Save was
+    // hit, since state already matches what we'd restore to.)
+    if (_testFired && !_savedThisSession) {
+      _controlNotifier.revertExpressionPreview(
+        type: widget.typeKey,
+        target: widget.targetKey,
+      );
+    }
     super.dispose();
   }
 
@@ -110,27 +130,21 @@ class _ExpressionEditorScreenState
       );
 
   /// Open the color picker with live preview wired to the lamp. While
-  /// the user drags R/G/B sliders, the picked color streams through
-  /// `setShadeColor` / `setBaseColors` (chosen by the expression's
-  /// target) so the lamp tracks visibly. On close — confirm OR cancel
-  /// — restore the lamp's main shade/base palette so the picker session
-  /// doesn't permanently contaminate it. Returns the user's picked
-  /// color, or null on cancel.
+  /// the user drags R/G/B sliders, the picked color streams to
+  /// whichever strips the expression's target paints (shade-only →
+  /// shade, base-only → base, both → both) so the lamp preview matches
+  /// what the saved expression will actually do. On close — confirm OR
+  /// cancel — restore the lamp's main shade/base palette so the picker
+  /// session doesn't permanently contaminate it. Returns the user's
+  /// picked color, or null on cancel.
   Future<LampColor?> _pickColorLive(
     ControlState state,
     ControlNotifier notifier,
     LampColor initial,
   ) async {
-    // Pick exactly ONE strip to drive the live preview. Writing to both
-    // shade AND base on every slider tick doubles BLE traffic (two
-    // WriteCoalescers, each ~33 writes/sec) and saturates the link past
-    // its ~20 writes/sec capacity at the typical ~49 ms connection
-    // interval — the user sees a laggy slider. One coalescer is all the
-    // BLE link can sustain smoothly. Route by target so the lamp shows
-    // the color on the strip the expression actually paints to (base-only
-    // expressions preview on base; everything else on shade).
     final t = widget.targetKey;
-    final previewBase = (t == 2);
+    final previewShade = (t == 1 || t == 3);
+    final previewBase = (t == 2 || t == 3);
     final originalShade = state.shade.colors;
     final originalBase = state.base.colors;
 
@@ -141,11 +155,8 @@ class _ExpressionEditorScreenState
     notifier.completeExpressionTest();
 
     void writeLive(LampColor c) {
-      if (previewBase) {
-        notifier.setBaseColors([c]);
-      } else {
-        notifier.setShadeColor(c);
-      }
+      if (previewShade) notifier.setShadeColor(c);
+      if (previewBase) notifier.setBaseColors([c]);
     }
 
     final picked = await showColorPickerSheet(
@@ -154,13 +165,14 @@ class _ExpressionEditorScreenState
       onLive: writeLive,
     );
 
-    // Restore whichever strip we drove regardless of confirm/cancel.
+    // Restore whichever strips we drove regardless of confirm/cancel.
     // The picker's writes were for preview only; the expression's
     // palette is what should actually change (handled by the caller).
+    if (previewShade && originalShade.isNotEmpty) {
+      notifier.setShadeColor(originalShade.first);
+    }
     if (previewBase) {
       notifier.setBaseColors(originalBase);
-    } else if (originalShade.isNotEmpty) {
-      notifier.setShadeColor(originalShade.first);
     }
 
     return picked;
@@ -189,10 +201,39 @@ class _ExpressionEditorScreenState
         title: Text(_existsInState(async.value)
             ? (meta?.name ?? widget.typeKey)
             : 'New ${meta?.name ?? widget.typeKey}'),
-        // No Test action here — testExpression activates whatever is
-        // *saved* firmware-side, which would be misleading on this
-        // editing screen where the user expects to preview their draft.
-        // Workflow: edit → Save → preview from the expressions list.
+        actions: [
+          // Test: live-preview the editor's in-flight draft. We can't pass
+          // colors/parameters in the test_expression envelope (the firmware
+          // only takes type+target and triggers whatever is in its in-memory
+          // expressionManager), so seed the draft via expressionOp first.
+          // dispose() rolls it back if the user leaves without Saving.
+          Consumer(
+            builder: (context, ref, _) {
+              final draft = ref.watch(expressionDraftProvider(
+                  widget.lampId, widget.typeKey, widget.targetKey));
+              return IconButton(
+                icon: const Icon(Icons.play_arrow_rounded),
+                tooltip: 'Test',
+                onPressed: () async {
+                  final notifier = ref
+                      .read(controlNotifierProvider(widget.lampId).notifier);
+                  final entry = ExpressionConfig(
+                    type: draft.type,
+                    enabled: draft.enabled,
+                    colors: draft.colors,
+                    intervalMin: draft.intervalMin,
+                    intervalMax: draft.intervalMax,
+                    target: draft.target,
+                    parameters: draft.parameters,
+                  );
+                  await notifier.previewExpression(entry);
+                  _testFired = true;
+                  await notifier.testExpression(entry);
+                },
+              );
+            },
+          ),
+        ],
       ),
       body: async.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
@@ -213,10 +254,17 @@ class _ExpressionEditorScreenState
               widget.lampId, widget.typeKey, widget.targetKey));
           final isNew = !_existsInState(state);
 
-          return ListView(
-            padding: const EdgeInsets.all(16),
+          // Two-row Column: scrolling form body up top, action row pinned
+          // to the bottom inside a SafeArea so it stays above the system
+          // gesture bar / nav bar on Android. Matches the layout pattern
+          // used by knockout_screen and advanced_leds_screen.
+          return Column(
             children: [
-              _Header(meta: meta, target: widget.targetKey),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    _Header(meta: meta, target: widget.targetKey),
               const SizedBox(height: 20),
 
               // Colors
@@ -262,14 +310,19 @@ class _ExpressionEditorScreenState
 
               // Trigger cadence — two 0..1 normalized sliders. The widget owns its UI
               // state; each drag emits a fresh (intervalMin, intervalMax) pair via
-              // ExpressionIntervalMath.
-              _FrequencySpread(
-                intervalMin: draft.intervalMin,
-                intervalMax: draft.intervalMax,
-                onChanged: (lo, hi) =>
-                    _updateDraft((d) => _withIntervals(d, lo, hi)),
-              ),
-              const SizedBox(height: 16),
+              // ExpressionIntervalMath. Hidden for breathing because it's a
+              // continuous (always-on) expression — its `intervalMin`/`Max` are
+              // ignored by the firmware; only `breathSpeed` (in the params panel
+              // below) drives its timing.
+              if (widget.typeKey != 'breathing') ...[
+                _FrequencySpread(
+                  intervalMin: draft.intervalMin,
+                  intervalMax: draft.intervalMax,
+                  onChanged: (lo, hi) =>
+                      _updateDraft((d) => _withIntervals(d, lo, hi)),
+                ),
+                const SizedBox(height: 16),
+              ],
 
               // Per-type parameters (replaces the old JSON text field).
               ExpressionParamsPanel(
@@ -277,59 +330,117 @@ class _ExpressionEditorScreenState
                 parameters: draft.parameters,
                 onChanged: (p) => _updateDraft((d) => _withParameters(d, p)),
               ),
-              const SizedBox(height: 24),
-
-              // Action row — Delete on the left, Save on the right.
-              // Cancel/back lives on the AppBar's leading arrow. Test is on
-              // the AppBar actions area. Pattern for all editable panes.
-              Row(
-                children: [
-                  if (!isNew)
-                    TextButton.icon(
-                      icon: const Icon(Icons.delete, size: 18),
-                      label: const Text('Delete'),
-                      style: TextButton.styleFrom(
-                          foregroundColor: Colors.redAccent),
-                      onPressed: () async {
-                        await notifier.removeExpression(
-                          type: widget.typeKey,
-                          target: widget.targetKey,
-                        );
-                        ref
-                            .read(expressionDraftProvider(widget.lampId,
-                                    widget.typeKey, widget.targetKey)
-                                .notifier)
-                            .reset();
-                        if (context.mounted) {
-                          GoRouter.maybeOf(context)?.pop();
-                        }
-                      },
-                    ),
-                  const Spacer(),
-                  FilledButton.icon(
-                    icon: const Icon(Icons.save, size: 18),
-                    label: const Text('Save'),
-                    onPressed: () async {
-                      await notifier.upsertExpression(ExpressionConfig(
-                        type: draft.type,
-                        enabled: draft.enabled,
-                        colors: draft.colors,
-                        intervalMin: draft.intervalMin,
-                        intervalMax: draft.intervalMax,
-                        target: draft.target,
-                        parameters: draft.parameters,
-                      ));
-                      ref
-                          .read(expressionDraftProvider(widget.lampId,
-                                  widget.typeKey, widget.targetKey)
-                              .notifier)
-                          .reset();
-                      if (context.mounted) {
-                        GoRouter.maybeOf(context)?.pop();
-                      }
-                    },
+              if (meta != null) ...[
+                const SizedBox(height: 20),
+                Text(
+                  meta.description,
+                  style: const TextStyle(
+                    color: BrandColors.fogGrey,
+                    fontSize: 12,
+                    fontStyle: FontStyle.italic,
+                    height: 1.35,
                   ),
-                ],
+                ),
+              ],
+                  ],
+                ),
+              ),
+              // Action row — Cancel + Delete on the left, Add/Update on
+              // the right. Test sits on the AppBar's actions area; the
+              // back-arrow on the AppBar leading area pops without
+              // discarding the draft (so partial work survives a back
+              // tap and re-open). Cancel is the explicit "throw away"
+              // counterpart.
+              //
+              // This was previously the last child of the ListView and
+              // scrolled with the form, leaving the buttons midway down
+              // the screen on short forms. Pulling it out as a sibling
+              // under SafeArea pins it to the bottom in line with the
+              // rest of the editors. Bespoke shape (optional leading
+              // Delete + dynamic primary label) so it doesn't share
+              // EditorActionBar with the four uniform editors.
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      TextButton.icon(
+                        icon: const Icon(Icons.close, size: 18),
+                        label: const Text('Cancel'),
+                        onPressed: () {
+                          // Discard the in-flight draft so re-opening
+                          // shows the saved state, not the abandoned
+                          // edits. dispose() handles firmware preview
+                          // rollback via the _testFired flag.
+                          ref
+                              .read(expressionDraftProvider(widget.lampId,
+                                      widget.typeKey, widget.targetKey)
+                                  .notifier)
+                              .reset();
+                          GoRouter.maybeOf(context)?.pop();
+                        },
+                      ),
+                      if (!isNew)
+                        TextButton.icon(
+                          icon: const Icon(Icons.delete, size: 18),
+                          label: const Text('Delete'),
+                          style: TextButton.styleFrom(
+                              foregroundColor: Colors.redAccent),
+                          onPressed: () async {
+                            _savedThisSession = true;
+                            await notifier.removeExpression(
+                              type: widget.typeKey,
+                              target: widget.targetKey,
+                            );
+                            ref
+                                .read(expressionDraftProvider(widget.lampId,
+                                        widget.typeKey, widget.targetKey)
+                                    .notifier)
+                                .reset();
+                            if (context.mounted) {
+                              GoRouter.maybeOf(context)?.pop();
+                            }
+                          },
+                        ),
+                      const Spacer(),
+                      FilledButton.icon(
+                        icon:
+                            Icon(isNew ? Icons.add : Icons.check, size: 18),
+                        label: Text(isNew ? 'Add' : 'Update'),
+                        onPressed: () async {
+                          _savedThisSession = true;
+                          await notifier.upsertExpression(ExpressionConfig(
+                            type: draft.type,
+                            enabled: draft.enabled,
+                            colors: draft.colors,
+                            intervalMin: draft.intervalMin,
+                            intervalMax: draft.intervalMax,
+                            target: draft.target,
+                            parameters: draft.parameters,
+                          ));
+                          ref
+                              .read(expressionDraftProvider(widget.lampId,
+                                      widget.typeKey, widget.targetKey)
+                                  .notifier)
+                              .reset();
+                          if (!context.mounted) return;
+                          // For brand-new entries the stack is
+                          // [list, picker, editor]; pop straight back
+                          // to the list so the user sees their newly-
+                          // added entry rather than the picker again.
+                          final router = GoRouter.maybeOf(context);
+                          if (isNew && router != null) {
+                            router.pop();
+                            if (context.mounted) router.pop();
+                          } else {
+                            router?.pop();
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ],
           );
@@ -500,7 +611,7 @@ class _FrequencySpreadState extends State<_FrequencySpread> {
         ),
         const Padding(
           padding: EdgeInsets.only(top: 12, bottom: 2),
-          child: Text('Variation',
+          child: Text('Predictability',
               style: TextStyle(color: BrandColors.lampWhite, fontSize: 14)),
         ),
         Row(
@@ -530,6 +641,10 @@ class _FrequencySpreadState extends State<_FrequencySpread> {
             _spread < 0.02
                 ? 'Roughly every ${_fmt(r.min.toDouble())}.'
                 : 'Between ${_fmt(r.min.toDouble())} and ${_fmt(r.max.toDouble())}.',
+            // Right-aligned to match the value chips on every other
+            // slider in the editor (Glitch duration, Hold time, Breath
+            // cycle, etc.) — consistent eye line down the right edge.
+            textAlign: TextAlign.end,
             style: const TextStyle(
               color: BrandColors.fogGrey,
               fontSize: 11,

@@ -1,11 +1,9 @@
 abstract class BleUuids {
-  static const setupService = '5f64f4c1-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const setupSsid    = '5f64f4c2-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const setupPwd     = '5f64f4c3-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const setupName    = '5f64f4c4-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const setupApply   = '5f64f4c5-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const setupInfo    = '5f64f4c6-d6d9-4a44-9b3f-3a8d6f7e6b40';
-
+  // The setup service (5f64f4c1…) was deleted as part of folding initial
+  // provisioning into the control service. The control service's `isAuthed`
+  // returns true while `lamp.password` is empty, so a factory-default lamp
+  // accepts the first claim write unauthenticated. Once a password is set,
+  // every write requires GCM auth.
   static const controlService = '5f64f4d0-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const auth           = '5f64f4d1-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const brightness     = '5f64f4d2-d6d9-4a44-9b3f-3a8d6f7e6b40';

@@ -102,29 +102,32 @@ class _Body extends StatelessWidget {
             style: TextStyle(color: BrandColors.lampWhite, fontSize: 15),
           ),
         ),
-        Center(
-          child: SegmentedButton<int>(
-            showSelectedIcon: false,
-            segments: <ButtonSegment<int>>[
-              ButtonSegment(
-                value: 1,
-                label: const Text('Shade'),
-                enabled: !_targetFull(1),
-              ),
-              ButtonSegment(
-                value: 2,
-                label: const Text('Base'),
-                enabled: !_targetFull(2),
-              ),
-              ButtonSegment(
-                value: 3,
-                label: const Text('Both'),
-                enabled: !_targetFull(3),
-              ),
-            ],
-            selected: {target},
-            onSelectionChanged: (s) => onTargetChanged(s.first),
-          ),
+        Row(
+          children: [
+            _TargetButton(
+              label: 'Shade',
+              icon: Icons.wb_incandescent_outlined,
+              selected: target == 1,
+              enabled: !_targetFull(1),
+              onTap: () => onTargetChanged(1),
+            ),
+            const SizedBox(width: 8),
+            _TargetButton(
+              label: 'Base',
+              icon: Icons.adjust,
+              selected: target == 2,
+              enabled: !_targetFull(2),
+              onTap: () => onTargetChanged(2),
+            ),
+            const SizedBox(width: 8),
+            _TargetButton(
+              label: 'Both',
+              icon: Icons.all_inclusive,
+              selected: target == 3,
+              enabled: !_targetFull(3),
+              onTap: () => onTargetChanged(3),
+            ),
+          ],
         ),
         const SizedBox(height: 24),
         const Padding(
@@ -248,6 +251,74 @@ class _ExpressionCard extends StatelessWidget {
                         color: BrandColors.slateGrey),
                 ],
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Big tappable target chooser. Bigger + iconned than a SegmentedButton
+/// so the active target reads at a glance — important here since the
+/// rest of the screen is a long list of expression cards and the user
+/// needs to know "where am I about to drop this expression".
+class _TargetButton extends StatelessWidget {
+  const _TargetButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = selected ? BrandColors.glowPink : Colors.transparent;
+    final border = selected
+        ? BrandColors.glowPink
+        : BrandColors.slateGrey.withValues(alpha: 0.5);
+    final fg = !enabled
+        ? BrandColors.slateGrey.withValues(alpha: 0.5)
+        : (selected ? BrandColors.midnightBlack : BrandColors.lampWhite);
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            height: 72,
+            decoration: BoxDecoration(
+              color: fill,
+              border: Border.all(
+                color: border,
+                width: selected ? 2 : 1,
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, color: fg, size: 24),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 14,
+                    fontWeight:
+                        selected ? FontWeight.w700 : FontWeight.w500,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
             ),
           ),
         ),

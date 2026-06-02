@@ -4,9 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../../core/routing/routes.dart';
 import '../../../../core/theme/brand_colors.dart';
 import '../../../control/application/control_notifier.dart';
+import '../../../nearby/application/lamp_route_resolver.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../application/add_lamp_notifier.dart';
 
@@ -20,16 +20,17 @@ class AddLampDoneStep extends ConsumerWidget {
     // so by the time they tap "Open your lamp" the BLE connect + auth + section
     // reads are already in flight (and usually done).
     ref.watch(controlNotifierProvider(state.deviceId));
-    // Lamps running v2 firmware advertise their mesh state. If the
-    // newly-adopted lamp is already on the mesh, skip the Wi-Fi setup
-    // instructions — they're only useful for off-mesh lamps. Watching via
-    // `select` so this only rebuilds when *this* lamp's `onMesh` actually
-    // changes, not on every nearby-lamps tick.
-    final onMesh = ref.watch(nearbyLampsNotifierProvider.select((list) =>
-        list
+    // Watch the full nearby list (not just an isMesh boolean) so the
+    // route picker below can distinguish "lamp not in range" from
+    // "lamp in range with isMesh=false" — those route differently
+    // (control + ConnectingView vs. dedicated BT-only pane).
+    // This widget is only shown for a few seconds at the end of
+    // onboarding, so rebuilding on every nearby tick is fine.
+    final nearby = ref.watch(nearbyLampsNotifierProvider);
+    final isMesh = nearby
             .firstWhereOrNull((l) => l.id == state.deviceId)
-            ?.onMesh ??
-        false));
+            ?.isMesh ??
+        false;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: SizedBox(
@@ -54,21 +55,24 @@ class AddLampDoneStep extends ConsumerWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              onMesh
+              isMesh
                   ? 'Your lamp is on the mesh.'
                   : 'Your lamp is connected over Bluetooth.',
               style: const TextStyle(color: BrandColors.fogGrey),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
-            // Wi-Fi instructions only when the lamp isn't already on the mesh —
-            // a mesh-enabled lamp doesn't need the user to chase the AP.
-            if (!onMesh) const _WifiSetupCard(),
-            if (!onMesh) const SizedBox(height: 24),
+            // Wi-Fi instructions only for legacy lamps that aren't on
+            // the mesh — mesh-capable lamps don't need the user to
+            // chase the AP.
+            if (!isMesh) const _WifiSetupCard(),
+            if (!isMesh) const SizedBox(height: 24),
             FilledButton(
               onPressed: () {
                 ref.read(addLampNotifierProvider.notifier).reset();
-                context.go(AppRoutes.control(state.deviceId));
+                // routeForLamp keeps BT-only lamps off the
+                // ConnectingView and on their dedicated pane.
+                context.go(routeForLamp(state.deviceId, nearby));
               },
               child: const Text('Open your lamp'),
             ),

@@ -120,6 +120,9 @@ class _ParamSlider extends StatelessWidget {
     required this.max,
     required this.onChanged,
     required this.format,
+    this.leftLabel,
+    this.rightLabel,
+    this.invert = false,
   });
 
   final String label;
@@ -128,28 +131,77 @@ class _ParamSlider extends StatelessWidget {
   final int max;
   final ValueChanged<int> onChanged;
   final String Function(int) format;
+  /// Optional short text below the slider's start (e.g. 'slow', 'short').
+  /// Renders only when both labels are non-null.
+  final String? leftLabel;
+  final String? rightLabel;
+  /// When true, the slider visually goes high → low instead of low → high.
+  /// Internal storage / `value` stays in the original units; the slider's
+  /// thumb position is mirrored. Use for cases where the natural mental
+  /// model conflicts with the value direction (e.g. breath cycle length
+  /// in seconds — higher value = slower breath, but the user expects
+  /// "right = faster").
+  final bool invert;
 
   @override
   Widget build(BuildContext context) {
     final clamped = value.clamp(min, max).toDouble();
+    // Slider position runs min..max. If inverted, mirror around the
+    // midpoint so the thumb sits on the visually-expected side.
+    final sliderValue =
+        invert ? (min + max).toDouble() - clamped : clamped;
+    final hasEnds = leftLabel != null && rightLabel != null;
+    final slider = Slider(
+      value: sliderValue,
+      min: min.toDouble(),
+      max: max.toDouble(),
+      divisions: max - min,
+      onChanged: (v) {
+        final raw = v.round();
+        final stored = invert ? (min + max) - raw : raw;
+        onChanged(stored);
+      },
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _SectionLabel(label),
-        Row(
-          children: [
-            Expanded(
-              child: Slider(
-                value: clamped,
-                min: min.toDouble(),
-                max: max.toDouble(),
-                divisions: max - min,
-                onChanged: (v) => onChanged(v.round()),
+        if (hasEnds) ...[
+          // Match _FrequencySpread's layout: end labels sit inline with
+          // the slider, value drops to its own line below. Keeps the
+          // editor visually consistent across every expression type.
+          Row(
+            children: [
+              Text(leftLabel!,
+                  style: const TextStyle(
+                      color: BrandColors.fogGrey, fontSize: 11)),
+              Expanded(child: slider),
+              Text(rightLabel!,
+                  style: const TextStyle(
+                      color: BrandColors.fogGrey, fontSize: 11)),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Text(
+                format(value),
+                style: const TextStyle(
+                  color: BrandColors.fogGrey,
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                ),
               ),
             ),
-            _ValueChip(format(value)),
-          ],
-        ),
+          ),
+        ] else
+          Row(
+            children: [
+              Expanded(child: slider),
+              _ValueChip(format(value)),
+            ],
+          ),
       ],
     );
   }
@@ -164,6 +216,8 @@ class _RangeParamSlider extends StatelessWidget {
     required this.max,
     required this.onChanged,
     required this.format,
+    this.leftLabel,
+    this.rightLabel,
   });
 
   final String label;
@@ -173,30 +227,59 @@ class _RangeParamSlider extends StatelessWidget {
   final int max;
   final void Function(int lo, int hi) onChanged;
   final String Function(int) format;
+  final String? leftLabel;
+  final String? rightLabel;
 
   @override
   Widget build(BuildContext context) {
     final loClamp = lo.clamp(min, max);
     final hiClamp = hi.clamp(loClamp, max);
+    final hasEnds = leftLabel != null && rightLabel != null;
+    final slider = RangeSlider(
+      values: RangeValues(loClamp.toDouble(), hiClamp.toDouble()),
+      min: min.toDouble(),
+      max: max.toDouble(),
+      divisions: max - min,
+      onChanged: (v) => onChanged(v.start.round(), v.end.round()),
+    );
+    final valueText = '${format(loClamp)}–${format(hiClamp)}';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _SectionLabel(label),
-        Row(
-          children: [
-            Expanded(
-              child: RangeSlider(
-                values: RangeValues(loClamp.toDouble(), hiClamp.toDouble()),
-                min: min.toDouble(),
-                max: max.toDouble(),
-                divisions: max - min,
-                onChanged: (v) =>
-                    onChanged(v.start.round(), v.end.round()),
+        if (hasEnds) ...[
+          Row(
+            children: [
+              Text(leftLabel!,
+                  style: const TextStyle(
+                      color: BrandColors.fogGrey, fontSize: 11)),
+              Expanded(child: slider),
+              Text(rightLabel!,
+                  style: const TextStyle(
+                      color: BrandColors.fogGrey, fontSize: 11)),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Text(
+                valueText,
+                style: const TextStyle(
+                  color: BrandColors.fogGrey,
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                ),
               ),
             ),
-            _ValueChip('${format(loClamp)}–${format(hiClamp)}'),
-          ],
-        ),
+          ),
+        ] else
+          Row(
+            children: [
+              Expanded(child: slider),
+              _ValueChip(valueText),
+            ],
+          ),
       ],
     );
   }
@@ -218,6 +301,13 @@ class _BreathingParams extends StatelessWidget {
       min: 1,
       max: 60,
       onChanged: onBreathSpeed,
+      // breathSpeed is the cycle in seconds (1=fast, 60=slow). The user
+      // expects "right = faster", so invert the slider visually and use
+      // slow/fast end labels to match the rare/often style on the other
+      // expressions.
+      invert: true,
+      leftLabel: 'slow',
+      rightLabel: 'fast',
       format: (v) => '${v}s',
     );
   }
@@ -234,11 +324,18 @@ class _PulseParams extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _ParamSlider(
-      label: 'Wave travel time',
+      // pulseSpeed is firmware-side "total travel time" in seconds
+      // (1–10s, per pulse_expression.cpp:27). Higher value = slower
+      // wave. We invert visually so right = faster and label slow/fast,
+      // matching breath cycle's treatment.
+      label: 'Pulse speed',
       value: pulseSpeed,
       min: 1,
       max: 10,
       onChanged: onPulseSpeed,
+      invert: true,
+      leftLabel: 'slow',
+      rightLabel: 'fast',
       format: (v) => '${v}s',
     );
   }
@@ -272,12 +369,18 @@ class _ShiftyParams extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _RangeParamSlider(
-          label: 'Shift duration',
+          // "Hold time" is the dwell at peak shifted color. The
+          // transition into and out of that color is the separate
+          // "Fade duration" slider below. Storage keys
+          // (shiftDurationMin/Max) stay unchanged.
+          label: 'Hold time',
           lo: shiftMin,
           hi: shiftMax,
           min: 60, // 1 min
           max: 1800, // 30 min
           onChanged: onShiftRange,
+          leftLabel: 'short',
+          rightLabel: 'long',
           format: _fmtMinutes,
         ),
         _ParamSlider(
@@ -286,6 +389,8 @@ class _ShiftyParams extends StatelessWidget {
           min: 10,
           max: 300,
           onChanged: onFade,
+          leftLabel: 'quick',
+          rightLabel: 'slow',
           format: (v) => '${v}s',
         ),
       ],
@@ -305,14 +410,28 @@ class _GlitchyParams extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Stored as frames (1–60 at 30 fps = 33 ms–2000 ms). Surface the
+    // friendlier ms/seconds reading to the user — same wire value, just
+    // formatted in real time units.
+    String fmt(int frames) {
+      final ms = (frames * 1000 / 30).round();
+      if (ms < 1000) return '${ms}ms';
+      final s = ms / 1000.0;
+      // Strip trailing ".0" so "1.0s" reads as "1s".
+      final str = s.toStringAsFixed(1);
+      return '${str.endsWith('.0') ? s.toInt().toString() : str}s';
+    }
+
     return _RangeParamSlider(
-      label: 'Glitch duration (frames @ 30fps)',
+      label: 'Glitch duration',
       lo: durMin,
       hi: durMax,
       min: 1,
       max: 60,
       onChanged: onRange,
-      format: (v) => '$v',
+      leftLabel: 'short',
+      rightLabel: 'long',
+      format: fmt,
     );
   }
 }

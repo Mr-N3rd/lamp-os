@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
 import '../../../../core/widgets/status_dot.dart';
+import '../../../inventory/application/inventory_notifier.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../../nearby/domain/nearby_lamp.dart';
 import '../../application/add_lamp_notifier.dart';
@@ -12,7 +13,14 @@ class AddLampScanStep extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final lamps = ref.watch(nearbyLampsNotifierProvider);
+    final all = ref.watch(nearbyLampsNotifierProvider);
+    final inventory =
+        ref.watch(inventoryNotifierProvider).value ?? const [];
+    final inventoryIds = inventory.map((l) => l.id).toSet();
+    // Hide lamps that are already in this phone's inventory — they're
+    // already addable from "My lamps", and showing them here would
+    // confuse the "tap a discovered lamp to add it" flow.
+    final lamps = all.where((l) => !inventoryIds.contains(l.id)).toList();
     if (lamps.isEmpty) {
       return const Center(
         child: Text(
@@ -67,11 +75,11 @@ class _LampRow extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            // BLE adv tells us bluetooth-reachable; v2-firmware lamps also
-            // carry a mesh-state byte (`NearbyLamp.onMesh`). Light bright
-            // green when the lamp is on the mesh, otherwise faded blue.
+            // BLE adv tells us this lamp is bluetooth-reachable; the
+            // `isMesh` flag distinguishes mesh-protocol firmware from
+            // legacy BT-only. Light green for mesh, faded blue for BT.
             StatusDot(
-              kind: lamp.onMesh
+              kind: lamp.isMesh
                   ? StatusKind.mesh
                   : StatusKind.bluetooth,
               size: 14,

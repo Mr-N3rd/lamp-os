@@ -26,6 +26,22 @@ class FbpBleClient implements BleClient {
       autoConnect: false,
       mtu: 247,
     );
+    // Android caches the lamp's GATT service definitions per-device for
+    // unbonded peers. After a firmware re-flash (which re-registers
+    // services with new handles), discoverServices() will silently
+    // return the STALE cached set, and every subsequent read/write
+    // misses → the phone gives up and tears the link down with reason
+    // 531 (BLE_ERR_REM_USER_CONN_TERM). clearGattCache wraps the
+    // hidden BluetoothGatt.refresh() call and invalidates that cache
+    // so the next discoverServices() does a real GATT exchange.
+    // Android-only (iOS no-op via thrown FbpErrorCode.androidOnly).
+    try {
+      await device.clearGattCache();
+    } catch (_) {
+      // best-effort — iOS throws androidOnly, some Android versions
+      // reject without a connected GATT; neither case should fail the
+      // whole connect.
+    }
     // Ask Android for a tighter connection interval (11.25-15ms vs the
     // default ~49ms) — wraps BluetoothGatt.requestConnectionPriority(
     // CONNECTION_PRIORITY_HIGH). Without this, slider-rate live writes
@@ -41,9 +57,11 @@ class FbpBleClient implements BleClient {
     } catch (_) {
       // best-effort — not all platforms honor this
     }
-    // Reset the cache on every connect — service handles can change after a
-    // reconnect, especially after a firmware reboot that re-registers the
-    // GATT database.
+    // Reset our in-app cache too — service handles can change after a
+    // reconnect, especially after a firmware reboot that re-registers
+    // the GATT database. clearGattCache above invalidates Android's
+    // system cache; this clears ours so the next _resolve() does a
+    // fresh discoverServices().
     _serviceCache.remove(deviceId);
   }
 
@@ -112,10 +130,15 @@ class FbpBleClient implements BleClient {
     String c,
     Uint8List v, {
     bool withoutResponse = false,
+    bool allowLongWrite = false,
   }) async {
     try {
       final ch = await _resolve(d, s, c);
-      await ch.write(v, withoutResponse: withoutResponse);
+      await ch.write(
+        v,
+        withoutResponse: withoutResponse,
+        allowLongWrite: allowLongWrite,
+      );
     } on fbp.FlutterBluePlusException catch (e) {
       if (e.toString().toLowerCase().contains('encryption')) {
         throw BleEncryptionRequired(d);

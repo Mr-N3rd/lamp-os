@@ -54,13 +54,11 @@ class WifiNotifier extends _$WifiNotifier {
 
   Future<void> scan() => _writeOp({'op': 'scan'});
 
-  /// Tell the lamp which SSID to treat as "home" for presence-based
-  /// home mode. No password — the lamp never associates, only sniffs
-  /// for the SSID in periodic scans.
-  Future<void> setHomeSsid(String ssid) =>
-      _writeOp({'op': 'setHomeSsid', 'ssid': ssid});
-
-  Future<void> forget() => _writeOp({'op': 'forget'});
+  // SSID operations live on controlNotifier (setHomeSsid) and ride the
+  // unified draft + Save Changes path — settings_blob carries
+  // `homeMode.ssid` and the firmware applies it on save. No "live"
+  // firmware effect to preview for an SSID, so no wifiOp channel is
+  // needed for setHomeSsid/forget anymore.
 
   Future<void> _writeOp(Map<String, dynamic> op) async {
     final ble = ref.read(bleClientProvider);

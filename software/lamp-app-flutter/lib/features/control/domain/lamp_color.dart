@@ -51,10 +51,51 @@ class LampColor {
     return '#${h(r)}${h(g)}${h(b)}${h(w)}';
   }
 
-  /// Convert RGB portion to a Flutter [Color] for swatch/preview rendering.
-  /// The W byte is dropped — it only ever drives the physical strip's white
-  /// channel, never the on-screen swatch.
-  Color toSwatch() => Color.fromARGB(0xFF, r, g, b);
+  /// Blend the warm-white channel into RGB for on-screen rendering.
+  /// Mirrors the Vue ColorPreview algorithm — same math as the
+  /// existing `LampColorSwatch` two-layer overlay, just collapsed
+  /// to one Color so callers that paint a single fill (BaseCard
+  /// stop dots, LampPreview SVG fills, etc.) don't have to layer.
+  ///
+  /// Algorithm:
+  ///   - tint = #FABB3E (matches BrandColors.warmWhite)
+  ///   - opacity = (W / 255) × (headroom / 765)
+  ///       where headroom = 765 − (R+G+B)
+  /// High RGB → no headroom, no warm overlay (LED clips anyway).
+  /// Low RGB + high W → strong warm glow.
+  /// Pure warm-white (W=255, RGB=0) → fully tinted swatch.
+  ({int r, int g, int b}) get blendedRgb {
+    // Warm-white sRGB approximation. Matches BrandColors.warmWhite.
+    // Hardcoded here so the domain layer doesn't depend on theme.
+    const tintR = 0xFA;
+    const tintG = 0xBB;
+    const tintB = 0x3E;
+    final headroom = 765 - (r + g + b);
+    if (headroom <= 0 || w == 0) return (r: r, g: g, b: b);
+    final opacity = (w / 255) * (headroom / 765);
+    final inv = 1 - opacity;
+    return (
+      r: (r * inv + tintR * opacity).round().clamp(0, 255),
+      g: (g * inv + tintG * opacity).round().clamp(0, 255),
+      b: (b * inv + tintB * opacity).round().clamp(0, 255),
+    );
+  }
+
+  /// Flutter [Color] with the warm-white channel blended in.
+  /// Phone screens can't reproduce the physical W LED directly so
+  /// we approximate it with a warm-tone overlay on RGB.
+  Color toSwatch() {
+    final c = blendedRgb;
+    return Color.fromARGB(0xFF, c.r, c.g, c.b);
+  }
+
+  /// `RRGGBB` hex (no leading `#`) of the W-blended color. Used by
+  /// the SVG color substitution in LampPreview.
+  String toRgbHex() {
+    String h(int v) => v.toRadixString(16).padLeft(2, '0').toUpperCase();
+    final c = blendedRgb;
+    return '${h(c.r)}${h(c.g)}${h(c.b)}';
+  }
 
   LampColor withRgb({required int r, required int g, required int b}) =>
       LampColor(r: r, g: g, b: b, w: w);

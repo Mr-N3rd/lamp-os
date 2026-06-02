@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,13 +10,14 @@ import '../../../../core/theme/brand_colors.dart';
 import '../../../../core/widgets/lamp_icon.dart';
 import '../../../../core/widgets/status_dot.dart';
 import '../../../control/application/control_notifier.dart';
+import '../../../nearby/application/lamp_route_resolver.dart';
 import '../../../inventory/application/active_lamp_notifier.dart';
 import '../../../inventory/application/inventory_notifier.dart';
 import '../../../inventory/domain/inventory_lamp.dart';
+import '../../../inventory/domain/lamp_colors.dart';
 import '../../../lamp_shell/application/lamp_status.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../../nearby/domain/nearby_lamp.dart';
-import '../../../onboarding/application/add_lamp_notifier.dart';
 import '../../domain/last_seen.dart';
 
 Future<void> showLampPickerSheet(
@@ -45,10 +47,11 @@ class LampPickerSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final inventory =
         ref.watch(inventoryNotifierProvider).value ?? const [];
+    // Nearby is still read for status-dot decoration on owned-lamp rows
+    // (each row needs to know if its lamp is in range / on mesh / BT-only).
+    // The "Other nearby lamps" section was removed — discovery of unowned
+    // lamps belongs to the Add Lamp flow, not the switch picker.
     final nearby = ref.watch(nearbyLampsNotifierProvider);
-    final inventoryIds = inventory.map((l) => l.id).toSet();
-    final unknownNearby =
-        nearby.where((n) => !inventoryIds.contains(n.id)).toList();
 
     return SafeArea(
       child: Padding(
@@ -83,23 +86,6 @@ class LampPickerSheet extends ConsumerWidget {
                       isCurrent: l.id == currentLampId,
                       nearby: nearby,
                     ),
-                  if (unknownNearby.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 4),
-                      child: Text(
-                        'Other nearby lamps',
-                        style: TextStyle(
-                          color: BrandColors.fogGrey,
-                          fontSize: 12,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    for (final n in unknownNearby)
-                      _NearbyLampTile(lamp: n),
-                  ],
                 ],
               ),
             ),
@@ -134,11 +120,6 @@ class _InventoryLampTile extends ConsumerWidget {
   final bool isCurrent;
   final List<NearbyLamp> nearby;
 
-  Color? _colorFromList(List<int>? rgb) {
-    if (rgb == null || rgb.length < 3) return null;
-    return Color.fromARGB(0xFF, rgb[0], rgb[1], rgb[2]);
-  }
-
   Future<void> _onTap(BuildContext context, WidgetRef ref) async {
     if (isCurrent) {
       Navigator.pop(context);
@@ -150,7 +131,9 @@ class _InventoryLampTile extends ConsumerWidget {
       // Only navigate if we're inside a GoRouter tree. Tests that pump the
       // sheet directly (without GoRouter) skip the route change — the
       // active-lamp state change is what matters in that scenario.
-      GoRouter.maybeOf(context)?.go(AppRoutes.control(lamp.id));
+      // routeForLamp sends BT-only firmware to the dedicated info pane
+      // instead of trapping the user on the ConnectingView.
+      GoRouter.maybeOf(context)?.go(routeForLamp(lamp.id, nearby));
     }
   }
 
@@ -207,6 +190,10 @@ class _InventoryLampTile extends ConsumerWidget {
       connected: connected,
     );
     final isOffline = status == StatusKind.offline;
+    final colors = resolveLampColors(
+      inv: lamp,
+      near: nearby.firstWhereOrNull((n) => n.id == lamp.id),
+    );
     return InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: (isOffline && !isCurrent) ? null : () => _onTap(context, ref),
@@ -218,8 +205,8 @@ class _InventoryLampTile extends ConsumerWidget {
             StatusDot(kind: status, size: 14),
             const SizedBox(width: 12),
             LampIcon(
-              shade: _colorFromList(lamp.lastShadeColor),
-              base: _colorFromList(lamp.lastBaseColor),
+              shade: colors.shade,
+              base: colors.base,
               size: 36,
             ),
             const SizedBox(width: 12),
@@ -267,103 +254,3 @@ class _InventoryLampTile extends ConsumerWidget {
   }
 }
 
-class _NearbyLampTile extends ConsumerWidget {
-  const _NearbyLampTile({required this.lamp});
-
-  final NearbyLamp lamp;
-
-  Color _colorFromInt(int rgb) => Color.fromARGB(
-        0xFF,
-        (rgb >> 16) & 0xFF,
-        (rgb >> 8) & 0xFF,
-        rgb & 0xFF,
-      );
-
-  Future<void> _onTap(BuildContext context, WidgetRef ref) async {
-    if (lamp.isFactoryDefault) {
-      // select() is synchronous now (no BLE I/O) — it just records the
-      // deviceId and jumps to Name. The BLE link is opened later by
-      // submit() so it doesn't sit idle through the form-fill and
-      // expire under LINK_SUPERVISION_TIMEOUT.
-      ref.read(addLampNotifierProvider.notifier).select(lamp.id);
-      Navigator.pop(context);
-      // `push` not `go` — same reason as the FAB above.
-      GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
-    } else {
-      // Skip the confirm dialog — the AddLampDoneStep ("X is ready") that
-      // follows acts as the user-visible confirmation.
-      await ref
-          .read(addLampNotifierProvider.notifier)
-          .add(deviceId: lamp.id, name: lamp.name);
-      if (context.mounted) {
-        Navigator.pop(context);
-        // Push the wizard so the user lands on the done step (state.step
-        // was set to `done` by `add()` above).
-        GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () => _onTap(context, ref),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        child: Row(
-          children: [
-            StatusDot(
-              kind: lamp.onMesh ? StatusKind.mesh : StatusKind.bluetooth,
-              size: 14,
-            ),
-            const SizedBox(width: 12),
-            LampIcon(
-              shade: _colorFromInt(lamp.shadeRgb),
-              base: _colorFromInt(lamp.baseRgb),
-              size: 36,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                lamp.name.isEmpty ? '(unnamed)' : lamp.name,
-                style: const TextStyle(
-                  color: BrandColors.lampWhite,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            _NearbyPill(factoryDefault: lamp.isFactoryDefault),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _NearbyPill extends StatelessWidget {
-  const _NearbyPill({required this.factoryDefault});
-
-  final bool factoryDefault;
-
-  @override
-  Widget build(BuildContext context) {
-    final base =
-        factoryDefault ? BrandColors.amberGold : BrandColors.lumenGreen;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        color: base.withValues(alpha: 0.18),
-      ),
-      child: Text(
-        factoryDefault ? 'adopt' : 'add',
-        style: TextStyle(
-          fontSize: 10,
-          color: base,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}

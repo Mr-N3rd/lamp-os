@@ -95,7 +95,7 @@ void main() {
     expect(find.byIcon(Icons.drag_indicator), findsNWidgets(2));
   });
 
-  testWidgets('Close button pops the route', (tester) async {
+  testWidgets('Update button pops the route', (tester) async {
     final ble = InMemoryBleClient();
     final c = await _buildContainer(ble, stopCount: 2);
     addTearDown(c.dispose);
@@ -117,7 +117,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Base gradient'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Close'));
+    // Update button closes the sheet without reverting (the X-close was
+    // replaced by an explicit Cancel/Update row when the unified save
+    // model added per-screen atomic undo).
+    await tester.tap(find.widgetWithText(FilledButton, 'Update'));
     await tester.pumpAndSettle();
     expect(find.text('Base gradient'), findsNothing);
   });

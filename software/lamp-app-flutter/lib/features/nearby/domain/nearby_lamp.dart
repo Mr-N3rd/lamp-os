@@ -21,7 +21,13 @@ abstract class NearbyLamp with _$NearbyLamp {
     required int baseRgb,
     required int shadeRgb,
     required int lastSeenEpochMs,
-    @Default(false) bool onMesh,
+    /// True iff this lamp's firmware advertises the version byte —
+    /// i.e. speaks the app's mesh protocol and is fully app-
+    /// controllable. Drives the BT-only routing decision in
+    /// MyLampsScreen and the `mesh` vs `bluetooth` status dot. v1
+    /// firmware (legacy BT-only) and transitional pre-shade-restore
+    /// v2 builds both get `false`.
+    @Default(false) bool isMesh,
   }) = _NearbyLamp;
 
   factory NearbyLamp.fromJson(Map<String, dynamic> json) =>

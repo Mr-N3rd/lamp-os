@@ -120,7 +120,7 @@ void main() {
     expect(find.text('lamp-99'), findsOneWidget);
   });
 
-  testWidgets('Save action appears on Control tab, not on Expressions tab',
+  testWidgets('Save action appears on all editing tabs, hidden on Info',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
     final c = _container();
@@ -133,11 +133,18 @@ void main() {
       ),
     ));
     await _settle(tester);
-    // Disconnected fixture renders the "Reconnecting…" outlined chip.
+    // Disconnected fixture renders the "Reconnecting…" outlined chip on
+    // Colors tab — Save action is present.
     expect(find.text('Reconnecting…'), findsOneWidget);
 
-    // Switch to Expressions tab — Save area should disappear.
+    // Switch to Expressions — Save action stays (expressions now ride
+    // the unified isDirty + settings-blob save path).
     await tester.tap(find.byIcon(Icons.auto_awesome));
+    await _settle(tester);
+    expect(find.text('Reconnecting…'), findsOneWidget);
+
+    // Switch to Info — read-only; Save action hidden.
+    await tester.tap(find.byIcon(Icons.info_outline));
     await _settle(tester);
     expect(find.text('Reconnecting…'), findsNothing);
     expect(find.text('Save changes'), findsNothing);
