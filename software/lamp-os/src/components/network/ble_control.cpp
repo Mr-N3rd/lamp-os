@@ -558,6 +558,13 @@ class ExpressionTestCallback : public NimBLECharacteristicCallbacks {
 
 class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    // The full-config blob includes `lamp.password` when a password is set.
+    // isAuthed() returns true on bootstrap (no password) so first-setup is
+    // unaffected; once a password exists, only GCM-authed conns get data.
+    if (!isAuthed(connInfo.getConnHandle())) {
+      c->setValue("");
+      return;
+    }
     JsonDocument doc = s_config->asJsonDocument();
     String json;
     serializeJson(doc, json);
@@ -613,6 +620,13 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
 
 class LampSectionCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    // asLampJson() embeds `lamp.password` when one is set — same auth gate
+    // as SettingsBlobCallback. Other section reads (base/shade/expr/home)
+    // carry no secrets and stay open.
+    if (!isAuthed(connInfo.getConnHandle())) {
+      c->setValue("");
+      return;
+    }
     c->setValue(s_config->asLampJson().c_str());
   }
 };

@@ -61,6 +61,11 @@ Config::Config(Preferences* inPrefs) {
   if (base.px > 50) {
     base.px = 50;
   }
+  // Keep knockoutPixels in sync with the active pixel count. Drops stale
+  // entries when px shrinks (e.g. 35 → 20) and 100-fills ("no knockout")
+  // any slots when px grows. The input loop below then overwrites slots
+  // 0..base.px-1 from the JSON.
+  base.knockoutPixels.resize(base.px, 100);
   base.ac = baseNode["ac"] | 0;
   base.bpp = baseNode["bpp"] | 4;
   if (base.bpp != 3 && base.bpp != 4) {

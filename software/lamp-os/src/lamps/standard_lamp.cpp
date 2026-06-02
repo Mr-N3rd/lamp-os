@@ -631,7 +631,7 @@ void loop() {
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain knockout pixel=%u brightness=%u\n", pixel, brightness);
 #endif
-    if (pixel < 50 && brightness <= 100) {
+    if (pixel < config.base.px && brightness <= 100) {
       baseKnockoutBehavior.knockoutPixels[pixel] = brightness;
       config.base.knockoutPixels[pixel] = brightness;
     }

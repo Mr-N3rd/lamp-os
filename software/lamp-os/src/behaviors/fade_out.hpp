@@ -1,6 +1,8 @@
 #ifndef LAMP_BEHAVIORS_FADE_OUT_H
 #define LAMP_BEHAVIORS_FADE_OUT_H
 
+#include <atomic>
+
 #include "../core/animated_behavior.hpp"
 
 /**
@@ -12,7 +14,9 @@ namespace lamp {
 
 // Set this to true from anywhere that wants a graceful reboot. The lamp
 // fades to black over REBOOT_ANIMATION_FRAMES then calls ESP.restart().
-extern volatile bool fadeOutRebootRequested;
+// Atomic because it's written from the NimBLE host task (Core 0) via
+// the settings_blob drain and read from the lamp loop (Core 1).
+extern std::atomic<bool> fadeOutRebootRequested;
 
 class FadeOutBehavior : public AnimatedBehavior {
   using AnimatedBehavior::AnimatedBehavior;

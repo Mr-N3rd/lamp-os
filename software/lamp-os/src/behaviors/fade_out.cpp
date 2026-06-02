@@ -7,7 +7,7 @@
 
 namespace lamp {
 
-volatile bool fadeOutRebootRequested = false;
+std::atomic<bool> fadeOutRebootRequested{false};
 
 void FadeOutBehavior::draw() {
   for (int i = 0; i < fb->pixelCount; i++) {
