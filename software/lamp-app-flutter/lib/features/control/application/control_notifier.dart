@@ -38,12 +38,20 @@ const _writeDebounce = Duration(milliseconds: 60);
 /// post-save reconnect paths.
 const _blackShade = LampColor(r: 0, g: 0, b: 0, w: 0);
 
-@Riverpod(keepAlive: false, name: 'controlNotifierProvider')
+/// Disables Riverpod's framework-level auto-retry for the control notifier.
+/// We run our own reconnect loop with explicit backoff (`_reconnectDelays`)
+/// and two concurrent framework retries observed racing the scheduler when
+/// multiple lamps failed connect at once. Returning null keeps the provider
+/// in error state until an explicit `ref.invalidate` or a new build().
+Duration? _noRetry(int retryCount, Object error) => null;
+
+@Riverpod(keepAlive: false, name: 'controlNotifierProvider', retry: _noRetry)
 class ControlNotifier extends _$ControlNotifier {
-  // Nullable rather than `late final` so a Riverpod retry (which re-runs
-  // build() on the same notifier instance after a transient connect/auth
-  // failure) can re-assign without throwing LateInitializationError. We
-  // dispose the previous writer instances before swapping in new ones.
+  // Nullable for defensive re-assignability. With framework retry disabled
+  // (see `_noRetry`) build() is no longer re-entered on the same instance
+  // after a connect/auth failure, but an explicit `ref.invalidate` could
+  // still trigger rebuild; nullable shape costs nothing and removes the
+  // LateInitializationError class of bug entirely.
   WriteCoalescer? _brightnessWriter;
   WriteCoalescer? _shadeColorsWriter;
   WriteCoalescer? _baseColorsWriter;
