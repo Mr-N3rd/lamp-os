@@ -73,3 +73,30 @@ Captured at end of the session that landed:
 
 1. **GATT Service Changed indication** — small firmware add, removes the "clear Android Bluetooth cache" dance from every future schema change.
 2. **Exercise MQTT with a real broker** before you need it for an event.
+
+---
+
+# Follow-ups from setup-fold + hardening pass (2026-06)
+
+Captured after the session that landed:
+- ble_setup service deletion → control service serves the empty-password bootstrap path too (`isAuthed` returns true when `lamp.password.empty()`).
+- BLE_ATT cap raised to 1024 (library-level via `-D BLE_ATT_ATTR_MAX_LEN`); per-section read characteristics replacing the monolithic settings_blob read.
+- BGR `byteOrder` support on base + shade strips; positional `knockoutPixels` array.
+- Hardening: `knockoutPixels.resize(base.px, 100)` so vector tracks `px`; `fadeOutRebootRequested` promoted to `std::atomic<bool>`; `SettingsBlobCallback::onRead` + `LampSectionCallback::onRead` gated on `isAuthed` (both embed `lamp.password` when set).
+
+## Deferred medium-severity audit items
+
+These came out of the firmware audit and were tabled as "not crashes — harden later":
+
+- **`s_advertisementData` byte-by-byte atomicity.** Written from the loop task (Core 1) via `setAdvertisedColors`, read by the NimBLE host task (Core 0) when re-arming advertising after `tickAdvertising`'s 250 ms gap. The multi-byte struct can be torn mid-update. Today the worst case is one bad advertising frame; under load it could surface as a flicker on subscribers. `std::atomic` won't fit; the right shape is probably a portMUX-guarded swap or a double-buffered pointer.
+- **`decryptOp` heap allocation on Core 0.** The NimBLE host task currently `malloc`s a per-frame plaintext buffer inside `lamp::crypto::decryptOp`. Core 0 heap contention has been a source of latency spikes before. Switch to a stack buffer sized by `MAX_PENDING_OP_JSON + 16`.
+- **ESP-NOW frame auth.** Nothing on the mesh today authenticates `MSG_*` frames. A rogue ESP-NOW transmitter in range can inject COLORS, HELLOs, CONTROL_OPs. Right shape is HMAC + monotonic sequence + a key derived from the lamp password (or a separately-provisioned mesh secret). Wire-breaking; needs a deployment plan for mixed-fleet upgrades.
+
+## Build / release hygiene
+
+- **Strip `-D LAMP_DEBUG` from beta / tagged stable builds.** Today the upesy_wroom env always defines it and ships ~54 `Serial.printf` calls (10 of them slider-rate hot-path). Add a `[env:upesy_wroom_release]` that omits `LAMP_DEBUG` and lowers `CORE_DEBUG_LEVEL` to 0. Document `pio run -e upesy_wroom_release` as the artifact build.
+
+## App test coverage gaps
+
+- **Reconnect after save.** The post-`fadeOutRebootRequested` → app sees disconnect → reconnects → reloads sections path has no test. Whole save flow is hand-tested.
+- **`settings_blob` wire path.** The drain that merges incoming JSON into the full config, persists to NVS, and triggers reboot is also hand-tested only.

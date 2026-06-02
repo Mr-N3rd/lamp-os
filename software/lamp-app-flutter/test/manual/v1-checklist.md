@@ -115,6 +115,37 @@ Hardware verification for things automated tests can't cover. Walk through this 
 ### Live color cache
 
 - [ ] After editing shade or base on a lamp and backing out without saving, re-opening the picker shows the inventory tile tinted by the *edited* colors (InventoryLamp.lastShadeColor / lastBaseColor cached on every live write).
+- [ ] Edits to a warm-heavy color (W > 0, RGB low) render the tile with a warm orange wash, not black — the W byte is blended in via `LampColor.blendedRgb`.
+
+### Persistent seen-lamps
+
+- [ ] Force-quit the app and relaunch — inventory + previously-seen "Other nearby lamps" reappear without needing the lamps in range.
+- [ ] A lamp last seen days ago is still in the inventory picker (no auto-eviction in v1).
+
+## Phase 1d — BT-only lamps (non-mesh)
+
+These cover the `lamp_route_resolver` branch where a lamp's adv mfg payload reports `isMesh = false`.
+
+- [ ] A lamp NOT in the mesh (factory-default or wifi-not-yet-configured) routed from the inventory picker opens **BTOnlyLampScreen**, not the full Control screen.
+- [ ] BT-only screen shows the `BTOnlyInfoPane` explaining the lamp isn't on the mesh and what's available vs limited.
+- [ ] Setting up Home WiFi on the BT-only lamp via Setup → reboot → on next discovery the lamp's adv shows `isMesh = true` and the picker now routes it to the full Control screen.
+- [ ] If you open Control directly via deep-link / saved-route for a lamp that's currently advertising `isMesh = false`, the screen redirects to BT-only on first paint.
+
+## Phase 3.1 — Knockout shrink / grow round-trip
+
+Regression test for the `knockoutPixels` vector / `base.px` sync (firmware-side fix in 71415e0).
+
+- [ ] Set `base.px = 35` via Advanced LED settings. Save+reboot.
+- [ ] Open Knockout → knock pixel 25 down to 0% → save+reboot → pixel 25 is dark.
+- [ ] Set `base.px = 20` → save+reboot. The strip now uses only 20 LEDs.
+- [ ] Set `base.px = 35` again → save+reboot → pixel 25 should be at **100% (no knockout)**, not the stale 0% from before the shrink.
+
+## Phase 6 — My Lamps screen
+
+- [ ] My Lamps screen lists every adopted lamp with its critter + last-seen shade/base colors.
+- [ ] Tiles re-render after editing on the control screen (within the seen-flush debounce window, ~500 ms).
+- [ ] W-channel edits (warm-white shifts) show up on the tile, not as black.
+- [ ] In-range lamps show their status dot; out-of-range ones go grey within the BLE staleness window.
 
 ## Phase 3 — Knockout (per-LED brightness)
 
