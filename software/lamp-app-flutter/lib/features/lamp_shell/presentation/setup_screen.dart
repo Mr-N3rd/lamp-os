@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
 import '../../../core/widgets/settings_row.dart';
 import '../../control/application/advanced_session.dart';
 import '../../control/application/control_notifier.dart';
@@ -24,15 +25,12 @@ class SetupScreen extends ConsumerWidget {
     final async = ref.watch(controlNotifierProvider(lampId));
     return async.when(
       loading: () => ConnectingView(deviceId: lampId),
-      error: (e, _) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            'Could not reach this lamp: $e',
-            style: const TextStyle(color: BrandColors.fogGrey),
-            textAlign: TextAlign.center,
-          ),
-        ),
+      error: (e, _) => FriendlyError.page(
+        title: "Couldn't reach your lamp.",
+        subtitle:
+            "They may have wandered out of range. Bring your phone closer "
+            'and try again.',
+        rawError: e,
       ),
       data: (state) => _SetupBody(lampId: lampId, state: state),
     );

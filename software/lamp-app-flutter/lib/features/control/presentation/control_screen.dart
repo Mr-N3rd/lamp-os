@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
 import '../application/control_notifier.dart';
 import '../application/lamp_auth_required_exception.dart';
@@ -68,15 +69,12 @@ class _ControlScreenState extends ConsumerState<ControlScreen> {
         if (e is LampAuthRequiredException) {
           return ConnectPasswordPrompt(lampId: lampId);
         }
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not reach this lamp: $e',
-              style: const TextStyle(color: BrandColors.fogGrey),
-              textAlign: TextAlign.center,
-            ),
-          ),
+        return FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
         );
       },
       data: (state) {

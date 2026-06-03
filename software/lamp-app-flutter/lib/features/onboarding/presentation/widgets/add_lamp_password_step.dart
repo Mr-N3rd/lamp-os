@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../../../core/widgets/friendly_error.dart';
 import '../../application/add_lamp_notifier.dart';
 import '../../domain/add_lamp_state.dart';
 
@@ -136,9 +137,12 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
               state.error != AddLampError.wrongPassword)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: Text(
-                state.errorMessage ?? "Adoption didn't go through",
-                style: const TextStyle(color: BrandColors.error),
+              child: FriendlyError.inline(
+                title: state.error == AddLampError.connectFailed
+                    ? "Your lamp drifted off — bring your phone closer "
+                        'and try again.'
+                    : "Adoption didn't go through — try once more.",
+                rawError: state.errorMessage,
               ),
             ),
           Row(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../../../core/widgets/friendly_error.dart';
 import '../../application/control_notifier.dart';
 import '../../application/lamp_auth_required_exception.dart';
 import 'connecting_view.dart';
@@ -62,6 +63,7 @@ class _PasswordDialogState extends ConsumerState<_PasswordDialog> {
   bool _obscured = true;
   bool _busy = false;
   String? _error;
+  Object? _rawError;
 
   @override
   void dispose() {
@@ -75,6 +77,7 @@ class _PasswordDialogState extends ConsumerState<_PasswordDialog> {
     setState(() {
       _busy = true;
       _error = null;
+      _rawError = null;
     });
     try {
       await ref
@@ -88,12 +91,15 @@ class _PasswordDialogState extends ConsumerState<_PasswordDialog> {
       setState(() {
         _busy = false;
         _error = 'Wrong password — try again.';
+        _rawError = null;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.toString();
+        _error = "Your lamp didn't answer. Bring your phone closer "
+            'and try again.';
+        _rawError = e;
       });
     }
   }
@@ -132,9 +138,9 @@ class _PasswordDialogState extends ConsumerState<_PasswordDialog> {
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(
-              _error!,
-              style: const TextStyle(color: BrandColors.error),
+            FriendlyError.inline(
+              title: _error!,
+              rawError: _rawError,
             ),
           ],
         ],

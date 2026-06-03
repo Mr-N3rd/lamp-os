@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/domain/sections.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
@@ -48,15 +49,12 @@ class _AddExpressionPickerScreenState
       ),
       body: async.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
-        error: (e, _) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not reach this lamp: $e',
-              style: const TextStyle(color: BrandColors.fogGrey),
-              textAlign: TextAlign.center,
-            ),
-          ),
+        error: (e, _) => FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
         ),
         data: (state) => _Body(
           lampId: widget.lampId,
