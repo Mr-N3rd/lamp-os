@@ -195,9 +195,12 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, si
                        (std::memcmp(op.targetMac, bcast, 6) == 0);
     if (forUs && controlOpHandler_) {
 #ifdef LAMP_DEBUG
-      Serial.printf("[show] CONTROL_OP apply len=%u\n", (unsigned)op.payloadLen);
+      Serial.printf("[show] CONTROL_OP apply len=%u src=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                    (unsigned)op.payloadLen,
+                    op.sourceMac[0], op.sourceMac[1], op.sourceMac[2],
+                    op.sourceMac[3], op.sourceMac[4], op.sourceMac[5]);
 #endif
-      controlOpHandler_(op.payload, op.payloadLen);
+      controlOpHandler_(op.payload, op.payloadLen, op.sourceMac);
     }
   }
 }

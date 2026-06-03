@@ -26,9 +26,13 @@ namespace lamp {
 
 // Called from the loop task when a MSG_CONTROL_OP arrives addressed to this
 // lamp (or broadcast). Payload is JSON; caller is expected to parse `char`
-// and route to the matching local postPending* function. Pointer is only
-// valid during the call.
-using ControlOpHandler = std::function<void(const uint8_t* payload, size_t len)>;
+// and route to the matching local postPending* function. `srcMac` is the
+// sender's WiFi STA MAC (6 bytes; used by the receiver-side cascade
+// coalesce so spam from one sender collapses while genuinely concurrent
+// cascades from different senders both land). Pointers are only valid
+// during the call.
+using ControlOpHandler = std::function<void(const uint8_t* payload, size_t len,
+                                            const uint8_t srcMac[6])>;
 
 // Receives streamed show frames + control ops over ESP-NOW, and announces
 // this lamp's presence (HELLO) so peers can populate their registry with

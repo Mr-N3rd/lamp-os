@@ -1,6 +1,7 @@
 #include "./expression_manager.hpp"
 #include <Arduino.h>
 #include <algorithm>
+#include <cstring>
 
 #include "../components/network/show_receiver.hpp"
 #include "../core/compositor.hpp"
@@ -182,10 +183,30 @@ void ExpressionManager::onExpressionFired(Expression* e) {
   }
 }
 
-bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
+bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv,
+                                          const uint8_t srcMac[6]) {
   if (!shadeBuffer || !baseBuffer) return false;
 
   ExpressionTarget invTarget = static_cast<ExpressionTarget>(inv.target);
+
+  // Coalesce: if a transient with the same (sender, type) is still
+  // animating, drop this incoming cascade. Prevents pile-up from one
+  // chatty sender (e.g. spam-tapping Test on the originator) while still
+  // letting concurrent cascades from DIFFERENT senders both land — each
+  // sender contributes one in-flight transient.
+  for (const auto& t : transientExpressions_) {
+    if (t.type == inv.type && t.expression &&
+        std::memcmp(t.srcMac, srcMac, 6) == 0 &&
+        !t.expression->isAnimationComplete()) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[expr] coalesce %s from %02X:%02X:%02X:%02X:%02X:%02X (in flight)\n",
+                    inv.type.c_str(),
+                    srcMac[0], srcMac[1], srcMac[2],
+                    srcMac[3], srcMac[4], srcMac[5]);
+#endif
+      return false;
+    }
+  }
 
   // Determine target buffers — same convention as addExpression. TARGET_BOTH
   // fires on both halves of the lamp; specific target fires on one.
@@ -222,7 +243,11 @@ bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
 
     Expression* raw = expr.get();
     if (compositor_) compositor_->addBehavior(raw);
-    transientExpressions_.push_back(std::move(expr));
+    TransientExpression t;
+    t.type = inv.type;
+    std::memcpy(t.srcMac, srcMac, 6);
+    t.expression = std::move(expr);
+    transientExpressions_.push_back(std::move(t));
     raw->trigger();
     triggered = true;
   }
@@ -234,8 +259,8 @@ bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
 void ExpressionManager::gcTransients() {
   if (transientExpressions_.empty()) return;
   for (auto it = transientExpressions_.begin(); it != transientExpressions_.end();) {
-    if ((*it)->isAnimationComplete()) {
-      if (compositor_) compositor_->removeBehavior(it->get());
+    if (it->expression && it->expression->isAnimationComplete()) {
+      if (compositor_) compositor_->removeBehavior(it->expression.get());
       it = transientExpressions_.erase(it);
     } else {
       ++it;

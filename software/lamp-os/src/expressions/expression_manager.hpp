@@ -53,7 +53,17 @@ class ExpressionManager {
   // their animation, then gcTransients() removes them. Entirely independent of
   // the `expressions` (configured) vector — no interaction with the receiver's
   // local config in any direction.
-  std::vector<std::unique_ptr<Expression>> transientExpressions_;
+  //
+  // `type` + `srcMac` together key the coalesce check in triggerInvocation:
+  // a new cascade with the same (type, srcMac) as an in-flight transient is
+  // dropped (prevents pile-up from a chatty sender), while a different sender
+  // or different type still fires.
+  struct TransientExpression {
+    std::string type;
+    uint8_t srcMac[6];
+    std::unique_ptr<Expression> expression;
+  };
+  std::vector<TransientExpression> transientExpressions_;
 
   // Send the cascade fan-out for an expression that just fired locally,
   // if its config opts in via the cascadeEnabled parameter. No-op when
@@ -75,10 +85,9 @@ class ExpressionManager {
   void setShowReceiver(ShowReceiver* receiver);
 
   /**
-   * @brief Wire up the compositor so triggerInvocation can lazy-upsert a
-   *        transient entry when a remote cascade arrives for an expression
-   *        type the receiver doesn't have configured. Without this, remote
-   *        triggers for unconfigured types are silently no-op'd.
+   * @brief Wire up the compositor so triggerInvocation can register transient
+   *        one-shot Expressions built from incoming remote invocations.
+   *        Without this, remote cascades are silently no-op'd.
    */
   void setCompositor(Compositor* compositor);
 
@@ -119,12 +128,16 @@ class ExpressionManager {
 
   /**
    * @brief REMOTE path. Called only by the receive side of the mesh when a
-   *        triggerExpression CONTROL_OP arrives. Overrides colors for this
-   *        single firing (if the invocation provides any), then triggers
-   *        the matching configured expression(s). NEVER cascades — this is
-   *        the structural loop break that makes flood propagation safe.
+   *        triggerExpression CONTROL_OP arrives. Builds a fresh transient
+   *        Expression instance from the invocation's colors + params and
+   *        fires it once; the receiver's own configured expressions are
+   *        not consulted. Transients live in the compositor for the
+   *        duration of their animation and are reaped by gcTransients().
+   *        NEVER cascades — this is the structural loop break that makes
+   *        flood propagation safe.
    */
-  bool triggerInvocation(const ExpressionInvocation& inv);
+  bool triggerInvocation(const ExpressionInvocation& inv,
+                         const uint8_t srcMac[6]);
 
   /**
    * @brief Called by Expression::trigger() after onTrigger() runs, regardless

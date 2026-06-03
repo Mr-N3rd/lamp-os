@@ -50,6 +50,8 @@ struct PendingJsonUpdate {
 struct PendingOpJsonUpdate {
   bool valid = false;
   uint16_t length = 0;
+  uint8_t srcMac[6] = {0};   // sender's WiFi STA MAC for cascade coalesce;
+                             // zero for non-mesh paths (BLE expressionOp etc.)
   char json[MAX_PENDING_OP_JSON];
 };
 
@@ -80,6 +82,8 @@ PendingOpJsonUpdate pendingRemoteOpJson;
 struct DelayedInvocation {
   lamp::ExpressionInvocation inv;
   uint32_t fireAtMs;
+  uint8_t srcMac[6];   // carried through so receiver-side coalesce still
+                       // works when the actual fire is delayed.
 };
 static constexpr size_t MAX_PENDING_TRIGGERS = 16;
 std::vector<DelayedInvocation> pendingTriggers;
@@ -172,7 +176,11 @@ extern lamp::ExpressionManager expressionManager;
 // pending slot, then loop drains it — implementation below).
 //
 // `payload` must be a NUL-terminated JSON string for ArduinoJson to parse.
-static void applyRemoteOpLocal(const char* payloadJson, size_t len) {
+// `srcMac` identifies the sender (used by triggerInvocation to coalesce
+// rapid same-sender cascades). For BLE-initiated paths the caller passes
+// `myMac_` so app-driven triggers coalesce against each other.
+static void applyRemoteOpLocal(const char* payloadJson, size_t len,
+                               const uint8_t srcMac[6]) {
   JsonDocument doc;
   if (deserializeJson(doc, payloadJson, len) != DeserializationError::Ok) return;
   const char* ch = doc["char"].as<const char*>();
@@ -213,7 +221,7 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len) {
     lamp::ExpressionInvocation inv;
     if (!lamp::parseInvocation(doc.as<JsonObjectConst>(), inv)) return;
     if (inv.delayMs == 0) {
-      expressionManager.triggerInvocation(inv);
+      expressionManager.triggerInvocation(inv, srcMac);
     } else {
       if (pendingTriggers.size() >= MAX_PENDING_TRIGGERS) {
         // FIFO eviction — most-recent intent wins. Dropping the newest
@@ -223,7 +231,11 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len) {
 #endif
         pendingTriggers.erase(pendingTriggers.begin());
       }
-      pendingTriggers.push_back({inv, millis() + inv.delayMs});
+      DelayedInvocation d;
+      d.inv = inv;
+      d.fireAtMs = millis() + inv.delayMs;
+      memcpy(d.srcMac, srcMac, 6);
+      pendingTriggers.push_back(d);
     }
   }
   // settings forwarding is intentionally deferred — it triggers a remote
@@ -520,14 +532,16 @@ void setup() {
   // pending slot. WiFi-task safe: pure memcpy under portMUX, no heap work.
   // MUST be installed BEFORE showReceiver.begin() — otherwise any CONTROL_OP
   // that arrives in the gap is dropped because controlOpHandler_ is null.
-  showReceiver.setControlOpHandler([](const uint8_t* payload, size_t len) {
-    if (len > MAX_PENDING_OP_JSON) return;
-    portENTER_CRITICAL(&pendingMux);
-    pendingInboundOpJson.length = static_cast<uint16_t>(len);
-    memcpy(pendingInboundOpJson.json, payload, len);
-    pendingInboundOpJson.valid = true;
-    portEXIT_CRITICAL(&pendingMux);
-  });
+  showReceiver.setControlOpHandler(
+      [](const uint8_t* payload, size_t len, const uint8_t srcMac[6]) {
+        if (len > MAX_PENDING_OP_JSON) return;
+        portENTER_CRITICAL(&pendingMux);
+        pendingInboundOpJson.length = static_cast<uint16_t>(len);
+        memcpy(pendingInboundOpJson.json, payload, len);
+        memcpy(pendingInboundOpJson.srcMac, srcMac, 6);
+        pendingInboundOpJson.valid = true;
+        portEXIT_CRITICAL(&pendingMux);
+      });
   // Bring up ESP-NOW grid presence (HELLO + COLORS). Independent of home
   // WiFi — runs on whatever channel the radio is on. See lamp_protocol.hpp.
   showReceiver.begin(&config);
@@ -892,16 +906,18 @@ void loop() {
   if (pendingInboundOpJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
     uint16_t len;
+    uint8_t srcMac[6];
     portENTER_CRITICAL(&pendingMux);
     len = pendingInboundOpJson.length;
     memcpy(buf, pendingInboundOpJson.json, len);
+    memcpy(srcMac, pendingInboundOpJson.srcMac, 6);
     pendingInboundOpJson.valid = false;
     portEXIT_CRITICAL(&pendingMux);
     buf[len] = '\0';
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain inboundOp len=%u\n", (unsigned)len);
 #endif
-    applyRemoteOpLocal(buf, len);
+    applyRemoteOpLocal(buf, len, srcMac);
   }
 
   // Drain BLE CHAR_REMOTE_OP writes: either apply locally (targetMac is
@@ -945,7 +961,12 @@ void loop() {
       serializeJson(doc, payload);
 
       if (isSelf || isBroadcast) {
-        applyRemoteOpLocal(payload.data(), payload.size());
+        // BLE-initiated remoteOp applied locally — the "sender" is this
+        // lamp's own app session. Use myMac_ so app-driven rapid triggers
+        // coalesce against each other on the receive side.
+        uint8_t selfMac[6];
+        showReceiver.getMyMac(selfMac);
+        applyRemoteOpLocal(payload.data(), payload.size(), selfMac);
       }
       if (!isSelf) {
         // Forward over the grid. For broadcast this also bounces to all
@@ -968,7 +989,7 @@ void loop() {
     const uint32_t now = millis();
     for (auto it = pendingTriggers.begin(); it != pendingTriggers.end();) {
       if (static_cast<int32_t>(now - it->fireAtMs) >= 0) {
-        expressionManager.triggerInvocation(it->inv);
+        expressionManager.triggerInvocation(it->inv, it->srcMac);
         it = pendingTriggers.erase(it);
       } else {
         ++it;

@@ -94,26 +94,7 @@ class Expression : public AnimatedBehavior {
 
   /**
    * @brief Swap the palette without touching interval / target / schedule.
-   *        Used by ExpressionManager::triggerInvocation to apply a remote
-   *        invocation's colors for a single firing (then restore). Distinct
-   *        from configure() which is intended for boot/upsert and resets the
-   *        auto-trigger clock.
-   *
-   *        SCOPE: the manager's snapshot-set-trigger-restore pattern is
-   *        fully correct for expression types that capture any color they
-   *        need into a private member inside onTrigger() and never read
-   *        `colors` again on later frames. Both Glitchy (`glitchColor =
-   *        getRandomColor()` in its onTrigger) and Pulse (`pulseColor =
-   *        getRandomColor()` via selectNextColor in its onTrigger; draw
-   *        reads only pulseColor) fit this contract — receive-side cascade
-   *        overrides land on the chosen color for the firing.
-   *
-   *        Breathing and Shifty read `colors` continuously from onUpdate()
-   *        and draw(), so the snapshot-restore wins and the override is
-   *        silently dropped — those peers will animate with their own
-   *        configured palette. When cascade UI is exposed for those types,
-   *        introduce a transient colorsOverride_ member consumed by their
-   *        onUpdate paths.
+   *        Distinct from configure() which resets the auto-trigger clock.
    */
   void setColors(const std::vector<Color>& inColors) { colors = inColors; }
 
