@@ -26,7 +26,16 @@ class Dispositions extends _$Dispositions {
   @override
   Future<Map<String, int>> build(String lampId) async {
     ref.onDispose(() {
-      _flushTimer?.cancel();
+      // If a debounced write is pending when the provider disposes
+      // (user dragged the slider and switched tabs / backgrounded the
+      // app within the 500ms window), flush it instead of dropping it.
+      // Otherwise the local state diverges from the lamp and next visit
+      // re-reads the OLD value and silently clobbers the user's edit.
+      // Mirrors the _seenFlushTimer pattern in ControlNotifier.
+      if (_flushTimer?.isActive ?? false) {
+        _flushTimer!.cancel();
+        unawaited(_flush());
+      }
     });
     final ble = ref.read(bleClientProvider);
     try {

@@ -26,12 +26,17 @@ void SocialBehavior::draw() {
 void SocialBehavior::control() {
   if (animationState != STOPPED) return;
   const uint32_t now = millis();
-  if (now < nextAcknowledgeTimeMs) return;
+  // Wraparound-safe time comparison (millis() rolls over at ~49 days).
+  // The re-greet check below uses the same idiom for consistency.
+  if (static_cast<int32_t>(now - nextAcknowledgeTimeMs) < 0) return;
 
   const SocialMode mode = config_ ? config_->lamp.socialMode : SocialMode::Ambivert;
 
   // Ambivert fatigue gate — if we burnt out recently, take a breather.
-  if (mode == SocialMode::Ambivert && now < tiredUntilMs_) return;
+  if (mode == SocialMode::Ambivert &&
+      static_cast<int32_t>(now - tiredUntilMs_) < 0) {
+    return;
+  }
 
   uint32_t regreetWindowMs = 0;
   switch (mode) {

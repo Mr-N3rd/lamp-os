@@ -20,6 +20,14 @@ import 'lamp_save_status.dart';
 
 part 'control_notifier.g.dart';
 
+/// Marker error type set by ControlNotifier.factoryReset so callers can
+/// distinguish "user reset this lamp" from genuine BLE / parse failures.
+class FactoryResetSentinel implements Exception {
+  const FactoryResetSentinel();
+  @override
+  String toString() => 'lamp was factory-reset';
+}
+
 // Live-preview write debounce. WriteCoalescer fires on a timer, not
 // on completion of the previous write — so this value has to stay
 // at or below the slowest link the producer might face. Tried 30ms
@@ -802,15 +810,35 @@ class ControlNotifier extends _$ControlNotifier {
       if (!looksLikeReboot) rethrow;
     }
 
-    // Lamp is now factory-fresh. Drop it from the inventory; the user
-    // re-onboards if they want to use it again. Cancel any pending
-    // reconnect — auth would fail anyway (the lamp's password is gone)
-    // and this lamp isn't in inventory anymore so there's nothing for
-    // the reconnect logic to authenticate as.
+    // Lamp is now factory-fresh — tear down everything tied to this
+    // session so the reconnect machinery doesn't churn forever against
+    // a lamp the user has deliberately abandoned.
+    //
+    // Sequence matters:
+    //   1. cancel timers + the BLE-connected stream subscription so
+    //      _onConnectionChange can't fire and re-schedule a reconnect;
+    //   2. disconnect the link explicitly (the firmware is rebooting so
+    //      this is a no-op on the wire, but it releases fbp's handle);
+    //   3. remove from inventory so any UI that watches inventory drops
+    //      this lamp;
+    //   4. flip state to AsyncError with a sentinel so anything still
+    //      watching this provider sees a terminal state rather than a
+    //      stuck AsyncLoading.
     _reconnectTimer?.cancel();
+    _connSub?.cancel();
+    _connSub = null;
+    try {
+      await ble.disconnect(_deviceId);
+    } catch (_) {
+      // already-disconnected / lamp rebooting — both fine.
+    }
     await ref
         .read(inventoryNotifierProvider.notifier)
         .remove(_deviceId);
+    state = AsyncError(
+      const FactoryResetSentinel(),
+      StackTrace.current,
+    );
   }
 
   /// Change the lamp's auth password. Writes a partial settings_blob with

@@ -157,7 +157,7 @@ void main() {
     expect(find.text('Other nearby lamps'), findsNothing);
   });
 
-  testWidgets('sticky "+ Add a lamp" footer is always present', (tester) async {
+  testWidgets('sticky "+ Adopt a lamp" footer is always present', (tester) async {
     final c = await withInventory(const []);
     addTearDown(c.dispose);
 
@@ -168,7 +168,7 @@ void main() {
       ),
     ));
     await settle(tester);
-    expect(find.text('Add a lamp'), findsOneWidget);
+    expect(find.text('Adopt a lamp'), findsOneWidget);
   });
 
   testWidgets(
@@ -193,7 +193,7 @@ void main() {
       ),
       const NearbyLamp(
         id: 'factory-1',
-        name: 'standard',
+        name: 'stray',
         rssi: -65,
         serviceUuids: [],
         baseRgb: 0x300783,
@@ -213,7 +213,7 @@ void main() {
     // Neither the header nor any of the nearby tiles should appear.
     expect(find.text('Other nearby lamps'), findsNothing);
     expect(find.text("alice's lamp"), findsNothing);
-    expect(find.text('standard'), findsNothing);
+    expect(find.text('stray'), findsNothing);
     expect(find.text('adopt'), findsNothing);
     expect(find.text('add'), findsNothing);
   });

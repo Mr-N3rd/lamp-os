@@ -37,7 +37,7 @@ class _AddLampNameStepState extends ConsumerState<AddLampNameStep> {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
           const Text(
-            'Name this lamp',
+            'What will you call them?',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: BrandColors.lampWhite,
@@ -45,13 +45,19 @@ class _AddLampNameStepState extends ConsumerState<AddLampNameStep> {
               fontWeight: FontWeight.w600,
             ),
           ),
+          const SizedBox(height: 6),
+          const Text(
+            "Every lamp deserves a name. They'll wear it proudly.",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: BrandColors.fogGrey, fontSize: 13),
+          ),
           const SizedBox(height: 16),
           TextField(
             controller: _controller,
             autofocus: true,
             onChanged: notifier.setName,
             decoration: const InputDecoration(
-              labelText: 'Lamp name',
+              labelText: 'Their name',
               border: OutlineInputBorder(),
             ),
           ),

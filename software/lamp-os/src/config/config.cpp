@@ -48,7 +48,7 @@ Config::Config(Preferences* inPrefs) {
   }
 
   JsonObject lampNode = doc["lamp"];
-  lamp.name = std::string(lampNode["name"] | "standard");
+  lamp.name = std::string(lampNode["name"] | "stray");
   lamp.brightness = lampNode["brightness"] | 100;
   std::string password = std::string(lampNode["password"] | "");
   if (!password.empty()) {

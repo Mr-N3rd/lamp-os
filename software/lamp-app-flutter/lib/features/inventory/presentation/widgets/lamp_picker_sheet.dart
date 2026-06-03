@@ -93,7 +93,7 @@ class LampPickerSheet extends ConsumerWidget {
             const SizedBox(height: 4),
             TextButton.icon(
               icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add a lamp'),
+              label: const Text('Adopt a lamp'),
               onPressed: () {
                 Navigator.pop(context);
                 // `push` not `go` — user must be able to abort the add-lamp

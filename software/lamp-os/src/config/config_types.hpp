@@ -46,7 +46,7 @@ enum class SocialMode : uint8_t {
  */
 class LampSettings {
  public:
-  std::string name = "standard";
+  std::string name = "stray";
   uint8_t brightness = 100;
   std::string password = "";
   bool advancedEnabled = false;

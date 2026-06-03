@@ -293,9 +293,17 @@ Future<void> _showFactoryResetDialog(
             style: FilledButton.styleFrom(
               backgroundColor: BrandColors.error,
             ),
-            onPressed: () {
-              onReset();
+            onPressed: () async {
+              // Await so we don't navigate away before the BLE write +
+              // inventory removal finish (otherwise the picker route
+              // could rebuild against still-stale inventory).
+              await onReset();
+              if (!context.mounted) return;
               Navigator.of(context).pop();
+              // The lamp is gone from inventory; the LampShell is now
+              // anchored to a missing id and would show a "reconnecting"
+              // spinner forever. Bounce to the picker.
+              GoRouter.of(context).go(AppRoutes.myLamps);
             },
             child: const Text('Reset'),
           ),

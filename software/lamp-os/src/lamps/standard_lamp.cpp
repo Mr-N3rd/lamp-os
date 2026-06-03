@@ -74,6 +74,10 @@ PendingOpJsonUpdate pendingExpressionOpJson;
 PendingOpJsonUpdate pendingWifiOpJson;
 PendingOpJsonUpdate pendingTestActionJson;
 PendingOpJsonUpdate pendingRemoteOpJson;
+// Disposition map writes from CHAR_SOCIAL_DISPOSITIONS land here from
+// Core 0; the loop drain on Core 1 parses + persists via Config so NVS
+// writes serialise with the settings_blob drain on the same core.
+PendingOpJsonUpdate pendingSocialDispositionsJson;
 
 // Pending triggerExpression invocations whose delayMs > 0 — drained from the
 // loop task once millis() reaches fireAtMs. Loop-task only (the WiFi-task
@@ -161,6 +165,15 @@ void postPendingRemoteOpJson(const char* data, size_t len) {
   pendingRemoteOpJson.length = static_cast<uint16_t>(len);
   memcpy(pendingRemoteOpJson.json, data, len);
   pendingRemoteOpJson.valid = true;
+  portEXIT_CRITICAL(&pendingMux);
+}
+
+void postPendingSocialDispositionsJson(const char* data, size_t len) {
+  if (len > MAX_PENDING_OP_JSON) return;
+  portENTER_CRITICAL(&pendingMux);
+  pendingSocialDispositionsJson.length = static_cast<uint16_t>(len);
+  memcpy(pendingSocialDispositionsJson.json, data, len);
+  pendingSocialDispositionsJson.valid = true;
   portEXIT_CRITICAL(&pendingMux);
 }
 
@@ -802,9 +815,10 @@ void loop() {
 #endif
     } else if (incomingDoc["factoryReset"].as<bool>()) {
       // Factory reset sentinel — wipe the lamp's NVS namespace entirely
-      // and reboot. Comes up with empty NVS → Config defaults → awaiting
-      // adoption. App auth-gates this write, so unauthenticated peers
-      // can't trigger a reset.
+      // (clears both `cfg` AND `dispositions` keys) and reboot. Comes up
+      // with empty NVS → Config defaults → awaiting adoption. App
+      // auth-gates this write when a password is set; an unprovisioned
+      // lamp accepts it but has nothing to lose by being wiped.
 #ifdef LAMP_DEBUG
       Serial.println("[loop] settingsBlob: factoryReset sentinel, wiping NVS");
 #endif
@@ -854,6 +868,26 @@ void loop() {
 #endif
       }
     }
+  }
+
+  // Disposition map writes — drained AFTER settings_blob so both writers
+  // serialise against the shared `prefs` instance on this core. The BLE
+  // callback only memcpys into the pending slot (Core 0); persistence +
+  // map rebuild happen here on Core 1. No reboot, no auth re-check — the
+  // BLE callback already verified isAuthed before posting.
+  if (pendingSocialDispositionsJson.valid) {
+    char buf[MAX_PENDING_OP_JSON + 1];
+    uint16_t len;
+    portENTER_CRITICAL(&pendingMux);
+    len = pendingSocialDispositionsJson.length;
+    memcpy(buf, pendingSocialDispositionsJson.json, len);
+    pendingSocialDispositionsJson.valid = false;
+    portEXIT_CRITICAL(&pendingMux);
+    buf[len] = '\0';
+#ifdef LAMP_DEBUG
+    Serial.printf("[loop] drain socialDispositions len=%u\n", (unsigned)len);
+#endif
+    config.setDispositionsFromJson(buf, len);
   }
 
   if (pendingTestActionJson.valid) {

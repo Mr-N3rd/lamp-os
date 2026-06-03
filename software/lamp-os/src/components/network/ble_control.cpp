@@ -37,6 +37,7 @@ void postPendingWifiOpJson(const char* data, size_t len);
 void postPendingTestActionJson(const char* data, size_t len);
 void postPendingRemoteOpJson(const char* data, size_t len);
 void postPendingSettingsBlobJson(const char* data, size_t len);
+void postPendingSocialDispositionsJson(const char* data, size_t len);
 void postPendingApplyEffectiveBrightness();
 static constexpr size_t MAX_PENDING_JSON = 256;
 static constexpr size_t MAX_PENDING_OP_JSON = 512;
@@ -477,11 +478,15 @@ class SocialDispositionsCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     if (!isAuthed(connInfo.getConnHandle())) return;
     std::string val = c->getValue();
+    if (val.size() > MAX_PENDING_OP_JSON) return;
 #ifdef LAMP_DEBUG
     Serial.printf("[ble_control] WRITE socialDispositions len=%u\n",
                   (unsigned)val.size());
 #endif
-    s_config->setDispositionsFromJson(val.data(), val.size());
+    // Memcpy-only on Core 0; loop task drains + parses + persists so the
+    // NVS write serialises against the settings_blob drain on Core 1
+    // (shared `prefs` instance can't tolerate concurrent begin/end).
+    postPendingSocialDispositionsJson(val.data(), val.size());
   }
 };
 
