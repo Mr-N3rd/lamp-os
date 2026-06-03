@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <algorithm>
 
+#include "../components/network/show_receiver.hpp"
 #include "../core/compositor.hpp"
 
 namespace lamp {
@@ -85,9 +86,28 @@ void ExpressionManager::addExpression(const ExpressionConfig& config) {
   // Create expressions for each target buffer
   for (auto* buffer : targetBuffers) {
     if (auto expr = createExpression(buffer)) {
-      expressions.push_back({std::move(expr), config.type});
+      expressions.push_back({std::move(expr), config.type, config});
     }
   }
+}
+
+void ExpressionManager::setShowReceiver(ShowReceiver* receiver) {
+  showReceiver_ = receiver;
+}
+
+void ExpressionManager::maybeCascade_(const ExpressionEntry& entry) {
+  if (!showReceiver_ || !entry.expression) return;
+  if (entry.config.getParameter(kParamCascadeEnabled, 0) == 0) return;
+  const uint32_t staggerMs = entry.config.getParameter(kParamCascadeStaggerMs, 0);
+
+  ExpressionInvocation inv;
+  inv.type = entry.config.type;
+  inv.colors = entry.expression->getColors();
+  inv.target = static_cast<uint8_t>(entry.expression->getTarget());
+  inv.parameters = parametersWithoutCascadeKeys(entry.config.parameters);
+  inv.delayMs = 0;  // sendExpressionToAll will stagger per peer.
+
+  showReceiver_->sendExpressionToAll(inv, staggerMs);
 }
 
 std::vector<AnimatedBehavior*> ExpressionManager::getBehaviors() {
@@ -104,22 +124,58 @@ void ExpressionManager::clear() {
 
 bool ExpressionManager::triggerExpression(const std::string& type) {
   bool triggered = false;
+  const ExpressionEntry* firstFired = nullptr;
   for (auto& entry : expressions) {
     if (entry.type == type && entry.expression) {
       entry.expression->trigger();
       triggered = true;
+      if (!firstFired) firstFired = &entry;
     }
   }
+  // Cascade once per logical trigger, not once per entry — a TARGET_BOTH
+  // expression has two entries (shade + base) but should fan out a single
+  // invocation that receivers' own managers expand back to both sides.
+  if (firstFired) maybeCascade_(*firstFired);
   return triggered;
 }
 
 bool ExpressionManager::triggerExpression(const std::string& type, ExpressionTarget target) {
   bool triggered = false;
+  const ExpressionEntry* firstFired = nullptr;
   for (auto& entry : expressions) {
     if (entry.type == type && entry.expression && entry.expression->getTarget() == target) {
       entry.expression->trigger();
       triggered = true;
+      if (!firstFired) firstFired = &entry;
     }
+  }
+  if (firstFired) maybeCascade_(*firstFired);
+  return triggered;
+}
+
+bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
+  ExpressionTarget invTarget = static_cast<ExpressionTarget>(inv.target);
+  bool triggered = false;
+  for (auto& entry : expressions) {
+    if (entry.type != inv.type || !entry.expression) continue;
+    // TARGET_BOTH invocations fire any entry of this type; specific target
+    // fires only entries with that exact target.
+    if (invTarget != TARGET_BOTH && entry.expression->getTarget() != invTarget) {
+      continue;
+    }
+    // If the invocation supplies colors, override the expression's palette
+    // for this firing so the cascade carries the originator's color choices.
+    // configure() preserves intervalMin/Max/target from the entry's config —
+    // we're only swapping the color palette.
+    if (!inv.colors.empty()) {
+      entry.expression->configure(inv.colors,
+                                  entry.config.intervalMin,
+                                  entry.config.intervalMax,
+                                  entry.expression->getTarget());
+    }
+    entry.expression->trigger();
+    triggered = true;
+    // Loop-break invariant: NEVER cascade on a remote-triggered invocation.
   }
   return triggered;
 }

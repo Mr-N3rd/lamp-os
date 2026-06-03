@@ -69,6 +69,10 @@ class ExpressionParamsPanel extends StatelessWidget {
           durMax: _get('durationMax', 3),
           onRange: (lo, hi) =>
               _setBoth('durationMin', lo, 'durationMax', hi),
+          cascadeEnabled: _get('cascadeEnabled', 0) != 0,
+          cascadeStaggerMs: _get('cascadeStaggerMs', 0),
+          onCascadeEnabled: (v) => _set('cascadeEnabled', v ? 1 : 0),
+          onCascadeStaggerMs: (v) => _set('cascadeStaggerMs', v),
         ),
       _ => const SizedBox.shrink(),
     };
@@ -403,10 +407,18 @@ class _GlitchyParams extends StatelessWidget {
     required this.durMin,
     required this.durMax,
     required this.onRange,
+    required this.cascadeEnabled,
+    required this.cascadeStaggerMs,
+    required this.onCascadeEnabled,
+    required this.onCascadeStaggerMs,
   });
   final int durMin;
   final int durMax;
   final void Function(int, int) onRange;
+  final bool cascadeEnabled;
+  final int cascadeStaggerMs;
+  final ValueChanged<bool> onCascadeEnabled;
+  final ValueChanged<int> onCascadeStaggerMs;
 
   @override
   Widget build(BuildContext context) {
@@ -422,16 +434,54 @@ class _GlitchyParams extends StatelessWidget {
       return '${str.endsWith('.0') ? s.toInt().toString() : str}s';
     }
 
-    return _RangeParamSlider(
-      label: 'Glitch duration',
-      lo: durMin,
-      hi: durMax,
-      min: 1,
-      max: 60,
-      onChanged: onRange,
-      leftLabel: 'short',
-      rightLabel: 'long',
-      format: fmt,
+    // Slider granularity: 100ms steps over 0..5000ms. _ParamSlider derives
+    // divisions from `max - min`, so we scale the wire value (ms) down to
+    // 0..50 for the slider and back up on edit. Format mirrors the scale.
+    final cascadeSlider = _ParamSlider(
+      label: 'Delay between lamps',
+      value: (cascadeStaggerMs / 100).round().clamp(0, 50),
+      min: 0,
+      max: 50,
+      onChanged: (v) => onCascadeStaggerMs(v * 100),
+      leftLabel: 'together',
+      rightLabel: 'cascade',
+      format: (v) => v == 0 ? 'instant' : '${(v / 10).toStringAsFixed(1)}s',
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _RangeParamSlider(
+          label: 'Glitch duration',
+          lo: durMin,
+          hi: durMax,
+          min: 1,
+          max: 60,
+          onChanged: onRange,
+          leftLabel: 'short',
+          rightLabel: 'long',
+          format: fmt,
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Cascade to other lamps',
+                  style: TextStyle(
+                      color: BrandColors.lampWhite, fontSize: 14),
+                ),
+              ),
+              Switch(
+                value: cascadeEnabled,
+                onChanged: onCascadeEnabled,
+              ),
+            ],
+          ),
+        ),
+        if (cascadeEnabled) cascadeSlider,
+      ],
     );
   }
 }

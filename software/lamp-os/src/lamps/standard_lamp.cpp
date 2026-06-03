@@ -72,6 +72,17 @@ PendingOpJsonUpdate pendingExpressionOpJson;
 PendingOpJsonUpdate pendingWifiOpJson;
 PendingOpJsonUpdate pendingTestActionJson;
 PendingOpJsonUpdate pendingRemoteOpJson;
+
+// Pending triggerExpression invocations whose delayMs > 0 — drained from the
+// loop task once millis() reaches fireAtMs. Loop-task only (the WiFi-task
+// CONTROL_OP handler just posts JSON into pendingInboundOpJson, and the
+// drain that parses it into this queue runs on the loop task), so no mutex.
+struct DelayedInvocation {
+  lamp::ExpressionInvocation inv;
+  uint32_t fireAtMs;
+};
+static constexpr size_t MAX_PENDING_TRIGGERS = 16;
+std::vector<DelayedInvocation> pendingTriggers;
 // settings_blob processing moved to the loop drain so it serialises with
 // the other pending-op drains (especially expressionOp) on the same core.
 // Decrypt + auth still happen on Core 0's BLE callback; the merge +
@@ -149,6 +160,10 @@ void postPendingRemoteOpJson(const char* data, size_t len) {
   portEXIT_CRITICAL(&pendingMux);
 }
 
+// Forward decl — defined further below alongside the other globals so we can
+// route triggerExpression invocations into the manager from this function.
+extern lamp::ExpressionManager expressionManager;
+
 // Apply a remote-op payload locally (either from BLE remoteOp drain when
 // targetMac==self/broadcast, or from an incoming ESP-NOW MSG_CONTROL_OP).
 // Parses `char` and re-emits to the matching local pending-slot post. Runs
@@ -191,6 +206,23 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len) {
     serializeJson(doc, out);
     postPendingExpressionOpJson(out.data(), out.size());
 
+  } else if (strcmp(ch, "triggerExpression") == 0) {
+    // Receive side of the mesh expression-trigger primitive. The payload IS
+    // the invocation (the `char` key is the only wrapper). We never re-emit
+    // — that's the structural loop break.
+    lamp::ExpressionInvocation inv;
+    if (!lamp::parseInvocation(doc.as<JsonObjectConst>(), inv)) return;
+    if (inv.delayMs == 0) {
+      expressionManager.triggerInvocation(inv);
+    } else {
+      if (pendingTriggers.size() >= MAX_PENDING_TRIGGERS) {
+#ifdef LAMP_DEBUG
+        Serial.println("[loop] triggerExpression queue full, dropping");
+#endif
+        return;
+      }
+      pendingTriggers.push_back({inv, millis() + inv.delayMs});
+    }
   }
   // settings forwarding is intentionally deferred — it triggers a remote
   // reboot whose UX over the grid needs more thought. Follow-up plan.
@@ -495,6 +527,9 @@ void setup() {
     pendingInboundOpJson.valid = true;
     portEXIT_CRITICAL(&pendingMux);
   });
+  // Wire the cascade fan-out path. The manager only sends after this; before
+  // begin/setShowReceiver, local triggers fire but never cascade.
+  expressionManager.setShowReceiver(&showReceiver);
 
 };
 
@@ -909,6 +944,22 @@ void loop() {
             targetMac,
             reinterpret_cast<const uint8_t*>(payload.data()),
             payload.size());
+      }
+    }
+  }
+
+  // Fire any delayed triggerExpression invocations whose deadline has passed.
+  // Bounded queue (MAX_PENDING_TRIGGERS) keeps this O(1) amortised; ordering
+  // isn't strict (we walk in insertion order, fire ready entries, skip the
+  // rest) but the cascade design tolerates the slight per-tick jitter.
+  if (!pendingTriggers.empty()) {
+    const uint32_t now = millis();
+    for (auto it = pendingTriggers.begin(); it != pendingTriggers.end();) {
+      if (static_cast<int32_t>(now - it->fireAtMs) >= 0) {
+        expressionManager.triggerInvocation(it->inv);
+        it = pendingTriggers.erase(it);
+      } else {
+        ++it;
       }
     }
   }

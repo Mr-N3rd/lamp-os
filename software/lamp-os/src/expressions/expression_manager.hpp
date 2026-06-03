@@ -7,6 +7,7 @@
 #include "../config/config_types.hpp"
 #include "../core/frame_buffer.hpp"
 #include "./expression.hpp"
+#include "./expression_invocation.hpp"
 #include "./glitchy_expression.hpp"
 #include "./shifty_expression.hpp"
 #include "./pulse_expression.hpp"
@@ -16,6 +17,7 @@ namespace lamp {
 
 class Compositor;
 class ExpressionManager;
+class ShowReceiver;
 
 // Global expression manager access
 void setGlobalExpressionManager(ExpressionManager* manager);
@@ -26,20 +28,38 @@ ExpressionManager* getGlobalExpressionManager();
  */
 class ExpressionManager {
  private:
-  // Store expression with its type for triggering
+  // Store expression with its type for triggering. `config` is a snapshot
+  // of the ExpressionConfig that built this entry — kept so the manager can
+  // make cascade decisions without each Expression subclass having to
+  // expose its raw parameter map.
   struct ExpressionEntry {
     std::unique_ptr<Expression> expression;
     std::string type;
+    ExpressionConfig config;
   };
   std::vector<ExpressionEntry> expressions;
   FrameBuffer* shadeBuffer = nullptr;
   FrameBuffer* baseBuffer = nullptr;
+  ShowReceiver* showReceiver_ = nullptr;
+
+  // Send the cascade fan-out for an expression that just fired locally,
+  // if its config opts in via the cascadeEnabled parameter. No-op when
+  // no ShowReceiver has been wired in. Never called for remote-arrived
+  // triggers — that's the structural loop break.
+  void maybeCascade_(const ExpressionEntry& entry);
 
  public:
   /**
    * @brief Initialize manager with frame buffers
    */
   void begin(FrameBuffer* shade, FrameBuffer* base);
+
+  /**
+   * @brief Wire up the mesh send path for the cascade convention. Optional —
+   *        when unset, cascade is silently disabled (boot before mesh ready,
+   *        or test environments).
+   */
+  void setShowReceiver(ShowReceiver* receiver);
 
   /**
    * @brief Load expressions from config
@@ -64,15 +84,26 @@ class ExpressionManager {
   void clear();
 
   /**
-   * @brief Trigger every expression whose type matches.
+   * @brief Trigger every expression whose type matches. LOCAL path —
+   *        honors the cascade convention if configured.
    */
   bool triggerExpression(const std::string& type);
 
   /**
    * @brief Trigger expressions matching both type and target. Used by the
    *        per-row Test button to fire exactly the configured instance.
+   *        LOCAL path — honors the cascade convention if configured.
    */
   bool triggerExpression(const std::string& type, ExpressionTarget target);
+
+  /**
+   * @brief REMOTE path. Called only by the receive side of the mesh when a
+   *        triggerExpression CONTROL_OP arrives. Overrides colors for this
+   *        single firing (if the invocation provides any), then triggers
+   *        the matching configured expression(s). NEVER cascades — this is
+   *        the structural loop break that makes flood propagation safe.
+   */
+  bool triggerInvocation(const ExpressionInvocation& inv);
 
   std::vector<Color> getExpressionColors(const std::string& type) const;
 

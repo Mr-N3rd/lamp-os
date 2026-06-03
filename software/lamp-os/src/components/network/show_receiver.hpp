@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../../config/config.hpp"
+#include "../../expressions/expression_invocation.hpp"
 #include "./espnow_link.hpp"
 #include "./lamp_protocol.hpp"
 #include "./nearby_lamps.hpp"
@@ -63,6 +64,22 @@ class ShowReceiver {
   // Broadcast a CONTROL_OP frame onto the grid. Used by the BLE
   // CHAR_REMOTE_OP drain to forward a write to a far lamp.
   bool sendControlOp(const uint8_t targetMac[6], const uint8_t* payload, size_t payloadLen);
+
+  // Mesh expression-trigger API. Wraps `inv` in a
+  // `{char:"triggerExpression", ...}` CONTROL_OP payload and unicasts it.
+  // Receivers parse and dispatch to ExpressionManager::triggerInvocation,
+  // which never re-cascades — loop break is structural.
+  //
+  // sendExpressionTo: addressed to one peer by name. Returns false if the
+  // peer isn't currently reachable via ESP-NOW (no recent HELLO).
+  //
+  // sendExpressionToAll: fans out to every ESP-NOW-reachable peer (excluding
+  // self). When staggerMs > 0, each successive peer is assigned a delayMs
+  // of `inv.delayMs + i * staggerMs` so receivers can self-pace the cascade
+  // off their own millis() — no shared clock needed. Peers are iterated in
+  // name order for deterministic visual ordering.
+  bool sendExpressionTo(const std::string& peerName, const ExpressionInvocation& inv);
+  void sendExpressionToAll(const ExpressionInvocation& inv, uint32_t staggerMs = 0);
 
   // Static recv glue (the EspNowLink hands us a C function pointer).
   static ShowReceiver* s_instance;

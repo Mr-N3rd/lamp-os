@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace lamp {
@@ -37,6 +38,52 @@ void ShowReceiver::getMyMac(uint8_t out[6]) const {
 
 void ShowReceiver::setControlOpHandler(ControlOpHandler h) {
   controlOpHandler_ = std::move(h);
+}
+
+bool ShowReceiver::sendExpressionTo(const std::string& peerName,
+                                    const ExpressionInvocation& inv) {
+  auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
+  for (const auto& p : peers) {
+    if (p.name != peerName) continue;
+    if (!p.hasMac) break;
+    std::string json;
+    serializeInvocation(inv, json);
+    return sendControlOp(p.mac,
+                         reinterpret_cast<const uint8_t*>(json.data()),
+                         json.size());
+  }
+#ifdef LAMP_DEBUG
+  Serial.printf("[show] sendExpressionTo: peer '%s' not reachable\n",
+                peerName.c_str());
+#endif
+  return false;
+}
+
+void ShowReceiver::sendExpressionToAll(const ExpressionInvocation& inv,
+                                       uint32_t staggerMs) {
+  auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
+  std::vector<NearbyLamp> targets;
+  targets.reserve(peers.size());
+  for (const auto& p : peers) {
+    if (!p.hasMac) continue;
+    if (std::memcmp(p.mac, myMac_, 6) == 0) continue;  // never send to self
+    targets.push_back(p);
+  }
+  // Deterministic name order so the cascade direction is stable visit-to-visit
+  // (otherwise NearbyLamps internal insertion order would leak in).
+  std::sort(targets.begin(), targets.end(),
+            [](const NearbyLamp& a, const NearbyLamp& b) {
+              return a.name < b.name;
+            });
+  for (size_t i = 0; i < targets.size(); i++) {
+    ExpressionInvocation perPeer = inv;
+    perPeer.delayMs = inv.delayMs + static_cast<uint32_t>(i) * staggerMs;
+    std::string json;
+    serializeInvocation(perPeer, json);
+    sendControlOp(targets[i].mac,
+                  reinterpret_cast<const uint8_t*>(json.data()),
+                  json.size());
+  }
 }
 
 bool ShowReceiver::sendControlOp(const uint8_t targetMac[6],

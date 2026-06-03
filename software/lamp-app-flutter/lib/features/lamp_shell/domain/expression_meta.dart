@@ -83,7 +83,16 @@ class ExpressionTypeMeta {
           'Frequency sets how often, predictability tightens or '
           'loosens the timing, and glitch duration controls how long '
           'each flash holds.',
-      defaultParameters: {'durationMin': 1, 'durationMax': 3},
+      defaultParameters: {
+        'durationMin': 1,
+        'durationMax': 3,
+        // Mesh-trigger cascade convention (firmware-side, generic across
+        // expressions): when cascadeEnabled is 1, the lamp fans out a
+        // matching invocation to every reachable peer on local trigger,
+        // staggered by cascadeStaggerMs between successive lamps.
+        'cascadeEnabled': 0,
+        'cascadeStaggerMs': 0,
+      },
     ),
   ];
 
