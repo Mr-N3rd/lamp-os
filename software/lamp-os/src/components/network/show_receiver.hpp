@@ -66,7 +66,15 @@ class ShowReceiver {
 
   // Broadcast a CONTROL_OP frame onto the grid. Used by the BLE
   // CHAR_REMOTE_OP drain to forward a write to a far lamp.
-  bool sendControlOp(const uint8_t targetMac[6], const uint8_t* payload, size_t payloadLen);
+  //
+  // localOnly = true sets the wire flag that tells receivers to apply the
+  // op locally but skip the rebroadcast relay — reach is limited to the
+  // sender's direct radio range. Used by the expression-cascade path so
+  // expressions stay within the room rather than fanning across the grid.
+  // Other senders (BLE remoteOp forwarding, etc.) leave it false and the
+  // existing relay extends mesh reach as before.
+  bool sendControlOp(const uint8_t targetMac[6], const uint8_t* payload,
+                     size_t payloadLen, bool localOnly = false);
 
   // Mesh expression-trigger API. Wraps `inv` in a
   // `{char:"triggerExpression", ...}` CONTROL_OP payload and unicasts it.

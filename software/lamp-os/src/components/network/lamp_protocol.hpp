@@ -44,6 +44,14 @@ enum MsgType : uint8_t {
   MSG_CONTROL_OP = 0x03,
 };
 
+// High bit of the msgType byte. When set, receivers apply the frame locally
+// but skip the rebroadcast relay — cascade stays within direct radio range
+// instead of fanning across the grid. Set by the expression-cascade path;
+// other senders leave it off and the existing relay extends reach as before.
+// inspect() masks this bit out so existing msgType comparisons keep working.
+constexpr uint8_t FLAG_LOCAL_ONLY = 0x80;
+constexpr uint8_t MSG_TYPE_MASK   = 0x7F;
+
 constexpr size_t HEADER_SIZE = 6;
 constexpr size_t COLORS_SIZE = 24;       // header(6) + payload(18)
 constexpr size_t HELLO_FIXED_SIZE = 19;  // header(6) + sourceMac(6) + colors(8) — name length and bytes added on top
@@ -84,6 +92,7 @@ struct ParsedControlOp {
   uint8_t sourceMac[6];
   uint16_t payloadLen;
   const uint8_t* payload;  // points into the recv buffer; caller must not retain past this call
+  bool localOnly;          // FLAG_LOCAL_ONLY was set on the wire
 };
 
 // Build a COLORS frame into `buf`. Returns 0 on bad args, COLORS_SIZE on success.
@@ -137,7 +146,8 @@ inline size_t buildHello(uint8_t* buf, size_t bufLen, uint16_t seq,
 inline size_t buildControlOp(uint8_t* buf, size_t bufLen, uint16_t seq,
                              const uint8_t targetMac[6],
                              const uint8_t sourceMac[6],
-                             const uint8_t* payload, size_t payloadLen) {
+                             const uint8_t* payload, size_t payloadLen,
+                             bool localOnly = false) {
   if (!buf || !targetMac || !sourceMac) return 0;
   if (payloadLen > CONTROL_MAX_PAYLOAD) return 0;
   const size_t total = CONTROL_FIXED + payloadLen;
@@ -145,7 +155,9 @@ inline size_t buildControlOp(uint8_t* buf, size_t bufLen, uint16_t seq,
   buf[0] = MAGIC_0;
   buf[1] = MAGIC_1;
   buf[2] = PROTOCOL_VERSION;
-  buf[3] = MSG_CONTROL_OP;
+  // High bit signals "apply locally + skip relay" to receivers. inspect()
+  // masks this so msgType comparisons keep working unchanged.
+  buf[3] = MSG_CONTROL_OP | (localOnly ? FLAG_LOCAL_ONLY : 0);
   buf[4] = static_cast<uint8_t>(seq & 0xFF);
   buf[5] = static_cast<uint8_t>((seq >> 8) & 0xFF);
   std::memcpy(&buf[6], targetMac, 6);
@@ -156,12 +168,22 @@ inline size_t buildControlOp(uint8_t* buf, size_t bufLen, uint16_t seq,
   return total;
 }
 
-// Validate magic + version. Returns the msg type or 0 if invalid.
+// Validate magic + version. Returns the msg type (with the FLAG_LOCAL_ONLY
+// high bit masked out so MSG_TYPE comparisons keep working) or 0 if invalid.
 inline uint8_t inspect(const uint8_t* data, size_t len) {
   if (!data || len < HEADER_SIZE) return 0;
   if (data[0] != MAGIC_0 || data[1] != MAGIC_1) return 0;
   if (data[2] != PROTOCOL_VERSION) return 0;
-  return data[3];
+  return data[3] & MSG_TYPE_MASK;
+}
+
+// Peek at the FLAG_LOCAL_ONLY bit without parsing the rest of the frame.
+// Returns false for malformed / non-matching frames.
+inline bool isLocalOnly(const uint8_t* data, size_t len) {
+  if (!data || len < HEADER_SIZE) return false;
+  if (data[0] != MAGIC_0 || data[1] != MAGIC_1) return false;
+  if (data[2] != PROTOCOL_VERSION) return false;
+  return (data[3] & FLAG_LOCAL_ONLY) != 0;
 }
 
 inline bool parseColors(const uint8_t* data, size_t len, ParsedColors& out) {
@@ -184,6 +206,7 @@ inline bool parseControlOp(const uint8_t* data, size_t len, ParsedControlOp& out
   if (out.payloadLen > CONTROL_MAX_PAYLOAD) return false;
   if (len < CONTROL_FIXED + out.payloadLen) return false;
   out.payload = &data[CONTROL_FIXED];
+  out.localOnly = (data[3] & FLAG_LOCAL_ONLY) != 0;
   return true;
 }
 

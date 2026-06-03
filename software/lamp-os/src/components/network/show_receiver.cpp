@@ -55,9 +55,15 @@ static bool sendInvocationToMac(ShowReceiver& self, const uint8_t mac[6],
 #endif
     return false;
   }
+  // Expression cascades are intentionally local: receivers apply the
+  // invocation but the FLAG_LOCAL_ONLY bit tells them not to relay it.
+  // Reach is therefore whatever direct ESP-NOW radio range delivers —
+  // "lamps in the same physical space", which is the user's mental model
+  // of a cascade. Set true here so every per-peer frame carries the flag.
   return self.sendControlOp(mac,
                             reinterpret_cast<const uint8_t*>(json.data()),
-                            json.size());
+                            json.size(),
+                            /*localOnly=*/true);
 }
 
 bool ShowReceiver::sendExpressionTo(const std::string& peerName,
@@ -105,14 +111,16 @@ void ShowReceiver::sendExpressionToAll(const ExpressionInvocation& inv,
 }
 
 bool ShowReceiver::sendControlOp(const uint8_t targetMac[6],
-                                 const uint8_t* payload, size_t payloadLen) {
+                                 const uint8_t* payload, size_t payloadLen,
+                                 bool localOnly) {
   if (payloadLen > lamp_protocol::CONTROL_MAX_PAYLOAD) return false;
   uint8_t buf[lamp_protocol::CONTROL_MAX_SIZE];
   // sourceMac is THIS lamp — peers and the originator can dedup our own
   // re-broadcasts based on it.
   const size_t n = lamp_protocol::buildControlOp(buf, sizeof(buf), controlOpSeq_++,
                                                  targetMac, myMac_,
-                                                 payload, payloadLen);
+                                                 payload, payloadLen,
+                                                 localOnly);
   if (!n) return false;
   // Record in our own dedup ring so the inbound re-broadcast (from a peer)
   // doesn't loop back as an "apply locally".
@@ -187,8 +195,13 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, si
     if (!lamp_protocol::parseControlOp(data, len, op)) return;
     // Dedup by (sourceMac, seq) so a loop-relayed copy doesn't fire twice.
     if (!controlOpDedup_.record(op.sourceMac, lamp_protocol::MSG_CONTROL_OP, op.seq)) return;
-    // Rebroadcast for grid relay (terminates at peers that have seen this seq).
-    link_.broadcast(data, len);
+    // Rebroadcast for grid relay UNLESS the sender flagged this op localOnly
+    // (expression cascades do — see ShowReceiver::sendInvocationToMac). When
+    // localOnly is set, reach is limited to the sender's direct radio range
+    // instead of fanning across the whole mesh via relays.
+    if (!op.localOnly) {
+      link_.broadcast(data, len);
+    }
     // Apply locally if addressed to us or broadcast.
     static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     const bool forUs = (std::memcmp(op.targetMac, myMac_, 6) == 0) ||
