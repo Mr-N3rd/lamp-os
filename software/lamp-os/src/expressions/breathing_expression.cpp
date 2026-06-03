@@ -52,6 +52,20 @@ void BreathingExpression::updateBreathPhase() {
   if (breathPhase >= 1.0f) {
     breathPhase -= 1.0f;
 
+    // Transient one-shot path: when autoTriggerEnabled is false, this
+    // expression was created by ExpressionManager::triggerInvocation as a
+    // remote-cascaded one-breath instance (see expression_manager.cpp:242).
+    // BreathingExpression normally runs continuously with frames=100000 and
+    // animationState=PLAYING, which never naturally reaches STOPPED — so
+    // gcTransients() would never reap it (memory leak). Mark one complete
+    // cycle here so isAnimationComplete() returns true on the next tick.
+    if (!autoTriggerEnabled) {
+      animationState = STOPPED;
+      lastCompletedLoop = currentLoop + 1;
+      lastBreathUpdateMs = currentMs;
+      return;
+    }
+
     // Advance to next color if we have multiple colors
     if (colors.size() > 1) {
       if (cyclingForward) {
@@ -104,8 +118,12 @@ void BreathingExpression::onUpdate() {
 
 void BreathingExpression::control() {
   // For breathing, we want to always be running (no interval-based triggering)
-  // If stopped, trigger immediately to start
-  if (animationState == STOPPED) {
+  // If stopped, trigger immediately to start — but ONLY when auto-trigger is
+  // enabled. Transient one-shot instances (created by triggerInvocation with
+  // autoTriggerEnabled=false) must NOT self-retrigger here; if they did, they
+  // would never reach the STOPPED + lastCompletedLoop>0 state that
+  // gcTransients() needs to reap them, and would leak forever.
+  if (autoTriggerEnabled && animationState == STOPPED) {
     trigger();
   }
 
