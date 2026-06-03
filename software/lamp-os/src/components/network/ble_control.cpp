@@ -39,6 +39,10 @@ void postPendingRemoteOpJson(const char* data, size_t len);
 void postPendingSettingsBlobJson(const char* data, size_t len);
 void postPendingSocialDispositionsJson(const char* data, size_t len);
 void postPendingApplyEffectiveBrightness();
+// Audit fix #5: NVS commits cannot run on Core 0 (NimBLE host task).
+// onDisconnect posts this flag; the loop drain on Core 1 force-flushes
+// dispositions so a phone walk-off still persists the user's slider value.
+void postPendingFlushDispositions();
 static constexpr size_t MAX_PENDING_JSON = 256;
 static constexpr size_t MAX_PENDING_OP_JSON = 512;
 
@@ -222,6 +226,12 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     s_homeModePageActive = false;
     // Recompute effective home mode — gate switches back to presence-based.
     postPendingApplyEffectiveBrightness();
+    // Audit fix #5: phone walked away — force-commit any pending
+    // disposition writes so the user's final slider value survives a
+    // power loss before the 5s debounce window elapses. No-op if not
+    // dirty (the common case for disconnects unrelated to social tab).
+    // The flush runs on Core 1 from the loop drain; we just post a flag.
+    postPendingFlushDispositions();
 
 #ifdef LAMP_DEBUG
     Serial.printf("[ble_control] Client disconnected, handle=%u reason=%d\n", handle, reason);

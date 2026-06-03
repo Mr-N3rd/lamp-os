@@ -254,7 +254,14 @@ void Config::setDisposition(const std::string& peerName, uint8_t value) {
     dispositions_.erase(dispositions_.begin());
   }
   dispositions_[peerName] = value;
-  persistDispositions_();
+  // Audit fix: do NOT persist here. The slider-drag UX dragged ~20
+  // writes per peer per drag; multiplied across multiple peers and
+  // years of ownership, the 100k-write-per-page NVS budget is reachable.
+  // The loop drain on Core 1 polls maybeFlushDispositions and writes
+  // once the user stops touching the slider for kDispositionFlushIdleMs.
+  // BLE disconnect path force-flushes via flushDispositionsNow. Factory
+  // reset doesn't need a flush — it erases NVS wholesale.
+  dispositionsDebouncer_.markDirty(millis());
 }
 
 String Config::asDispositionsJson() const {
@@ -281,8 +288,25 @@ bool Config::setDispositionsFromJson(const char* json, size_t len) {
     if (v > 5) v = 5;
     dispositions_[std::string(kv.key().c_str())] = static_cast<uint8_t>(v);
   }
-  persistDispositions_();
+  // Audit fix: defer persistence. CHAR_SOCIAL_DISPOSITIONS bulk writes
+  // arrive on every slider drag from the app, each re-serialising the
+  // full map blob — the worst case for NVS wear. The Core 1 loop drain
+  // (maybeFlushDispositions) commits once idle; the BLE onDisconnect
+  // post forces a synchronous commit when the phone walks away.
+  dispositionsDebouncer_.markDirty(millis());
   return true;
+}
+
+void Config::maybeFlushDispositions(uint32_t nowMs) {
+  if (!dispositionsDebouncer_.shouldFlush(nowMs)) return;
+  persistDispositions_();
+  dispositionsDebouncer_.clear();
+}
+
+void Config::flushDispositionsNow() {
+  if (!dispositionsDebouncer_.dirty()) return;
+  persistDispositions_();
+  dispositionsDebouncer_.clear();
 }
 
 JsonDocument Config::asJsonDocument() {

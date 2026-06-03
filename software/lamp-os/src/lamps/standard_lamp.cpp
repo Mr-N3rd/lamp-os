@@ -67,6 +67,12 @@ volatile int8_t pendingBrightness = -1;
 // updated via CHAR_HOME_PREVIEW cmd 0x02. The loop task on Core 1 drains
 // it and calls applyEffectiveBrightness so the strip transitions cleanly.
 volatile bool pendingApplyEffectiveBrightness = false;
+// Flag set from Core 0 (BLE ServerCallbacks::onDisconnect) when the phone
+// walks away — forces a synchronous disposition NVS commit so the user's
+// final slider value survives even if power is yanked before the debounce
+// window elapses. Core 1 drain calls config.flushDispositionsNow().
+// Audit finding #5 (NVS write amplification) — see config.hpp.
+volatile bool pendingFlushDispositionsRequested = false;
 PendingJsonUpdate pendingBaseColorsJson;
 PendingJsonUpdate pendingShadeColorsJson;
 PendingKnockoutUpdate pendingKnockout;
@@ -115,6 +121,11 @@ void postPendingShadeColorsJson(const char* data, size_t len) { postPendingJson(
 void postPendingBaseColorsJson(const char* data, size_t len)  { postPendingJson(pendingBaseColorsJson, data, len); }
 void postPendingBrightness(int8_t level) { pendingBrightness = level; }
 void postPendingApplyEffectiveBrightness() { pendingApplyEffectiveBrightness = true; }
+// Single-bit post called from the NimBLE host task (Core 0) inside
+// ServerCallbacks::onDisconnect — NVS is NOT Core-0-safe so we cannot
+// call config.flushDispositionsNow() there directly. The loop drain on
+// Core 1 picks this up next iteration and runs the synchronous flush.
+void postPendingFlushDispositions() { pendingFlushDispositionsRequested = true; }
 void postPendingKnockout(uint8_t pixel, uint8_t brightness) {
   portENTER_CRITICAL(&pendingMux);
   pendingKnockout.pixel = pixel;
@@ -593,6 +604,20 @@ void loop() {
     // (cmd 0x02) all funnel here — refresh the compositor homeMode gate
     // and the strip brightness together.
     reapplyHomeModeState();
+  }
+
+  // Audit fix #5: NVS write amplification on disposition slider drag.
+  // The eager persist inside Config::setDisposition was replaced with a
+  // dirty-flag + timestamp; this poll runs the actual commit when the
+  // user has been idle for kDispositionFlushIdleMs (5s). Cheap when
+  // nothing is dirty — single bool check + uint32_t subtraction.
+  config.maybeFlushDispositions(millis());
+  if (pendingFlushDispositionsRequested) {
+    // Phone disconnected (set on Core 0 in ble_control's onDisconnect).
+    // Force-commit so the user's final slider value survives even if
+    // power is yanked before the next 5s idle window would fire.
+    pendingFlushDispositionsRequested = false;
+    config.flushDispositionsNow();
   }
 
   if (pendingBrightness >= 0) {
