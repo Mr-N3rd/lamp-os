@@ -10,9 +10,13 @@ import '../../../../core/theme/brand_colors.dart';
 /// (`software/lamp-os/src/expressions/*_expression.cpp`):
 ///   - breathing.breathSpeed      → 1..60 seconds
 ///   - pulse.pulseSpeed           → 1..10 seconds (total wave travel time)
+///   - pulse.cascadeEnabled       → 0/1 (mesh fan-out toggle)
+///   - pulse.cascadeStaggerMs     → 0..5000 ms between peers
 ///   - shifty.shiftDurationMin/Max → 60..1800 seconds (1..30 min)
 ///   - shifty.fadeDuration         → 10..300 seconds
 ///   - glitchy.durationMin/Max    → 1..60 frames (≈ 1/30 s each)
+///   - glitchy.cascadeEnabled     → 0/1 (mesh fan-out toggle)
+///   - glitchy.cascadeStaggerMs   → 0..5000 ms between peers
 class ExpressionParamsPanel extends StatelessWidget {
   const ExpressionParamsPanel({
     super.key,
@@ -55,6 +59,10 @@ class ExpressionParamsPanel extends StatelessWidget {
       'pulse' => _PulseParams(
           pulseSpeed: _get('pulseSpeed', 3),
           onPulseSpeed: (v) => _set('pulseSpeed', v),
+          cascadeEnabled: _get('cascadeEnabled', 0) != 0,
+          cascadeStaggerMs: _get('cascadeStaggerMs', 0),
+          onCascadeEnabled: (v) => _set('cascadeEnabled', v ? 1 : 0),
+          onCascadeStaggerMs: (v) => _set('cascadeStaggerMs', v),
         ),
       'shifty' => _ShiftyParams(
           shiftMin: _get('shiftDurationMin', 300),
@@ -327,26 +335,73 @@ class _PulseParams extends StatelessWidget {
   const _PulseParams({
     required this.pulseSpeed,
     required this.onPulseSpeed,
+    required this.cascadeEnabled,
+    required this.cascadeStaggerMs,
+    required this.onCascadeEnabled,
+    required this.onCascadeStaggerMs,
   });
   final int pulseSpeed;
   final ValueChanged<int> onPulseSpeed;
+  final bool cascadeEnabled;
+  final int cascadeStaggerMs;
+  final ValueChanged<bool> onCascadeEnabled;
+  final ValueChanged<int> onCascadeStaggerMs;
 
   @override
   Widget build(BuildContext context) {
-    return _ParamSlider(
-      // pulseSpeed is firmware-side "total travel time" in seconds
-      // (1–10s, per pulse_expression.cpp:27). Higher value = slower
-      // wave. We invert visually so right = faster and label slow/fast,
-      // matching breath cycle's treatment.
-      label: 'Pulse speed',
-      value: pulseSpeed,
-      min: 1,
-      max: 10,
-      onChanged: onPulseSpeed,
-      invert: true,
-      leftLabel: 'slow',
-      rightLabel: 'fast',
-      format: (v) => '${v}s',
+    // Slider granularity: 100ms steps over 0..5000ms. _ParamSlider derives
+    // divisions from `max - min`, so we scale the wire value (ms) down to
+    // 0..50 for the slider and back up on edit. Mirrors Glitchy's cascade
+    // slider; see _GlitchyParams for the rationale on always-rendering with
+    // a disabled style when the toggle is off.
+    String fmtMs(int sliderValue) {
+      final ms = sliderValue * 100;
+      if (ms < 1000) return '${ms}ms';
+      final s = ms / 1000.0;
+      final str = s.toStringAsFixed(1);
+      return '${str.endsWith('.0') ? s.toInt().toString() : str}s';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ParamSlider(
+          // pulseSpeed is firmware-side "total travel time" in seconds
+          // (1–10s, per pulse_expression.cpp:27). Higher value = slower
+          // wave. We invert visually so right = faster and label slow/fast,
+          // matching breath cycle's treatment.
+          label: 'Pulse speed',
+          value: pulseSpeed,
+          min: 1,
+          max: 10,
+          onChanged: onPulseSpeed,
+          invert: true,
+          leftLabel: 'slow',
+          rightLabel: 'fast',
+          format: (v) => '${v}s',
+        ),
+        Row(
+          children: [
+            const Expanded(child: _SectionLabel('Cascade to other lamps')),
+            Switch(
+              value: cascadeEnabled,
+              onChanged: onCascadeEnabled,
+            ),
+          ],
+        ),
+        _ParamSlider(
+          label: 'Delay between lamps',
+          value: (cascadeStaggerMs / 100).round().clamp(0, 50),
+          min: 0,
+          max: 50,
+          onChanged: cascadeEnabled
+              ? (v) => onCascadeStaggerMs(v * 100)
+              : null,
+          leftLabel: 'instant',
+          rightLabel: 'slow ripple',
+          format: fmtMs,
+        ),
+      ],
     );
   }
 }

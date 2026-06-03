@@ -90,8 +90,11 @@ void PulseExpression::updateWavePosition() {
 }
 
 void PulseExpression::selectNextColor() {
-  if (colors.size() > 1) {
-    // Pick random color from palette
+  // Capture into pulseColor on every trigger (not just when the palette
+  // has 2+ entries) so receive-side cascade overrides land correctly even
+  // for single-color invocations. getRandomColor() over a 1-element vector
+  // returns that element, so the call is safe and idempotent.
+  if (!colors.empty()) {
     pulseColor = getRandomColor();
   }
 }

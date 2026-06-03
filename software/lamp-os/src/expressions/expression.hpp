@@ -101,17 +101,33 @@ class Expression : public AnimatedBehavior {
    *
    *        SCOPE: the manager's snapshot-set-trigger-restore pattern is
    *        fully correct for expression types that capture any color they
-   *        need into a private member inside onTrigger() (e.g. Glitchy,
-   *        which assigns glitchColor = getRandomColor() before returning).
-   *        For continuous expressions that read `colors` in onUpdate()
-   *        on later frames (Pulse, Breathing, Shifty), the restore happens
-   *        before onUpdate runs and the override is silently dropped —
-   *        those peers will animate with their own configured palette.
-   *        That's acceptable for slice 1 (cascade UI is Glitchy-only). When
-   *        cascade is exposed for continuous types, introduce a transient
-   *        colorsOverride_ member consumed by subclasses' onUpdate paths.
+   *        need into a private member inside onTrigger() and never read
+   *        `colors` again on later frames. Both Glitchy (`glitchColor =
+   *        getRandomColor()` in its onTrigger) and Pulse (`pulseColor =
+   *        getRandomColor()` via selectNextColor in its onTrigger; draw
+   *        reads only pulseColor) fit this contract — receive-side cascade
+   *        overrides land on the chosen color for the firing.
+   *
+   *        Breathing and Shifty read `colors` continuously from onUpdate()
+   *        and draw(), so the snapshot-restore wins and the override is
+   *        silently dropped — those peers will animate with their own
+   *        configured palette. When cascade UI is exposed for those types,
+   *        introduce a transient colorsOverride_ member consumed by their
+   *        onUpdate paths.
    */
   void setColors(const std::vector<Color>& inColors) { colors = inColors; }
+
+  /**
+   * @brief True once the expression has finished at least one animation cycle
+   *        and is back in STOPPED. Used by ExpressionManager's transient GC
+   *        to know when a remote-cascaded one-shot can be removed from the
+   *        compositor and destroyed. Defaults are STOPPED + lastCompletedLoop=0
+   *        on a fresh instance, so this returns false until trigger() has
+   *        fired AND that firing has completed.
+   */
+  bool isAnimationComplete() const {
+    return animationState == STOPPED && lastCompletedLoop > 0;
+  }
 
   // Suppresses auto-trigger from control() while true. Manual trigger() and
   // chain-triggered firing still work. Listing's enabled toggle drives this.

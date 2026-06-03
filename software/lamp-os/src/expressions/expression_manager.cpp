@@ -40,40 +40,46 @@ void ExpressionManager::loadFromConfig(const ExpressionSettings& settings) {
 }
 
 
+// Factory: build an Expression subclass instance for `type` bound to `buffer`,
+// configured with the given palette / interval range / target / params.
+// Returns nullptr for unknown types. Shared by addExpression (configured
+// entries) and triggerInvocation (transient one-shots from remote cascades) —
+// neither path needs to know the per-subclass constructor arguments.
+static std::unique_ptr<Expression> makeExpression(
+    const std::string& type, FrameBuffer* buffer,
+    const std::vector<Color>& colors,
+    uint32_t intervalMin, uint32_t intervalMax,
+    ExpressionTarget target,
+    const std::map<std::string, uint32_t>& parameters) {
+  std::unique_ptr<Expression> expr;
+  if (type == "glitchy") {
+    auto e = std::make_unique<GlitchyExpression>(buffer, 3);
+    e->configure(colors, intervalMin, intervalMax, target);
+    e->configureFromParameters(parameters);
+    expr = std::move(e);
+  } else if (type == "shifty") {
+    auto e = std::make_unique<ShiftyExpression>(buffer, 120);
+    e->configure(colors, intervalMin, intervalMax, target);
+    e->configureFromParameters(parameters);
+    expr = std::move(e);
+  } else if (type == "pulse") {
+    auto e = std::make_unique<PulseExpression>(buffer, 60);
+    e->configure(colors, intervalMin, intervalMax, target);
+    e->configureFromParameters(parameters);
+    expr = std::move(e);
+  } else if (type == "breathing") {
+    auto e = std::make_unique<BreathingExpression>(buffer, 60);
+    e->configure(colors, intervalMin, intervalMax, target);
+    e->configureFromParameters(parameters);
+    expr = std::move(e);
+  }
+  return expr;
+}
+
 void ExpressionManager::addExpression(const ExpressionConfig& config) {
   if (!shadeBuffer || !baseBuffer) return;
 
   auto target = static_cast<ExpressionTarget>(config.target);
-
-  // Lambda to create appropriate expression type
-  auto createExpression = [&](FrameBuffer* buffer) -> std::unique_ptr<Expression> {
-    std::unique_ptr<Expression> expr;
-
-    if (config.type == "glitchy") {
-      auto glitchyExpr = std::make_unique<GlitchyExpression>(buffer, 3);
-      glitchyExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
-      glitchyExpr->configureFromParameters(config.parameters);
-      expr = std::move(glitchyExpr);
-    } else if (config.type == "shifty") {
-      auto shiftyExpr = std::make_unique<ShiftyExpression>(buffer, 120);
-      shiftyExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
-      shiftyExpr->configureFromParameters(config.parameters);
-      expr = std::move(shiftyExpr);
-    } else if (config.type == "pulse") {
-      auto pulseExpr = std::make_unique<PulseExpression>(buffer, 60);
-      pulseExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
-      pulseExpr->configureFromParameters(config.parameters);
-      expr = std::move(pulseExpr);
-    } else if (config.type == "breathing") {
-      auto breathingExpr = std::make_unique<BreathingExpression>(buffer, 60);
-      breathingExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
-      breathingExpr->configureFromParameters(config.parameters);
-      expr = std::move(breathingExpr);
-    }
-
-    if (expr) expr->autoTriggerEnabled = config.enabled;
-    return expr;
-  };
 
   // Determine target buffers
   std::vector<FrameBuffer*> targetBuffers;
@@ -85,7 +91,10 @@ void ExpressionManager::addExpression(const ExpressionConfig& config) {
 
   // Create expressions for each target buffer
   for (auto* buffer : targetBuffers) {
-    if (auto expr = createExpression(buffer)) {
+    if (auto expr = makeExpression(config.type, buffer, config.colors,
+                                   config.intervalMin, config.intervalMax,
+                                   target, config.parameters)) {
+      expr->autoTriggerEnabled = config.enabled;
       expressions.push_back({std::move(expr), config.type, config});
     }
   }
@@ -93,6 +102,10 @@ void ExpressionManager::addExpression(const ExpressionConfig& config) {
 
 void ExpressionManager::setShowReceiver(ShowReceiver* receiver) {
   showReceiver_ = receiver;
+}
+
+void ExpressionManager::setCompositor(Compositor* compositor) {
+  compositor_ = compositor;
 }
 
 void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
@@ -170,42 +183,64 @@ void ExpressionManager::onExpressionFired(Expression* e) {
 }
 
 bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
+  if (!shadeBuffer || !baseBuffer) return false;
+
   ExpressionTarget invTarget = static_cast<ExpressionTarget>(inv.target);
-  bool triggered = false;
-  // Loop-break invariant: remote-arrived invocations MUST NOT re-cascade.
-  // Expression::trigger() now calls onExpressionFired unconditionally, so
-  // we set the suppress flag for the duration of this remote dispatch.
+
+  // Determine target buffers — same convention as addExpression. TARGET_BOTH
+  // fires on both halves of the lamp; specific target fires on one.
+  std::vector<FrameBuffer*> targetBuffers;
+  if (invTarget == TARGET_BOTH) {
+    targetBuffers = {shadeBuffer, baseBuffer};
+  } else if (invTarget == TARGET_SHADE) {
+    targetBuffers = {shadeBuffer};
+  } else if (invTarget == TARGET_BASE) {
+    targetBuffers = {baseBuffer};
+  } else {
+    return false;
+  }
+
+  // Loop-break invariant: the transient's trigger() will call
+  // onExpressionFired via the global manager pointer; suppress so a
+  // remote-received trigger can never re-cascade. Receivers are terminal in
+  // the propagation graph.
   suppressCascade_ = true;
-  for (auto& entry : expressions) {
-    if (entry.type != inv.type || !entry.expression) continue;
-    // TARGET_BOTH invocations fire any entry of this type; specific target
-    // fires only entries with that exact target. Intentional double-fire:
-    // a TARGET_BOTH expression has TWO entries on this lamp (shade buffer +
-    // base buffer, created by addExpression's targetBuffers loop), and both
-    // halves of the lamp should animate together.
-    if (invTarget != TARGET_BOTH && entry.expression->getTarget() != invTarget) {
-      continue;
-    }
-    // If the invocation supplies colors, swap the palette ONLY for this
-    // firing — restore immediately after trigger() so the receiver's local
-    // config isn't permanently mutated and subsequent local triggers use the
-    // user's configured palette. Safe for one-shot expressions whose
-    // onTrigger captures the color (Glitchy). For continuous expressions
-    // that read `colors` in onUpdate (Pulse/Breathing/Shifty), the restore
-    // wins and the override is silently dropped — see the SCOPE note on
-    // Expression::setColors. Acceptable for slice 1 (Glitchy-only cascade).
-    if (!inv.colors.empty()) {
-      const auto savedColors = entry.expression->getColors();
-      entry.expression->setColors(inv.colors);
-      entry.expression->trigger();
-      entry.expression->setColors(savedColors);
-    } else {
-      entry.expression->trigger();
-    }
+
+  bool triggered = false;
+  for (auto* buffer : targetBuffers) {
+    // Build a fresh one-shot Expression instance directly from the
+    // invocation. NEVER consults this lamp's `expressions` (configured)
+    // vector — the receiver's local config is intentionally irrelevant.
+    // The cascade is a self-contained "execute this expression once and
+    // forget it" command; the receiver's own configured expressions remain
+    // entirely independent (untouched, unread, unmodified).
+    auto expr = makeExpression(inv.type, buffer, inv.colors,
+                               /*intervalMin*/ 60, /*intervalMax*/ 900,
+                               invTarget, inv.parameters);
+    if (!expr) continue;  // unknown type
+    expr->autoTriggerEnabled = false;  // pure one-shot — never re-fires itself
+
+    Expression* raw = expr.get();
+    if (compositor_) compositor_->addBehavior(raw);
+    transientExpressions_.push_back(std::move(expr));
+    raw->trigger();
     triggered = true;
   }
+
   suppressCascade_ = false;
   return triggered;
+}
+
+void ExpressionManager::gcTransients() {
+  if (transientExpressions_.empty()) return;
+  for (auto it = transientExpressions_.begin(); it != transientExpressions_.end();) {
+    if ((*it)->isAnimationComplete()) {
+      if (compositor_) compositor_->removeBehavior(it->get());
+      it = transientExpressions_.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 std::vector<Color> ExpressionManager::getExpressionColors(const std::string& type) const {

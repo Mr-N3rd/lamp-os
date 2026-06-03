@@ -56,7 +56,15 @@ class ExpressionTypeMeta {
           'A band of color that travels along the lamp, blending with '
           'the colors already showing. Pulse speed sets how fast it '
           'sweeps from end to end.',
-      defaultParameters: {'pulseSpeed': 3},
+      defaultParameters: {
+        'pulseSpeed': 3,
+        // Mesh-trigger cascade convention (firmware-side, generic across
+        // expressions): when cascadeEnabled is 1, the lamp fans out a
+        // matching invocation to every reachable peer on local trigger,
+        // staggered by cascadeStaggerMs between successive lamps.
+        'cascadeEnabled': 0,
+        'cascadeStaggerMs': 0,
+      },
     ),
     ExpressionTypeMeta(
       key: 'shifty',

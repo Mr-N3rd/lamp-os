@@ -41,11 +41,19 @@ class ExpressionManager {
   FrameBuffer* shadeBuffer = nullptr;
   FrameBuffer* baseBuffer = nullptr;
   ShowReceiver* showReceiver_ = nullptr;
+  Compositor* compositor_ = nullptr;
   // Set during the manager's own trigger* loops so per-entry Expression::trigger()
   // callbacks don't fan out a cascade we're already handling explicitly (or
   // intentionally skipping for remote-arrived invocations). Loop-task only —
   // no concurrency.
   bool suppressCascade_ = false;
+
+  // One-shot Expression instances created on-demand by triggerInvocation when
+  // a remote cascade arrives. They live in the compositor for the duration of
+  // their animation, then gcTransients() removes them. Entirely independent of
+  // the `expressions` (configured) vector — no interaction with the receiver's
+  // local config in any direction.
+  std::vector<std::unique_ptr<Expression>> transientExpressions_;
 
   // Send the cascade fan-out for an expression that just fired locally,
   // if its config opts in via the cascadeEnabled parameter. No-op when
@@ -65,6 +73,14 @@ class ExpressionManager {
    *        or test environments).
    */
   void setShowReceiver(ShowReceiver* receiver);
+
+  /**
+   * @brief Wire up the compositor so triggerInvocation can lazy-upsert a
+   *        transient entry when a remote cascade arrives for an expression
+   *        type the receiver doesn't have configured. Without this, remote
+   *        triggers for unconfigured types are silently no-op'd.
+   */
+  void setCompositor(Compositor* compositor);
 
   /**
    * @brief Load expressions from config
@@ -118,6 +134,15 @@ class ExpressionManager {
    *        trigger* loops are running so they can batch cascade themselves.
    */
   void onExpressionFired(Expression* e);
+
+  /**
+   * @brief Garbage-collect transient one-shot expressions created by
+   *        triggerInvocation whose animation has finished. Unregisters them
+   *        from the compositor and destroys the instance. Cheap; safe to
+   *        call every loop tick. Call AFTER compositor.tick() so the final
+   *        frame of the animation gets drawn before removal.
+   */
+  void gcTransients();
 
   std::vector<Color> getExpressionColors(const std::string& type) const;
 

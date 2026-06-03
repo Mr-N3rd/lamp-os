@@ -534,6 +534,10 @@ void setup() {
   // Wire the cascade fan-out path. The manager only sends after this; before
   // begin/setShowReceiver, local triggers fire but never cascade.
   expressionManager.setShowReceiver(&showReceiver);
+  // Compositor wired so the manager can lazy-upsert a transient entry when a
+  // remote cascade arrives for an expression type that's not configured on
+  // this lamp — receivers no longer need to pre-configure every type.
+  expressionManager.setCompositor(&compositor);
   // One-shot reservation so the loop-task drain never reallocates mid-frame.
   pendingTriggers.reserve(MAX_PENDING_TRIGGERS);
 
@@ -976,4 +980,9 @@ void loop() {
   showReceiver.tick();
 
   compositor.tick();
+
+  // Reap transient one-shot expressions (created by triggerInvocation when
+  // a remote cascade arrived) whose animations have finished. AFTER tick so
+  // the final frame of the animation is drawn before removal.
+  expressionManager.gcTransients();
 };
