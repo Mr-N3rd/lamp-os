@@ -1,11 +1,11 @@
-#include "./social.hpp"
+#include "social.hpp"
 
 #include <Arduino.h>
 
-#include "../components/network/nearby_lamps.hpp"
-#include "../config/config.hpp"
-#include "../util/color.hpp"
-#include "../util/fade.hpp"
+#include "components/network/nearby_lamps.hpp"
+#include "config/config.hpp"
+#include "util/color.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
 

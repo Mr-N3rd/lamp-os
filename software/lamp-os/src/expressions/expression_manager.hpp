@@ -1,19 +1,18 @@
-#ifndef LAMP_EXPRESSIONS_MANAGER_H
-#define LAMP_EXPRESSIONS_MANAGER_H
+#pragma once
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "../config/config_types.hpp"
-#include "../core/frame_buffer.hpp"
-#include "./expression.hpp"
-#include "./expression_invocation.hpp"
-#include "./glitchy_expression.hpp"
-#include "./shifty_expression.hpp"
-#include "./pulse_expression.hpp"
-#include "./breathing_expression.hpp"
+#include "config/config_types.hpp"
+#include "core/frame_buffer.hpp"
+#include "expression.hpp"
+#include "expression_invocation.hpp"
+#include "glitchy_expression.hpp"
+#include "shifty_expression.hpp"
+#include "pulse_expression.hpp"
+#include "breathing_expression.hpp"
 
 namespace lamp {
 
@@ -235,5 +234,3 @@ class ExpressionManager {
 };
 
 }  // namespace lamp
-
-#endif

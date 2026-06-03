@@ -1,5 +1,4 @@
-#ifndef LAMP_CONFIG_CONFIG_TYPES_H
-#define LAMP_CONFIG_CONFIG_TYPES_H
+#pragma once
 
 #include <cstdint>
 #include <map>
@@ -7,7 +6,7 @@
 #include <variant>
 #include <vector>
 
-#include "../util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 
@@ -153,4 +152,3 @@ class HomeModeSettings {
 };
 
 }  // namespace lamp
-#endif

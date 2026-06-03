@@ -1,4 +1,4 @@
-#include "./color.hpp"
+#include "color.hpp"
 
 #include <cmath>
 #include <cstdint>

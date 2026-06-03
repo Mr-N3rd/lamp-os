@@ -1,9 +1,8 @@
-#ifndef LAMP_COMPONENTS_NETWORK_BLUETOOTH_H
-#define LAMP_COMPONENTS_NETWORK_BLUETOOTH_H
+#pragma once
 
 #include <string>
 
-#include "../../config/config.hpp"
+#include "config/config.hpp"
 
 // Lamp manufacturer identifier
 #define BLE_LAMP_MAGIC_NUMBER 42069
@@ -85,4 +84,3 @@ class BluetoothComponent {
   uint32_t m_lastAdvFlushMs = 0;
 };
 }  // namespace lamp
-#endif

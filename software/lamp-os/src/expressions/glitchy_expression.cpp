@@ -1,6 +1,6 @@
-#include "./glitchy_expression.hpp"
+#include "glitchy_expression.hpp"
 #include <Arduino.h>
-#include "../util/fade.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
 

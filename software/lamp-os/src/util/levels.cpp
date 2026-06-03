@@ -1,8 +1,8 @@
-#include "./levels.hpp"
+#include "levels.hpp"
 
 #include <cstdint>
 
-#include "./color.hpp"
+#include "color.hpp"
 
 namespace lamp {
 uint8_t calculateBrightnessLevel(uint8_t value, uint8_t percentage) {

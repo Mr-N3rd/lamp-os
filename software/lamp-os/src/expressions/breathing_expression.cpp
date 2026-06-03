@@ -1,10 +1,10 @@
-#include "./breathing_expression.hpp"
+#include "breathing_expression.hpp"
 
 #include <Arduino.h>
 #include <algorithm>
 #include <cmath>
 
-#include "../util/fade.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
 

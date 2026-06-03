@@ -1,10 +1,10 @@
-#include "./shifty_expression.hpp"
+#include "shifty_expression.hpp"
 
 #include <Arduino.h>
 #include <algorithm>
 
-#include "../util/fade.hpp"
-#include "./expression_manager.hpp"
+#include "util/fade.hpp"
+#include "expression_manager.hpp"
 
 namespace lamp {
 

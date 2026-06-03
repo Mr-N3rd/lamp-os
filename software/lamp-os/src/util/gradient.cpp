@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "./color.hpp"
-#include "./fade.hpp"
+#include "color.hpp"
+#include "fade.hpp"
 
 namespace lamp {
 namespace {

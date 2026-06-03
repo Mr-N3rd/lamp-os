@@ -1,9 +1,8 @@
-#ifndef LAMP_UTIL_FADE_H
-#define LAMP_UTIL_FADE_H
+#pragma once
 
 #include <cstdint>
 
-#include "./color.hpp"
+#include "color.hpp"
 
 /**
  * Interested in bulding new luts for different types of easing?
@@ -46,4 +45,3 @@ Color fade(Color start, Color end, uint32_t steps, uint32_t currentStep);
  */
 Color fadeLinear(Color start, Color end, uint32_t steps, uint32_t currentStep);
 }  // namespace lamp
-#endif

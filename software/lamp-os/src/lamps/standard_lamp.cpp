@@ -1,4 +1,4 @@
-#include "./standard_lamp.hpp"
+#include "standard_lamp.hpp"
 
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
@@ -8,27 +8,27 @@
 #include <cstdint>
 #include <string>
 
-#include "../components/network/bluetooth.hpp"
-#include "../components/network/ble_control.hpp"
-#include "../components/network/nearby_lamps.hpp"
-#include "../components/network/show_receiver.hpp"
-#include "../components/network/wifi.hpp"
-#include "../behaviors/show_behavior.hpp"
-#include "../expressions/expression_manager.hpp"
-#include "../util/color.hpp"
-#include "./behaviors/configurator.hpp"
-#include "./behaviors/fade_out.hpp"
-#include "./behaviors/knockout.hpp"
-#include "./behaviors/social.hpp"
-#include "./config/config.hpp"
-#include "./core/animated_behavior.hpp"
-#include "./core/compositor.hpp"
-#include "./core/frame_buffer.hpp"
-#include "./globals.hpp"
-#include "./lamps/pending_json_slot.hpp"
-#include "./util/color.hpp"
-#include "./util/gradient.hpp"
-#include "./util/levels.hpp"
+#include "components/network/bluetooth.hpp"
+#include "components/network/ble_control.hpp"
+#include "components/network/nearby_lamps.hpp"
+#include "components/network/show_receiver.hpp"
+#include "components/network/wifi.hpp"
+#include "behaviors/show_behavior.hpp"
+#include "expressions/expression_manager.hpp"
+#include "util/color.hpp"
+#include "behaviors/configurator.hpp"
+#include "behaviors/fade_out.hpp"
+#include "behaviors/knockout.hpp"
+#include "behaviors/social.hpp"
+#include "config/config.hpp"
+#include "core/animated_behavior.hpp"
+#include "core/compositor.hpp"
+#include "core/frame_buffer.hpp"
+#include "globals.hpp"
+#include "pending_json_slot.hpp"
+#include "util/color.hpp"
+#include "util/gradient.hpp"
+#include "util/levels.hpp"
 
 Adafruit_NeoPixel* shadeStrip = nullptr;
 Adafruit_NeoPixel* baseStrip = nullptr;

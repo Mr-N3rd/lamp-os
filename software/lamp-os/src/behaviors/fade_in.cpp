@@ -1,7 +1,7 @@
-#include "./fade_in.hpp"
+#include "fade_in.hpp"
 
-#include "../util/color.hpp"
-#include "../util/fade.hpp"
+#include "util/color.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
 void FadeInBehavior::draw() {

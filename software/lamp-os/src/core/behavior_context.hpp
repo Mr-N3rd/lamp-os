@@ -1,5 +1,4 @@
-#ifndef LAMP_CORE_BEHAVIOR_CONTEXT_H
-#define LAMP_CORE_BEHAVIOR_CONTEXT_H
+#pragma once
 
 #include <vector>
 
@@ -34,5 +33,3 @@ struct BehaviorContext {
 };
 
 }  // namespace lamp
-
-#endif

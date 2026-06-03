@@ -1,5 +1,4 @@
-#ifndef LAMP_CONFIG_CONFIG_H
-#define LAMP_CONFIG_CONFIG_H
+#pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -8,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "./config_types.hpp"
+#include "config_types.hpp"
 
 namespace lamp {
 
@@ -231,5 +230,3 @@ class Config {
   bool settingsBlobDirty_ = true;
 };
 }  // namespace lamp
-
-#endif

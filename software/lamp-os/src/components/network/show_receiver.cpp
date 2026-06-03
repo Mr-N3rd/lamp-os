@@ -1,4 +1,4 @@
-#include "./show_receiver.hpp"
+#include "show_receiver.hpp"
 
 #include <Arduino.h>
 

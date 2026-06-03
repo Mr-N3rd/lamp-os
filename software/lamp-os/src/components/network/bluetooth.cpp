@@ -1,7 +1,7 @@
 /**
  *  Lamp Bluetooth Management. Pure-BLE v1 — no WiFi, no stage mode, no ArtNet.
  */
-#include "./bluetooth.hpp"
+#include "bluetooth.hpp"
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include "../../config/config.hpp"
-#include "../../util/color.hpp"
-#include "./ble_control.hpp"
-#include "./nearby_lamps.hpp"
+#include "config/config.hpp"
+#include "util/color.hpp"
+#include "ble_control.hpp"
+#include "nearby_lamps.hpp"
 
 namespace lamp {
 

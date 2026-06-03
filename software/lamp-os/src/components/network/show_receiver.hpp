@@ -1,5 +1,4 @@
-#ifndef LAMP_COMPONENTS_NETWORK_SHOW_RECEIVER_H
-#define LAMP_COMPONENTS_NETWORK_SHOW_RECEIVER_H
+#pragma once
 
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -10,11 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "../../config/config.hpp"
-#include "../../expressions/expression_invocation.hpp"
-#include "./espnow_link.hpp"
-#include "./lamp_protocol.hpp"
-#include "./nearby_lamps.hpp"
+#include "config/config.hpp"
+#include "expressions/expression_invocation.hpp"
+#include "espnow_link.hpp"
+#include "lamp_protocol.hpp"
+#include "nearby_lamps.hpp"
 
 #ifndef LAMP_ESPNOW_CHANNEL
 #define LAMP_ESPNOW_CHANNEL 1
@@ -119,5 +118,3 @@ class ShowReceiver {
 };
 
 }  // namespace lamp
-
-#endif

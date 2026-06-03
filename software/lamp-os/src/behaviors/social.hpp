@@ -1,13 +1,12 @@
-#ifndef LAMP_BEHAVIORS_SOCIAL_H
-#define LAMP_BEHAVIORS_SOCIAL_H
+#pragma once
 
 #include <map>
 #include <string>
 #include <vector>
 
-#include "../config/config_types.hpp"
-#include "../core/animated_behavior.hpp"
-#include "../util/color.hpp"
+#include "config/config_types.hpp"
+#include "core/animated_behavior.hpp"
+#include "util/color.hpp"
 
 #define LAMP_TIME_BETWEEN_ACKNOWLEDGEMENT_MS 30000
 
@@ -73,5 +72,3 @@ class SocialBehavior : public AnimatedBehavior {
 };
 
 }  // namespace lamp
-
-#endif

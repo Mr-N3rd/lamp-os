@@ -36,7 +36,7 @@ struct TestMux {};
 #define portEXIT_CRITICAL(x)  do { (void)(x); } while (0)
 using portMUX_TYPE = TestMux;
 
-#include "../../src/lamps/pending_json_slot.hpp"
+#include "lamps/pending_json_slot.hpp"
 
 void setUp(void) {}
 void tearDown(void) {}

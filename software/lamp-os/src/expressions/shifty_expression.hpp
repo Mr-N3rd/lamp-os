@@ -1,9 +1,8 @@
-#ifndef LAMP_EXPRESSIONS_SHIFTY_H
-#define LAMP_EXPRESSIONS_SHIFTY_H
+#pragma once
 
 #include <vector>
 
-#include "./expression.hpp"
+#include "expression.hpp"
 
 namespace lamp {
 
@@ -87,5 +86,3 @@ protected:
 };
 
 }  // namespace lamp
-
-#endif

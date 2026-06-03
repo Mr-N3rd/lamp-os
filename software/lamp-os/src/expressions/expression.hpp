@@ -1,5 +1,4 @@
-#ifndef LAMP_EXPRESSIONS_EXPRESSION_H
-#define LAMP_EXPRESSIONS_EXPRESSION_H
+#pragma once
 
 #include <cstdint>
 #include <map>
@@ -7,8 +6,8 @@
 #include <variant>
 #include <vector>
 
-#include "../core/animated_behavior.hpp"
-#include "../util/color.hpp"
+#include "core/animated_behavior.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 
@@ -132,5 +131,3 @@ protected:
 };
 
 }  // namespace lamp
-
-#endif

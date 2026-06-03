@@ -1,4 +1,4 @@
-#include "./nearby_lamps.hpp"
+#include "nearby_lamps.hpp"
 
 #include <cstring>
 

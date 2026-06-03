@@ -1,12 +1,11 @@
-#ifndef LAMP_CORE_FRAME_BUFFER_H
-#define LAMP_CORE_FRAME_BUFFER_H
+#pragma once
 
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 
 #include <vector>
 
-#include "./util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 /**
@@ -44,4 +43,3 @@ class FrameBuffer {
   void flush();
 };
 }  // namespace lamp
-#endif

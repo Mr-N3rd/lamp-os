@@ -1,4 +1,4 @@
-#include "./wifi.hpp"
+#include "wifi.hpp"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -6,7 +6,7 @@
 #include <freertos/FreeRTOS.h>
 #include <portmacro.h>
 
-#include "./ble_control.hpp"  // for ble_control::isClientConnected()
+#include "ble_control.hpp"  // for ble_control::isClientConnected()
 
 // Grid channel — all unconnected grid lamps line up here so ESP-NOW peers
 // can hear each other. Since we never associate to a home AP anymore,

@@ -1,8 +1,8 @@
-#include "./fade.hpp"
+#include "fade.hpp"
 
 #include <cstdint>
 
-#include "./color.hpp"
+#include "color.hpp"
 
 namespace lamp {
 // Audit fix [HIGH]: previously `std::vector<uint32_t>` (heap+RAM, ~4 KB

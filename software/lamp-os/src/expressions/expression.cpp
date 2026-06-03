@@ -1,10 +1,10 @@
-#include "./expression.hpp"
+#include "expression.hpp"
 
 #include <Arduino.h>
 
-#include "../core/behavior_context.hpp"
-#include "../core/compositor.hpp"
-#include "./expression_manager.hpp"
+#include "core/behavior_context.hpp"
+#include "core/compositor.hpp"
+#include "expression_manager.hpp"
 
 namespace lamp {
 

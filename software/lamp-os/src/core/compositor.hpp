@@ -1,11 +1,10 @@
-#ifndef LAMP_CORE_COMPOSITOR_H
-#define LAMP_CORE_COMPOSITOR_H
+#pragma once
 
 #include <vector>
 
-#include "./animated_behavior.hpp"
-#include "./behavior_context.hpp"
-#include "./frame_buffer.hpp"
+#include "animated_behavior.hpp"
+#include "behavior_context.hpp"
+#include "frame_buffer.hpp"
 
 #define MINIMUM_FRAME_DRAW_TIME_MS 16
 #define STARTUP_ANIMATION_FRAMES 120
@@ -98,4 +97,3 @@ class Compositor {
   BehaviorContext& behaviorContext() { return context_; }
 };
 }  // namespace lamp
-#endif

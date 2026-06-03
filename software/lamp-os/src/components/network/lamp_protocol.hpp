@@ -1,5 +1,4 @@
-#ifndef LAMP_PROTOCOL_H
-#define LAMP_PROTOCOL_H
+#pragma once
 
 // Shared wire format for repeater <-> lamp over ESP-NOW broadcast.
 // Header-only and identical between software/artnet-repeater/src/lamp_protocol.hpp
@@ -250,5 +249,3 @@ class DedupRing {
 };
 
 }  // namespace lamp_protocol
-
-#endif

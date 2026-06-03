@@ -1,4 +1,4 @@
-#include "./espnow_link.hpp"
+#include "espnow_link.hpp"
 
 #include <Arduino.h>
 #include <WiFi.h>

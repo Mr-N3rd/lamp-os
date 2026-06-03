@@ -1,11 +1,11 @@
-#include "./config.hpp"
+#include "config.hpp"
 
 #include <ArduinoJson.h>
 #include <Preferences.h>
 
 #include <algorithm>
 
-#include "../util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 

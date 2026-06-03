@@ -1,4 +1,4 @@
-#include "./ble_control.hpp"
+#include "ble_control.hpp"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -10,17 +10,17 @@
 #include <string>
 #include <unordered_set>
 
-#include "../../config/config.hpp"
-#include "../../behaviors/configurator.hpp"
-#include "../../behaviors/fade_out.hpp"  // fadeOutRebootRequested flag
-#include "../../util/color.hpp"
-#include "../../lamps/standard_lamp.hpp"
-#include "./bluetooth.hpp"  // for BLE_GAP_SCAN_TIME_MS
-#include "./crypto.hpp"
-#include "./nearby_lamps.hpp"
-#include "./show_receiver.hpp"
-#include "./wifi.hpp"
-#include "./write_router.hpp"
+#include "config/config.hpp"
+#include "behaviors/configurator.hpp"
+#include "behaviors/fade_out.hpp"  // fadeOutRebootRequested flag
+#include "util/color.hpp"
+#include "lamps/standard_lamp.hpp"
+#include "bluetooth.hpp"  // for BLE_GAP_SCAN_TIME_MS
+#include "crypto.hpp"
+#include "nearby_lamps.hpp"
+#include "show_receiver.hpp"
+#include "wifi.hpp"
+#include "write_router.hpp"
 
 // Defined in standard_lamp.cpp. Each BLE callback does ONLY a fixed-size
 // byte copy into a pending slot — zero heap allocation on Core 0. The loop

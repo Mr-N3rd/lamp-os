@@ -1,11 +1,11 @@
-#include "./expression_manager.hpp"
+#include "expression_manager.hpp"
 #include <Arduino.h>
 #include <algorithm>
 #include <cstring>
 
-#include "../components/network/show_receiver.hpp"
-#include "../core/behavior_context.hpp"
-#include "../core/compositor.hpp"
+#include "components/network/show_receiver.hpp"
+#include "core/behavior_context.hpp"
+#include "core/compositor.hpp"
 
 namespace lamp {
 

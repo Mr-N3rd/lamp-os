@@ -1,10 +1,9 @@
-#ifndef LAMP_CORE_ANIMATED_BEHAVIOR_H
-#define LAMP_CORE_ANIMATED_BEHAVIOR_H
+#pragma once
 
 #include <cstdint>
 
-#include "./behavior_context.hpp"
-#include "./frame_buffer.hpp"
+#include "behavior_context.hpp"
+#include "frame_buffer.hpp"
 
 namespace lamp {
 enum AnimationState {
@@ -116,5 +115,3 @@ class AnimatedBehavior {
   BehaviorContext* context_ = nullptr;
 };
 }  // namespace lamp
-
-#endif

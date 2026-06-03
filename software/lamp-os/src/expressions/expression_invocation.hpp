@@ -1,5 +1,4 @@
-#ifndef LAMP_EXPRESSIONS_EXPRESSION_INVOCATION_H
-#define LAMP_EXPRESSIONS_EXPRESSION_INVOCATION_H
+#pragma once
 
 #include <ArduinoJson.h>
 
@@ -8,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "../util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 
@@ -67,5 +66,3 @@ void serializeInvocation(const ExpressionInvocation& inv, std::string& out);
 bool parseInvocation(JsonObjectConst doc, ExpressionInvocation& out);
 
 }  // namespace lamp
-
-#endif

@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-#include "../../config/config.hpp"
+#include "config/config.hpp"
 
 namespace ble_control {
 

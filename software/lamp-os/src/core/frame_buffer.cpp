@@ -1,11 +1,11 @@
-#include "./frame_buffer.hpp"
+#include "frame_buffer.hpp"
 
 #include <Adafruit_NeoPixel.h>
 
 #include <cstdint>
 #include <vector>
 
-#include "./util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 FrameBuffer::FrameBuffer() {};

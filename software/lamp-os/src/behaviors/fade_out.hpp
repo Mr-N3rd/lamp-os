@@ -1,9 +1,8 @@
-#ifndef LAMP_BEHAVIORS_FADE_OUT_H
-#define LAMP_BEHAVIORS_FADE_OUT_H
+#pragma once
 
 #include <atomic>
 
-#include "../core/animated_behavior.hpp"
+#include "core/animated_behavior.hpp"
 
 /**
  * @brief animation to fade to black and reboot. Driven by a global flag
@@ -27,4 +26,3 @@ class FadeOutBehavior : public AnimatedBehavior {
   void control() override;
 };
 }  // namespace lamp
-#endif
