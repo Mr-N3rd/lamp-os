@@ -131,16 +131,157 @@ void postPendingSettingsBlobJson(const char* data, size_t len)      { pendingSet
 void postPendingRemoteOpJson(const char* data, size_t len)          { pendingRemoteOpJson.post(pendingMux, data, len); }
 void postPendingSocialDispositionsJson(const char* data, size_t len){ pendingSocialDispositionsJson.post(pendingMux, data, len); }
 
-// Forward decl — defined further below alongside the other globals so we can
-// route triggerExpression invocations into the manager from this function.
-extern lamp::ExpressionManager expressionManager;
+lamp::BluetoothComponent bt;
+lamp::Compositor compositor;
+lamp::FrameBuffer shade;
+lamp::FrameBuffer base;
+lamp::SocialBehavior shadeSocialBehavior;
+lamp::ConfiguratorBehavior shadeConfiguratorBehavior;
+lamp::ConfiguratorBehavior baseConfiguratorBehavior;
+lamp::FadeOutBehavior shadeFadeOutBehavior;
+lamp::FadeOutBehavior baseFadeOutBehavior;
+lamp::KnockoutBehavior baseKnockoutBehavior;
+lamp::ExpressionManager expressionManager;
+lamp::Config config;
+lamp::ShowReceiver showReceiver;
+lamp::ShowBehavior shadeShowBehavior;
+lamp::ShowBehavior baseShowBehavior;
+
+// ----- Local appliers for mesh-received ops --------------------------------
+//
+// The drain blocks in loop() and the mesh receive path (applyRemoteOpLocal)
+// both end up performing the same mutation: walk a JSON colors array into a
+// std::vector<Color>, build a gradient, push it into the configurator
+// behavior, update the BLE advert, invalidate the section. Likewise for
+// expressionOp upsert/remove.
+//
+// These helpers factor that mutation out so applyRemoteOpLocal — which
+// already has a parsed JsonDocument in hand — can apply the change directly
+// instead of re-serializing the colors array into a std::string just so the
+// drain can re-parse it. Audit fix: eliminates parse → serialize → memcpy →
+// parse round-trip on every inbound mesh shadeColors/baseColors/expressionOp.
+//
+// INVARIANT: these run on the loop task (Core 1). They touch compositor
+// behaviors, bluetooth advert state, and config sections — none of which is
+// Core-0-safe. The BLE host-task path stays on the post-to-pending-slot
+// pattern (see ble_control.cpp WriteRouter instances); the slot drain on
+// Core 1 calls these helpers after parsing the buffered bytes.
+
+// Walk a JsonArray of hex strings into a std::vector<Color>. Shared between
+// the two color helpers below.
+static std::vector<lamp::Color> jsonArrayToColors(JsonArray arr) {
+  std::vector<lamp::Color> colors;
+  colors.reserve(arr.size());
+  for (JsonVariant v : arr) {
+    colors.push_back(lamp::hexStringToColor(v));
+  }
+  return colors;
+}
+
+// Apply a shadeColors update locally. Used by both the pendingShadeColorsJson
+// drain (Core 1) and applyRemoteOpLocal (also Core 1). `arr` must be a
+// non-empty JSON array of hex color strings. Callers handle the bookkeeping
+// (configurator timestamps + section invalidate) themselves so the drain
+// can preserve its prior unconditional behavior on parse-failure / empty-
+// array inputs without this helper having to guess at it.
+static void applyShadeColorsLocal(JsonArray arr) {
+  if (arr.isNull() || arr.size() == 0) return;
+  std::vector<lamp::Color> colors = jsonArrayToColors(arr);
+  shadeConfiguratorBehavior.colors =
+      lamp::buildGradientWithStops(shade.pixelCount, colors);
+  // Reflect the new shade in the BLE adv so phones and v1 neighbours see it
+  // without having to connect. Use the first stop — shade in this build is
+  // a single color.
+  bt.setAdvertisedColors(config.base.colors[config.base.ac], colors[0]);
+}
+
+// Apply a baseColors update locally. Counterpart to applyShadeColorsLocal.
+// See the bookkeeping note above — callers handle timestamps + invalidate.
+static void applyBaseColorsLocal(JsonArray arr) {
+  if (arr.isNull() || arr.size() == 0) return;
+  std::vector<lamp::Color> colors = jsonArrayToColors(arr);
+  baseConfiguratorBehavior.colors =
+      lamp::buildGradientWithStops(base.pixelCount, colors);
+  // Reflect the new base in the BLE adv — first stop is what the adv carries
+  // (we don't know the user's active-stop index from this drain, and the
+  // first stop is what bt.begin used initially).
+  bt.setAdvertisedColors(colors[0], config.shade.colors[0]);
+}
+
+// Apply an expressionOp upsert/remove locally. `doc` carries `op` plus the
+// op-specific payload (`entry` for upsert, `type`+`target` for remove).
+// Mirrors the manager state into config.expressions so the next
+// settings_blob save persists the runtime edit.
+static void applyExpressionOpLocal(JsonObject doc) {
+  if (doc.isNull()) return;
+  const char* op = doc["op"].as<const char*>();
+  if (op && strcmp(op, "upsert") == 0 && doc["entry"].is<JsonObject>()) {
+    JsonObject entry = doc["entry"].as<JsonObject>();
+    lamp::ExpressionConfig cfg;
+    cfg.type = std::string(entry["type"] | "");
+    cfg.enabled = entry["enabled"] | true;
+    cfg.intervalMin = entry["intervalMin"] | 60;
+    cfg.intervalMax = entry["intervalMax"] | 900;
+    cfg.target = entry["target"] | 3;
+    for (JsonPair kv : entry) {
+      std::string key(kv.key().c_str());
+      if (key == "type" || key == "enabled" || key == "intervalMin" ||
+          key == "intervalMax" || key == "target" || key == "colors") continue;
+      JsonVariant v = kv.value();
+      if (v.is<uint32_t>()) cfg.setParameter(key, v.as<uint32_t>());
+      else if (v.is<int>()) cfg.setParameter(key, static_cast<uint32_t>(v.as<int>()));
+    }
+    // Store the JsonArray in a local so iteration doesn't reference a
+    // temporary that's destroyed at the end of the full expression
+    // (ArduinoJson 7.4.x tightened lifetime semantics on chained calls;
+    // before this the same code happened to work).
+    JsonArray colorsArr = entry["colors"].as<JsonArray>();
+    for (JsonVariant cv : colorsArr) {
+      cfg.colors.push_back(lamp::hexStringToColor(cv));
+    }
+    if (!cfg.type.empty()) {
+      expressionManager.upsertExpression(cfg, &compositor);
+      // Mirror into config.expressions so the next settings_blob save
+      // persists the user's latest edits. expressionManager is the runtime
+      // animator; config is what gets serialized to NVS.
+      auto& exprs = config.expressions.expressions;
+      bool found = false;
+      for (auto& e : exprs) {
+        if (e.type == cfg.type && e.target == cfg.target) {
+          e = cfg;
+          found = true;
+          break;
+        }
+      }
+      if (!found) exprs.push_back(cfg);
+    }
+  } else if (op && strcmp(op, "remove") == 0) {
+    const char* type = doc["type"].as<const char*>();
+    int tgt = doc["target"] | 0;
+    if (type && tgt >= 1 && tgt <= 3) {
+      expressionManager.removeExpression(type, static_cast<lamp::ExpressionTarget>(tgt), &compositor);
+      // Mirror removal into config.expressions.
+      auto& exprs = config.expressions.expressions;
+      exprs.erase(std::remove_if(exprs.begin(), exprs.end(),
+                    [&](const lamp::ExpressionConfig& e) {
+                      return e.type == type && e.target == tgt;
+                    }),
+                  exprs.end());
+    }
+  }
+  // NOTE: callers invalidate the expressions section themselves so that the
+  // drain block preserves its prior behavior of always marking dirty (even
+  // on parse failure where nothing actually changed).
+}
 
 // Apply a remote-op payload locally (either from BLE remoteOp drain when
 // targetMac==self/broadcast, or from an incoming ESP-NOW MSG_CONTROL_OP).
-// Parses `char` and re-emits to the matching local pending-slot post. Runs
-// on the loop task in both cases (BLE-drain path is direct; ESP-NOW path
-// goes via ShowReceiver's WiFi-task handler which only does memcpy into a
-// pending slot, then loop drains it — implementation below).
+// Both call sites run on the loop task (Core 1) — the BLE remoteOp drain
+// runs in loop() directly, and the ESP-NOW path goes via ShowReceiver's
+// WiFi-task handler which only does memcpy into pendingInboundOpJson; the
+// loop drain then calls this function. Because we're already on Core 1, we
+// mutate state directly via the applyXxxLocal helpers above instead of
+// re-serializing into a pending slot just so a drain can re-parse it.
 //
 // `payload` must be a NUL-terminated JSON string for ArduinoJson to parse.
 // `srcMac` identifies the sender (used by triggerInvocation to coalesce
@@ -157,15 +298,21 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     int level = doc["value"] | -1;
     if (level >= 0 && level <= 100) postPendingBrightness(static_cast<int8_t>(level));
 
-  } else if (strcmp(ch, "shadeColors") == 0 || strcmp(ch, "baseColors") == 0) {
-    // Both expect a JSON array of hex strings as the payload to their drain.
-    // Serialize the `colors` array back out so the existing drain can parse it.
-    JsonArray arr = doc["colors"].as<JsonArray>();
-    if (arr.isNull()) return;
-    std::string colorsJson;
-    serializeJson(arr, colorsJson);
-    if (strcmp(ch, "shadeColors") == 0) postPendingShadeColorsJson(colorsJson.data(), colorsJson.size());
-    else                                 postPendingBaseColorsJson(colorsJson.data(), colorsJson.size());
+  } else if (strcmp(ch, "shadeColors") == 0) {
+    // Direct path: applyRemoteOpLocal runs on Core 1, so call the local
+    // applier with the JsonArray we already have. Skips the slot round-trip
+    // (audit: was serializeJson → std::string → memcpy → drain → re-parse).
+    applyShadeColorsLocal(doc["colors"].as<JsonArray>());
+    // Match the drain's unconditional bookkeeping.
+    shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+    baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+    config.invalidateShadeSection();
+
+  } else if (strcmp(ch, "baseColors") == 0) {
+    applyBaseColorsLocal(doc["colors"].as<JsonArray>());
+    shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+    baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+    config.invalidateBaseSection();
 
   } else if (strcmp(ch, "knockout") == 0) {
     int pixel = doc["pixel"] | -1;
@@ -175,11 +322,13 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     }
 
   } else if (strcmp(ch, "expressionOp") == 0) {
-    // Drop the `char` key and forward the rest to the existing expressionOp drain.
-    doc.remove("char");
-    std::string out;
-    serializeJson(doc, out);
-    postPendingExpressionOpJson(out.data(), out.size());
+    // Direct path: same Core 1 reasoning — call the applier with the parsed
+    // JsonObject. The drain shape expects the `char` key gone, but the
+    // applier just looks at `op`/`entry`/`type`/`target`, so leaving `char`
+    // is harmless. Skips serialize → drain → re-parse.
+    applyExpressionOpLocal(doc.as<JsonObject>());
+    // Match the drain's unconditional invalidate semantics.
+    config.invalidateExpressionsSection();
 
   } else if (strcmp(ch, "triggerExpression") == 0) {
     // Receive side of the mesh expression-trigger primitive. The payload IS
@@ -208,22 +357,6 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
   // settings forwarding is intentionally deferred — it triggers a remote
   // reboot whose UX over the grid needs more thought. Follow-up plan.
 }
-
-lamp::BluetoothComponent bt;
-lamp::Compositor compositor;
-lamp::FrameBuffer shade;
-lamp::FrameBuffer base;
-lamp::SocialBehavior shadeSocialBehavior;
-lamp::ConfiguratorBehavior shadeConfiguratorBehavior;
-lamp::ConfiguratorBehavior baseConfiguratorBehavior;
-lamp::FadeOutBehavior shadeFadeOutBehavior;
-lamp::FadeOutBehavior baseFadeOutBehavior;
-lamp::KnockoutBehavior baseKnockoutBehavior;
-lamp::ExpressionManager expressionManager;
-lamp::Config config;
-lamp::ShowReceiver showReceiver;
-lamp::ShowBehavior shadeShowBehavior;
-lamp::ShowBehavior baseShowBehavior;
 
 // Forward decl — defined later, alongside effectiveBrightness which
 // shares the same gate. initBehaviors uses it to seed compositor.begin.
@@ -582,25 +715,17 @@ void loop() {
 #ifdef LAMP_DEBUG
     Serial.printf("[drain] shadeColors len=%u t_us=%lu\n",
                   (unsigned)len, (unsigned long)micros());
+#else
+    (void)len;
 #endif
 
     JsonDocument doc;
     if (deserializeJson(doc, buf) == DeserializationError::Ok) {
-      JsonArray arr = doc.as<JsonArray>();
-      if (arr.size() > 0) {
-        std::vector<lamp::Color> colors;
-        colors.reserve(arr.size());
-        for (JsonVariant v : arr) {
-          colors.push_back(lamp::hexStringToColor(v));
-        }
-        shadeConfiguratorBehavior.colors = lamp::buildGradientWithStops(shade.pixelCount, colors);
-        // Reflect the new shade in the BLE adv so phones and v1
-        // neighbours see it without having to connect. Use the first
-        // stop — shade in this build is a single color.
-        bt.setAdvertisedColors(
-            config.base.colors[config.base.ac], colors[0]);
-      }
+      applyShadeColorsLocal(doc.as<JsonArray>());
     }
+    // Preserve the prior drain's unconditional bookkeeping — timestamps +
+    // invalidate were already outside the parse-OK / array-non-empty guards,
+    // and keeping them that way avoids a behavior delta.
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     config.invalidateShadeSection();
@@ -613,24 +738,13 @@ void loop() {
 #ifdef LAMP_DEBUG
     Serial.printf("[drain] baseColors len=%u t_us=%lu\n",
                   (unsigned)len, (unsigned long)micros());
+#else
+    (void)len;
 #endif
 
     JsonDocument doc;
     if (deserializeJson(doc, buf) == DeserializationError::Ok) {
-      JsonArray arr = doc.as<JsonArray>();
-      if (arr.size() > 0) {
-        std::vector<lamp::Color> colors;
-        colors.reserve(arr.size());
-        for (JsonVariant v : arr) {
-          colors.push_back(lamp::hexStringToColor(v));
-        }
-        baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, colors);
-        // Reflect the new base in the BLE adv — first stop is what
-        // the adv carries (we don't know the user's active-stop index
-        // from this drain, and the first stop is what bt.begin used
-        // initially).
-        bt.setAdvertisedColors(colors[0], config.shade.colors[0]);
-      }
+      applyBaseColorsLocal(doc.as<JsonArray>());
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
@@ -660,65 +774,13 @@ void loop() {
 
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain expressionOp len=%u\n", (unsigned)len);
+#else
+    (void)len;
 #endif
 
     JsonDocument doc;
     if (deserializeJson(doc, buf) == DeserializationError::Ok) {
-      const char* op = doc["op"].as<const char*>();
-      if (op && strcmp(op, "upsert") == 0 && doc["entry"].is<JsonObject>()) {
-        JsonObject entry = doc["entry"].as<JsonObject>();
-        lamp::ExpressionConfig cfg;
-        cfg.type = std::string(entry["type"] | "");
-        cfg.enabled = entry["enabled"] | true;
-        cfg.intervalMin = entry["intervalMin"] | 60;
-        cfg.intervalMax = entry["intervalMax"] | 900;
-        cfg.target = entry["target"] | 3;
-        for (JsonPair kv : entry) {
-          std::string key(kv.key().c_str());
-          if (key == "type" || key == "enabled" || key == "intervalMin" ||
-              key == "intervalMax" || key == "target" || key == "colors") continue;
-          JsonVariant v = kv.value();
-          if (v.is<uint32_t>()) cfg.setParameter(key, v.as<uint32_t>());
-          else if (v.is<int>()) cfg.setParameter(key, static_cast<uint32_t>(v.as<int>()));
-        }
-        // Store the JsonArray in a local so iteration doesn't reference a
-        // temporary that's destroyed at the end of the full expression
-        // (ArduinoJson 7.4.x tightened lifetime semantics on chained
-        // calls; before this the same code happened to work).
-        JsonArray colorsArr = entry["colors"].as<JsonArray>();
-        for (JsonVariant cv : colorsArr) {
-          cfg.colors.push_back(lamp::hexStringToColor(cv));
-        }
-        if (!cfg.type.empty()) {
-          expressionManager.upsertExpression(cfg, &compositor);
-          // Mirror into config.expressions so the next settings_blob save
-          // persists the user's latest edits. expressionManager is the
-          // runtime animator; config is what gets serialized to NVS.
-          auto& exprs = config.expressions.expressions;
-          bool found = false;
-          for (auto& e : exprs) {
-            if (e.type == cfg.type && e.target == cfg.target) {
-              e = cfg;
-              found = true;
-              break;
-            }
-          }
-          if (!found) exprs.push_back(cfg);
-        }
-      } else if (op && strcmp(op, "remove") == 0) {
-        const char* type = doc["type"].as<const char*>();
-        int tgt = doc["target"] | 0;
-        if (type && tgt >= 1 && tgt <= 3) {
-          expressionManager.removeExpression(type, static_cast<lamp::ExpressionTarget>(tgt), &compositor);
-          // Mirror removal into config.expressions.
-          auto& exprs = config.expressions.expressions;
-          exprs.erase(std::remove_if(exprs.begin(), exprs.end(),
-                        [&](const lamp::ExpressionConfig& e) {
-                          return e.type == type && e.target == tgt;
-                        }),
-                      exprs.end());
-        }
-      }
+      applyExpressionOpLocal(doc.as<JsonObject>());
     }
     config.invalidateExpressionsSection();
   }
