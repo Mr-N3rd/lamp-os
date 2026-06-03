@@ -11,8 +11,18 @@ namespace lamp {
 
 EspNowRecvFn EspNowLink::s_recv = nullptr;
 
+// ESP-NOW max payload per spec is 250 B; reject anything outside [0, 250] so a
+// negative/garbage len from a driver error path can't be cast to a huge size_t.
+static constexpr int kMaxRecvFrameLen = 250;
+
 static void recvTrampoline(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
   if (EspNowLink::s_recv == nullptr || info == nullptr) return;
+  if (len < 0 || len > kMaxRecvFrameLen) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[espnow] reject len=%d\n", len);
+#endif
+    return;
+  }
   EspNowLink::s_recv(info->src_addr, data, static_cast<size_t>(len));
 }
 
