@@ -133,7 +133,10 @@ class _ParamSlider extends StatelessWidget {
   final int value;
   final int min;
   final int max;
-  final ValueChanged<int> onChanged;
+  /// Nullable: pass null to render Material's disabled-Slider state. Used
+  /// when a parent toggle disables the parameter but we want it visible so
+  /// the user can see what it does.
+  final ValueChanged<int>? onChanged;
   final String Function(int) format;
   /// Optional short text below the slider's start (e.g. 'slow', 'short').
   /// Renders only when both labels are non-null.
@@ -155,16 +158,19 @@ class _ParamSlider extends StatelessWidget {
     final sliderValue =
         invert ? (min + max).toDouble() - clamped : clamped;
     final hasEnds = leftLabel != null && rightLabel != null;
+    final cb = onChanged;
     final slider = Slider(
       value: sliderValue,
       min: min.toDouble(),
       max: max.toDouble(),
       divisions: max - min,
-      onChanged: (v) {
-        final raw = v.round();
-        final stored = invert ? (min + max) - raw : raw;
-        onChanged(stored);
-      },
+      onChanged: cb == null
+          ? null
+          : (v) {
+              final raw = v.round();
+              final stored = invert ? (min + max) - raw : raw;
+              cb(stored);
+            },
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -436,17 +442,15 @@ class _GlitchyParams extends StatelessWidget {
 
     // Slider granularity: 100ms steps over 0..5000ms. _ParamSlider derives
     // divisions from `max - min`, so we scale the wire value (ms) down to
-    // 0..50 for the slider and back up on edit. Format mirrors the scale.
-    final cascadeSlider = _ParamSlider(
-      label: 'Delay between lamps',
-      value: (cascadeStaggerMs / 100).round().clamp(0, 50),
-      min: 0,
-      max: 50,
-      onChanged: (v) => onCascadeStaggerMs(v * 100),
-      leftLabel: 'together',
-      rightLabel: 'cascade',
-      format: (v) => v == 0 ? 'instant' : '${(v / 10).toStringAsFixed(1)}s',
-    );
+    // 0..50 for the slider and back up on edit. Format uses the same ms/s
+    // regime as Glitchy's duration slider above for visual consistency.
+    String fmtMs(int sliderValue) {
+      final ms = sliderValue * 100;
+      if (ms < 1000) return '${ms}ms';
+      final s = ms / 1000.0;
+      final str = s.toStringAsFixed(1);
+      return '${str.endsWith('.0') ? s.toInt().toString() : str}s';
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -462,25 +466,32 @@ class _GlitchyParams extends StatelessWidget {
           rightLabel: 'long',
           format: fmt,
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Cascade to other lamps',
-                  style: TextStyle(
-                      color: BrandColors.lampWhite, fontSize: 14),
-                ),
-              ),
-              Switch(
-                value: cascadeEnabled,
-                onChanged: onCascadeEnabled,
-              ),
-            ],
-          ),
+        // Toggle row uses _SectionLabel for the label so it shares typography
+        // and padding with every other section header in this file.
+        Row(
+          children: [
+            const Expanded(child: _SectionLabel('Cascade to other lamps')),
+            Switch(
+              value: cascadeEnabled,
+              onChanged: onCascadeEnabled,
+            ),
+          ],
         ),
-        if (cascadeEnabled) cascadeSlider,
+        // Slider stays visible when cascade is off (disabled by passing
+        // null onChanged) so users can see what the control does before
+        // enabling it. Material Slider renders the disabled style itself.
+        _ParamSlider(
+          label: 'Delay between lamps',
+          value: (cascadeStaggerMs / 100).round().clamp(0, 50),
+          min: 0,
+          max: 50,
+          onChanged: cascadeEnabled
+              ? (v) => onCascadeStaggerMs(v * 100)
+              : null,
+          leftLabel: 'instant',
+          rightLabel: 'slow ripple',
+          format: fmtMs,
+        ),
       ],
     );
   }

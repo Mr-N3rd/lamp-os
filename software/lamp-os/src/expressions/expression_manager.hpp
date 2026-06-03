@@ -46,7 +46,7 @@ class ExpressionManager {
   // if its config opts in via the cascadeEnabled parameter. No-op when
   // no ShowReceiver has been wired in. Never called for remote-arrived
   // triggers — that's the structural loop break.
-  void maybeCascade_(const ExpressionEntry& entry);
+  void maybeCascade(const ExpressionEntry& entry);
 
  public:
   /**

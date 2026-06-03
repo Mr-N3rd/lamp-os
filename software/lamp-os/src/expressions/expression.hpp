@@ -92,6 +92,15 @@ class Expression : public AnimatedBehavior {
   const std::vector<Color>& getColors() const { return colors; }
   ExpressionTarget getTarget() const { return target; }
 
+  /**
+   * @brief Swap the palette without touching interval / target / schedule.
+   *        Used by ExpressionManager::triggerInvocation to apply a remote
+   *        invocation's colors for a single firing (then restore). Distinct
+   *        from configure() which is intended for boot/upsert and resets the
+   *        auto-trigger clock.
+   */
+  void setColors(const std::vector<Color>& inColors) { colors = inColors; }
+
   // Suppresses auto-trigger from control() while true. Manual trigger() and
   // chain-triggered firing still work. Listing's enabled toggle drives this.
   bool autoTriggerEnabled = true;

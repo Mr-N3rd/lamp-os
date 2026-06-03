@@ -216,10 +216,12 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len) {
       expressionManager.triggerInvocation(inv);
     } else {
       if (pendingTriggers.size() >= MAX_PENDING_TRIGGERS) {
+        // FIFO eviction — most-recent intent wins. Dropping the newest
+        // would lose the user's latest command in a mesh storm.
 #ifdef LAMP_DEBUG
-        Serial.println("[loop] triggerExpression queue full, dropping");
+        Serial.println("[loop] triggerExpression queue full, evicting oldest");
 #endif
-        return;
+        pendingTriggers.erase(pendingTriggers.begin());
       }
       pendingTriggers.push_back({inv, millis() + inv.delayMs});
     }
@@ -530,6 +532,8 @@ void setup() {
   // Wire the cascade fan-out path. The manager only sends after this; before
   // begin/setShowReceiver, local triggers fire but never cascade.
   expressionManager.setShowReceiver(&showReceiver);
+  // One-shot reservation so the loop-task drain never reallocates mid-frame.
+  pendingTriggers.reserve(MAX_PENDING_TRIGGERS);
 
 };
 

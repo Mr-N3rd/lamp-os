@@ -95,7 +95,7 @@ void ExpressionManager::setShowReceiver(ShowReceiver* receiver) {
   showReceiver_ = receiver;
 }
 
-void ExpressionManager::maybeCascade_(const ExpressionEntry& entry) {
+void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
   if (!showReceiver_ || !entry.expression) return;
   if (entry.config.getParameter(kParamCascadeEnabled, 0) == 0) return;
   const uint32_t staggerMs = entry.config.getParameter(kParamCascadeStaggerMs, 0);
@@ -135,7 +135,7 @@ bool ExpressionManager::triggerExpression(const std::string& type) {
   // Cascade once per logical trigger, not once per entry — a TARGET_BOTH
   // expression has two entries (shade + base) but should fan out a single
   // invocation that receivers' own managers expand back to both sides.
-  if (firstFired) maybeCascade_(*firstFired);
+  if (firstFired) maybeCascade(*firstFired);
   return triggered;
 }
 
@@ -149,7 +149,7 @@ bool ExpressionManager::triggerExpression(const std::string& type, ExpressionTar
       if (!firstFired) firstFired = &entry;
     }
   }
-  if (firstFired) maybeCascade_(*firstFired);
+  if (firstFired) maybeCascade(*firstFired);
   return triggered;
 }
 
@@ -163,17 +163,20 @@ bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
     if (invTarget != TARGET_BOTH && entry.expression->getTarget() != invTarget) {
       continue;
     }
-    // If the invocation supplies colors, override the expression's palette
-    // for this firing so the cascade carries the originator's color choices.
-    // configure() preserves intervalMin/Max/target from the entry's config —
-    // we're only swapping the color palette.
+    // If the invocation supplies colors, swap the palette ONLY for this
+    // firing — restore immediately after trigger() so the receiver's local
+    // config isn't permanently mutated and subsequent local triggers use the
+    // user's configured palette. Safe because Expression::trigger() is
+    // synchronous (onTrigger captures any color it needs into private state
+    // before returning).
     if (!inv.colors.empty()) {
-      entry.expression->configure(inv.colors,
-                                  entry.config.intervalMin,
-                                  entry.config.intervalMax,
-                                  entry.expression->getTarget());
+      const auto savedColors = entry.expression->getColors();
+      entry.expression->setColors(inv.colors);
+      entry.expression->trigger();
+      entry.expression->setColors(savedColors);
+    } else {
+      entry.expression->trigger();
     }
-    entry.expression->trigger();
     triggered = true;
     // Loop-break invariant: NEVER cascade on a remote-triggered invocation.
   }

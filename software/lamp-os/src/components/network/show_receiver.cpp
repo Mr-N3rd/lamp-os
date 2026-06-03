@@ -40,17 +40,39 @@ void ShowReceiver::setControlOpHandler(ControlOpHandler h) {
   controlOpHandler_ = std::move(h);
 }
 
+// Serialize + size-check + send. Returns false (and logs in debug) when the
+// payload would exceed the ~230-byte ESP-NOW CONTROL_OP cap so we don't fail
+// silently inside sendControlOp's own bounds check.
+static bool sendInvocationToMac(ShowReceiver& self, const uint8_t mac[6],
+                                const ExpressionInvocation& inv) {
+  std::string json;
+  serializeInvocation(inv, json);
+  if (json.size() > lamp_protocol::CONTROL_MAX_PAYLOAD) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[show] triggerExpression payload %u > max %u, dropping\n",
+                  (unsigned)json.size(),
+                  (unsigned)lamp_protocol::CONTROL_MAX_PAYLOAD);
+#endif
+    return false;
+  }
+  return self.sendControlOp(mac,
+                            reinterpret_cast<const uint8_t*>(json.data()),
+                            json.size());
+}
+
 bool ShowReceiver::sendExpressionTo(const std::string& peerName,
                                     const ExpressionInvocation& inv) {
   auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
   for (const auto& p : peers) {
     if (p.name != peerName) continue;
-    if (!p.hasMac) break;
-    std::string json;
-    serializeInvocation(inv, json);
-    return sendControlOp(p.mac,
-                         reinterpret_cast<const uint8_t*>(json.data()),
-                         json.size());
+    if (!p.hasMac) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[show] sendExpressionTo: peer '%s' has no MAC yet\n",
+                    peerName.c_str());
+#endif
+      continue;
+    }
+    return sendInvocationToMac(*this, p.mac, inv);
   }
 #ifdef LAMP_DEBUG
   Serial.printf("[show] sendExpressionTo: peer '%s' not reachable\n",
@@ -78,11 +100,7 @@ void ShowReceiver::sendExpressionToAll(const ExpressionInvocation& inv,
   for (size_t i = 0; i < targets.size(); i++) {
     ExpressionInvocation perPeer = inv;
     perPeer.delayMs = inv.delayMs + static_cast<uint32_t>(i) * staggerMs;
-    std::string json;
-    serializeInvocation(perPeer, json);
-    sendControlOp(targets[i].mac,
-                  reinterpret_cast<const uint8_t*>(json.data()),
-                  json.size());
+    sendInvocationToMac(*this, targets[i].mac, perPeer);
   }
 }
 

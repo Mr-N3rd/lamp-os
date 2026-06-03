@@ -1,5 +1,7 @@
 #include "./expression_invocation.hpp"
 
+#include <Arduino.h>
+
 namespace lamp {
 
 std::map<std::string, uint32_t> parametersWithoutCascadeKeys(
@@ -33,12 +35,33 @@ void serializeInvocation(const ExpressionInvocation& inv, std::string& out) {
   serializeJson(doc, out);
 }
 
+// True when `s` looks like a 9-char #RRGGBBWW string we can safely hand to
+// hexStringToColor (which calls std::stoul, throwing on non-hex chars —
+// payload bytes are attacker-reachable over ESP-NOW so we validate here).
+static bool isValidColorHex(const char* s) {
+  if (!s) return false;
+  if (s[0] != '#') return false;
+  for (int i = 1; i < 9; i++) {
+    const char c = s[i];
+    if (c == '\0') return false;
+    const bool ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') ||
+                    (c >= 'a' && c <= 'f');
+    if (!ok) return false;
+  }
+  return s[9] == '\0';
+}
+
 bool parseInvocation(JsonObjectConst doc, ExpressionInvocation& out) {
   const char* type = doc["type"].as<const char*>();
   if (!type || !*type) return false;
 
   out.type = type;
-  out.target = doc["target"] | 3;
+
+  // target is one of ExpressionTarget {SHADE=1, BASE=2, BOTH=3}. Coerce
+  // anything else to BOTH so a malformed peer can't silently no-op us.
+  const uint32_t t = doc["target"] | 3;
+  out.target = (t >= 1 && t <= 3) ? static_cast<uint8_t>(t) : 3;
+
   out.delayMs = doc["delayMs"] | 0;
 
   out.colors.clear();
@@ -46,7 +69,14 @@ bool parseInvocation(JsonObjectConst doc, ExpressionInvocation& out) {
   if (!colors.isNull()) {
     for (JsonVariantConst c : colors) {
       const char* hex = c.as<const char*>();
-      if (hex) out.colors.push_back(hexStringToColor(hex));
+      if (isValidColorHex(hex)) {
+        out.colors.push_back(hexStringToColor(hex));
+      }
+#ifdef LAMP_DEBUG
+      else if (hex) {
+        Serial.printf("[invocation] dropping bad color hex '%s'\n", hex);
+      }
+#endif
     }
   }
 
@@ -55,7 +85,12 @@ bool parseInvocation(JsonObjectConst doc, ExpressionInvocation& out) {
   if (!params.isNull()) {
     for (JsonPairConst kv : params) {
       JsonVariantConst v = kv.value();
-      if (v.is<uint32_t>()) {
+      // bool first — ArduinoJson types `true`/`false` as bool, distinct
+      // from int. Coerce so callers can send the JSON-natural form too.
+      if (v.is<bool>()) {
+        out.parameters[std::string(kv.key().c_str())] =
+            v.as<bool>() ? 1u : 0u;
+      } else if (v.is<uint32_t>()) {
         out.parameters[std::string(kv.key().c_str())] = v.as<uint32_t>();
       } else if (v.is<int>()) {
         out.parameters[std::string(kv.key().c_str())] =
