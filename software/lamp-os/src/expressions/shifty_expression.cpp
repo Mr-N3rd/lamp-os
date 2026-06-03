@@ -176,7 +176,16 @@ void ShiftyExpression::onComplete() {
   // Always trigger glitch on unshift if glitchy is available and we just finished fading back
   if (state == IDLE) {
     if (context_ && context_->expressionManager) {
+#ifdef LAMP_DEBUG
+      Serial.println("[shifty] onComplete IDLE → triggerExpression(glitchy)");
+#endif
       context_->expressionManager->triggerExpression("glitchy");
+    } else {
+#ifdef LAMP_DEBUG
+      Serial.printf("[shifty] onComplete IDLE but no chain (context=%d mgr=%d)\n",
+                    context_ != nullptr,
+                    (context_ && context_->expressionManager) ? 1 : 0);
+#endif
     }
   }
 }

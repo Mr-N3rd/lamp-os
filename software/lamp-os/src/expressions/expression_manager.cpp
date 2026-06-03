@@ -114,8 +114,20 @@ void ExpressionManager::setCompositor(Compositor* compositor) {
 }
 
 void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
-  if (!showReceiver_ || !entry.expression) return;
-  if (entry.config.getParameter(kParamCascadeEnabled, 0) == 0) return;
+  if (!showReceiver_ || !entry.expression) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: skip (no showReceiver=%d no expression=%d)\n",
+                  entry.config.type.c_str(), !showReceiver_, !entry.expression);
+#endif
+    return;
+  }
+  if (entry.config.getParameter(kParamCascadeEnabled, 0) == 0) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: skip (cascadeEnabled=0)\n",
+                  entry.config.type.c_str());
+#endif
+    return;
+  }
 
   // "Cascade once per logical trigger" invariant. A TARGET_BOTH expression
   // has TWO entries (shade + base) that fire independently from
@@ -129,6 +141,10 @@ void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
   const uint32_t intervalIdx = static_cast<uint32_t>(entry.expression->getTarget());
   const uint32_t nowMs = millis();
   if (recentCascades_.seen(entry.config.type, intervalIdx, nowMs)) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: skip (RecentCascade dedup, target=%u)\n",
+                  entry.config.type.c_str(), (unsigned)intervalIdx);
+#endif
     return;  // dedup: same logical trigger already cascaded
   }
   recentCascades_.record(entry.config.type, intervalIdx, nowMs);
@@ -142,6 +158,11 @@ void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
   inv.parameters = parametersWithoutCascadeKeys(entry.config.parameters);
   // inv.delayMs defaults to 0; sendExpressionToAll assigns per-peer stagger.
 
+#ifdef LAMP_DEBUG
+  Serial.printf("[cascade] %s: fanning out (target=%u staggerMs=%u)\n",
+                entry.config.type.c_str(), (unsigned)intervalIdx,
+                (unsigned)staggerMs);
+#endif
   showReceiver_->sendExpressionToAll(inv, staggerMs);
 }
 
@@ -171,6 +192,11 @@ bool ExpressionManager::triggerExpression(const std::string& type) {
     }
   }
   suppressCascade_ = false;
+#ifdef LAMP_DEBUG
+  Serial.printf("[trigger] '%s' fired=%d (matched %s)\n",
+                type.c_str(), triggered,
+                firstFired ? "≥1 entry" : "no entries");
+#endif
   // Cascade once per logical trigger, not once per entry — a TARGET_BOTH
   // expression has two entries (shade + base) but should fan out a single
   // invocation that receivers' own managers expand back to both sides.

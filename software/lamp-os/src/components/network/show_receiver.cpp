@@ -103,9 +103,21 @@ void ShowReceiver::sendExpressionToAll(const ExpressionInvocation& inv,
             [](const NearbyLamp& a, const NearbyLamp& b) {
               return a.name < b.name;
             });
+#ifdef LAMP_DEBUG
+  Serial.printf("[fanout] %s → %u peers (staggerMs=%u)\n",
+                inv.type.c_str(), (unsigned)targets.size(),
+                (unsigned)staggerMs);
+  if (targets.empty()) {
+    Serial.println("[fanout]   NO peers — check HELLOs / LAMP_PRUNE_TIME_MS");
+  }
+#endif
   for (size_t i = 0; i < targets.size(); i++) {
     ExpressionInvocation perPeer = inv;
     perPeer.delayMs = inv.delayMs + static_cast<uint32_t>(i) * staggerMs;
+#ifdef LAMP_DEBUG
+    Serial.printf("[fanout]   → '%s' (delayMs=%u)\n",
+                  targets[i].name.c_str(), (unsigned)perPeer.delayMs);
+#endif
     sendInvocationToMac(*this, targets[i].mac, perPeer);
   }
 }
