@@ -112,6 +112,23 @@ void ExpressionManager::setCompositor(Compositor* compositor) {
 void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
   if (!showReceiver_ || !entry.expression) return;
   if (entry.config.getParameter(kParamCascadeEnabled, 0) == 0) return;
+
+  // "Cascade once per logical trigger" invariant. A TARGET_BOTH expression
+  // has TWO entries (shade + base) that fire independently from
+  // Expression::control() in the same loop tick; each calls
+  // onExpressionFired -> maybeCascade. Without this gate, receivers see
+  // two cascade invocations and the mesh does 2x the work for one logical
+  // trigger. Keying on (type, intervalIdx=target) is enough because both
+  // halves of a TARGET_BOTH config share the same target value, while a
+  // separate TARGET_SHADE-only entry of the same type has a distinct
+  // target and still gets its own cascade.
+  const uint32_t intervalIdx = static_cast<uint32_t>(entry.expression->getTarget());
+  const uint32_t nowMs = millis();
+  if (recentCascades_.seen(entry.config.type, intervalIdx, nowMs)) {
+    return;  // dedup: same logical trigger already cascaded
+  }
+  recentCascades_.record(entry.config.type, intervalIdx, nowMs);
+
   const uint32_t staggerMs = entry.config.getParameter(kParamCascadeStaggerMs, 0);
 
   ExpressionInvocation inv;

@@ -1,7 +1,9 @@
 #ifndef LAMP_EXPRESSIONS_MANAGER_H
 #define LAMP_EXPRESSIONS_MANAGER_H
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "../config/config_types.hpp"
@@ -14,6 +16,14 @@
 #include "./breathing_expression.hpp"
 
 namespace lamp {
+
+// Cascade dedup window. The TARGET_BOTH auto-trigger from Expression::control()
+// fires shade+base entries back-to-back in the same loop tick (microseconds
+// apart), so anything wider than a frame would catch the double-fire; 250 ms
+// also tolerates a generous control()-iteration slip without being so loose
+// it suppresses a deliberate back-to-back manual trigger. Pinned by
+// test/test_cascade_dedup/cascade_dedup.cpp.
+static constexpr uint32_t kCascadeDedupWindowMs = 250;
 
 class Compositor;
 class ExpressionManager;
@@ -65,10 +75,65 @@ class ExpressionManager {
   };
   std::vector<TransientExpression> transientExpressions_;
 
+  // Small ring of (type, intervalIdx, fireMs) for cascades that have
+  // already fanned out, so a TARGET_BOTH expression's per-entry auto-
+  // trigger from Expression::control() doesn't double-cascade through
+  // onExpressionFired(). The shade entry fires, records (type, idx, now),
+  // then the base entry fires microseconds later — recentCascades_.seen()
+  // returns true and maybeCascade() short-circuits. The pure data shape
+  // (keying, eviction, window check) is mirrored in
+  // test/test_cascade_dedup/cascade_dedup.cpp.
+  //
+  // CAPACITY=8 is generous: a logical trigger emits at most two entries
+  // (TARGET_BOTH), and entries age out of the window (250 ms) inside a
+  // few control() iterations.
+  struct RecentCascade {
+    static constexpr size_t CAPACITY = 8;
+
+    bool seen(const std::string& type, uint32_t intervalIdx,
+              uint32_t nowMs) const {
+      for (size_t i = 0; i < CAPACITY; ++i) {
+        const Entry& e = entries[i];
+        if (!e.used) continue;
+        if (e.type != type || e.intervalIdx != intervalIdx) continue;
+        if (nowMs - e.fireMs <= kCascadeDedupWindowMs) return true;
+      }
+      return false;
+    }
+
+    void record(const std::string& type, uint32_t intervalIdx,
+                uint32_t nowMs) {
+      Entry& slot = entries[head];
+      slot.used = true;
+      slot.type = type;
+      slot.intervalIdx = intervalIdx;
+      slot.fireMs = nowMs;
+      head = (head + 1) % CAPACITY;
+    }
+
+   private:
+    struct Entry {
+      bool used = false;
+      std::string type;
+      uint32_t intervalIdx = 0;
+      uint32_t fireMs = 0;
+    };
+    Entry entries[CAPACITY];
+    size_t head = 0;
+  };
+  RecentCascade recentCascades_;
+
   // Send the cascade fan-out for an expression that just fired locally,
   // if its config opts in via the cascadeEnabled parameter. No-op when
   // no ShowReceiver has been wired in. Never called for remote-arrived
   // triggers — that's the structural loop break.
+  //
+  // Internally gates on recentCascades_ to enforce the "cascade once per
+  // logical trigger" invariant: a TARGET_BOTH expression auto-firing the
+  // shade and base entries in the same tick must produce exactly one
+  // outbound cascade. Use the (type, intervalIdx) key — currently the
+  // entry's target field, which is identical across both halves of a
+  // TARGET_BOTH config and distinct for TARGET_SHADE vs TARGET_BASE.
   void maybeCascade(const ExpressionEntry& entry);
 
  public:
