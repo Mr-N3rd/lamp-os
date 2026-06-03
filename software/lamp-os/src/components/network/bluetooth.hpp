@@ -31,10 +31,6 @@
 #define BLE_MINIMUM_RSSI_VALUE -94
 
 namespace lamp {
-// Set by ble_control on GATT connect/disconnect. While true, the scan
-// auto-restart in onScanEnd is suppressed. Defined in bluetooth.cpp.
-extern volatile bool scanPausedForGattClient;
-
 /**
  * @brief Entrypoint class to advertise and track lamps by Bluetooth LE
  */

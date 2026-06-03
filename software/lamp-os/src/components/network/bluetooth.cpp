@@ -16,10 +16,6 @@
 
 namespace lamp {
 
-// Set true by ble_control on GATT connect; suppresses scan-restart in
-// onScanEnd. Cleared on disconnect.
-volatile bool scanPausedForGattClient = false;
-
 // Cached manufacturer-data vector. `begin()` populates it;
 // `setAdvertisedColors()` rebuilds + re-applies when shade or base
 // changes. Lives at file scope so we can compare-and-skip when the
@@ -95,7 +91,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     nearbyLamps.prune(LAMP_PRUNE_TIME_MS);
     // Skip restart while a phone is using the GATT control service.
     // ble_control resumes the scan on disconnect.
-    if (!scanPausedForGattClient) {
+    if (!ble_control::isScanPaused()) {
       NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
     }
   }

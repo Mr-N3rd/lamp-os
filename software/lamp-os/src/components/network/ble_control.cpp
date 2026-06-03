@@ -15,7 +15,7 @@
 #include "../../behaviors/fade_out.hpp"  // fadeOutRebootRequested flag
 #include "../../util/color.hpp"
 #include "../../lamps/standard_lamp.hpp"
-#include "./bluetooth.hpp"  // for lamp::scanPausedForGattClient + BLE_GAP_SCAN_TIME_MS
+#include "./bluetooth.hpp"  // for BLE_GAP_SCAN_TIME_MS
 #include "./crypto.hpp"
 #include "./nearby_lamps.hpp"
 #include "./show_receiver.hpp"
@@ -80,9 +80,16 @@ static bool                  s_running     = false;
 //                         home.brightness instead of lamp.brightness.
 static volatile bool         s_clientConnected   = false;
 static volatile bool         s_homeModePageActive = false;
+// Set true on GATT connect, cleared on GATT disconnect. Queried by
+// bluetooth.cpp's onScanEnd via isScanPaused() so the central scan
+// doesn't auto-restart while a phone is using the GATT control service.
+// volatile because it's written from the BLE host task (Core 0) and read
+// from the scan callback (also Core 0 today, but treat as cross-task).
+static volatile bool         s_scanPausedForGattClient = false;
 
 bool isClientConnected()   { return s_clientConnected;   }
 bool isHomeModePageActive() { return s_homeModePageActive; }
+bool isScanPaused()        { return s_scanPausedForGattClient; }
 
 // Per-connection state. NimBLE caps simultaneous connections at
 // CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3, so a fixed-size array beats the
@@ -266,7 +273,7 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     //   latency = 0, supervision timeout = 400 (4.0 s).
     server->updateConnParams(handle, 12, 24, 0, 400);
 
-    lamp::scanPausedForGattClient = true;
+    s_scanPausedForGattClient = true;
     NimBLEDevice::getScan()->stop();
 
     // Track BT-session state. The lamp no longer associates to WiFi
@@ -289,7 +296,7 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     freeSlot(handle);
 
     // Resume the central scan now that the phone is gone.
-    lamp::scanPausedForGattClient = false;
+    s_scanPausedForGattClient = false;
     NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
 
     s_clientConnected = false;

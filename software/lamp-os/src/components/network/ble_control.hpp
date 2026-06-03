@@ -130,4 +130,12 @@ bool isClientConnected();
  */
 bool isHomeModePageActive();
 
+/**
+ * @brief True while the central scan is paused because a GATT client is
+ *        connected. bluetooth.cpp's onScanEnd queries this to decide
+ *        whether to auto-restart the scan. Flipped on GATT connect /
+ *        disconnect inside ble_control.cpp.
+ */
+bool isScanPaused();
+
 }  // namespace ble_control
