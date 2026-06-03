@@ -516,11 +516,10 @@ void setup() {
   // the user's saved home SSID is currently visible.
   wifi::ensureGridChannel();
 
-  // Bring up ESP-NOW grid presence (HELLO + COLORS). Independent of home
-  // WiFi — runs on whatever channel the radio is on. See lamp_protocol.hpp.
-  showReceiver.begin(&config);
   // Route inbound CONTROL_OP payloads (addressed to us or broadcast) into a
   // pending slot. WiFi-task safe: pure memcpy under portMUX, no heap work.
+  // MUST be installed BEFORE showReceiver.begin() — otherwise any CONTROL_OP
+  // that arrives in the gap is dropped because controlOpHandler_ is null.
   showReceiver.setControlOpHandler([](const uint8_t* payload, size_t len) {
     if (len > MAX_PENDING_OP_JSON) return;
     portENTER_CRITICAL(&pendingMux);
@@ -529,6 +528,9 @@ void setup() {
     pendingInboundOpJson.valid = true;
     portEXIT_CRITICAL(&pendingMux);
   });
+  // Bring up ESP-NOW grid presence (HELLO + COLORS). Independent of home
+  // WiFi — runs on whatever channel the radio is on. See lamp_protocol.hpp.
+  showReceiver.begin(&config);
   // Wire the cascade fan-out path. The manager only sends after this; before
   // begin/setShowReceiver, local triggers fire but never cascade.
   expressionManager.setShowReceiver(&showReceiver);
@@ -954,8 +956,10 @@ void loop() {
 
   // Fire any delayed triggerExpression invocations whose deadline has passed.
   // Bounded queue (MAX_PENDING_TRIGGERS) keeps this O(1) amortised; ordering
-  // isn't strict (we walk in insertion order, fire ready entries, skip the
-  // rest) but the cascade design tolerates the slight per-tick jitter.
+  // is INSERTION-order, not deadline-order — if a short-delayMs invocation
+  // arrives after a long-delayMs one, the long one fires first when its
+  // deadline hits. Best-effort by design; the cascade UX tolerates the
+  // jitter and avoiding a priority queue keeps the drain trivial.
   if (!pendingTriggers.empty()) {
     const uint32_t now = millis();
     for (auto it = pendingTriggers.begin(); it != pendingTriggers.end();) {

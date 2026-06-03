@@ -98,6 +98,18 @@ class Expression : public AnimatedBehavior {
    *        invocation's colors for a single firing (then restore). Distinct
    *        from configure() which is intended for boot/upsert and resets the
    *        auto-trigger clock.
+   *
+   *        SCOPE: the manager's snapshot-set-trigger-restore pattern is
+   *        fully correct for expression types that capture any color they
+   *        need into a private member inside onTrigger() (e.g. Glitchy,
+   *        which assigns glitchColor = getRandomColor() before returning).
+   *        For continuous expressions that read `colors` in onUpdate()
+   *        on later frames (Pulse, Breathing, Shifty), the restore happens
+   *        before onUpdate runs and the override is silently dropped —
+   *        those peers will animate with their own configured palette.
+   *        That's acceptable for slice 1 (cascade UI is Glitchy-only). When
+   *        cascade is exposed for continuous types, introduce a transient
+   *        colorsOverride_ member consumed by subclasses' onUpdate paths.
    */
   void setColors(const std::vector<Color>& inColors) { colors = inColors; }
 

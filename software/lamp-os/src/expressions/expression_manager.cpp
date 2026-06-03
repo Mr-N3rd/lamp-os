@@ -105,7 +105,7 @@ void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
   inv.colors = entry.expression->getColors();
   inv.target = static_cast<uint8_t>(entry.expression->getTarget());
   inv.parameters = parametersWithoutCascadeKeys(entry.config.parameters);
-  inv.delayMs = 0;  // sendExpressionToAll will stagger per peer.
+  // inv.delayMs defaults to 0; sendExpressionToAll assigns per-peer stagger.
 
   showReceiver_->sendExpressionToAll(inv, staggerMs);
 }
@@ -159,16 +159,21 @@ bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
   for (auto& entry : expressions) {
     if (entry.type != inv.type || !entry.expression) continue;
     // TARGET_BOTH invocations fire any entry of this type; specific target
-    // fires only entries with that exact target.
+    // fires only entries with that exact target. Intentional double-fire:
+    // a TARGET_BOTH expression has TWO entries on this lamp (shade buffer +
+    // base buffer, created by addExpression's targetBuffers loop), and both
+    // halves of the lamp should animate together.
     if (invTarget != TARGET_BOTH && entry.expression->getTarget() != invTarget) {
       continue;
     }
     // If the invocation supplies colors, swap the palette ONLY for this
     // firing — restore immediately after trigger() so the receiver's local
     // config isn't permanently mutated and subsequent local triggers use the
-    // user's configured palette. Safe because Expression::trigger() is
-    // synchronous (onTrigger captures any color it needs into private state
-    // before returning).
+    // user's configured palette. Safe for one-shot expressions whose
+    // onTrigger captures the color (Glitchy). For continuous expressions
+    // that read `colors` in onUpdate (Pulse/Breathing/Shifty), the restore
+    // wins and the override is silently dropped — see the SCOPE note on
+    // Expression::setColors. Acceptable for slice 1 (Glitchy-only cascade).
     if (!inv.colors.empty()) {
       const auto savedColors = entry.expression->getColors();
       entry.expression->setColors(inv.colors);

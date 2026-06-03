@@ -444,6 +444,9 @@ class _GlitchyParams extends StatelessWidget {
     // divisions from `max - min`, so we scale the wire value (ms) down to
     // 0..50 for the slider and back up on edit. Format uses the same ms/s
     // regime as Glitchy's duration slider above for visual consistency.
+    // Note: this slider is the only writer of cascadeStaggerMs and always
+    // emits multiples of 100. If a non-multiple ever lands in storage (BLE
+    // replay, manual edit), the .round() quantises it on first interaction.
     String fmtMs(int sliderValue) {
       final ms = sliderValue * 100;
       if (ms < 1000) return '${ms}ms';
