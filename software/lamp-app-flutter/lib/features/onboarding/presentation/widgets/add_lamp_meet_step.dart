@@ -7,8 +7,10 @@ import '../../../control/presentation/widgets/critter_asset.dart';
 import '../../application/add_lamp_notifier.dart';
 
 /// Sits between Name and Password. Once the user has given the lamp a name
-/// (emotional buy-in is highest here), introduce the headline features in
-/// the adoption-pet voice so they know what they're bringing home.
+/// (emotional buy-in is highest here), reassure them in plain English that
+/// they'll be able to make the lamp their own — personality, colors,
+/// expressions — so they're not bracing for a config marathon on the next
+/// screen.
 class AddLampMeetStep extends ConsumerWidget {
   const AddLampMeetStep({super.key});
 
@@ -44,43 +46,30 @@ class AddLampMeetStep extends ConsumerWidget {
             ),
             const SizedBox(height: 6),
             const Text(
-              "Here's what they get up to once they settle in.",
+              "They're yours to shape from here on.",
               textAlign: TextAlign.center,
               style: TextStyle(color: BrandColors.fogGrey, fontSize: 13),
             ),
             const SizedBox(height: 20),
-            const Expanded(
+            Expanded(
               child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    _Feature(
-                      icon: Icons.brightness_6,
-                      title: 'Two-tone body',
-                      text:
-                          "Their base and shade glow on their own — paint moods you couldn't with one strip.",
-                    ),
-                    _Feature(
-                      icon: Icons.auto_awesome,
-                      title: 'Four moods',
-                      text:
-                          'Glitch, Pulse, Breath, Shift — layer them up so your lamp shimmers without you lifting a finger.',
-                    ),
-                    _Feature(
-                      icon: Icons.hub,
-                      title: 'Mesh friends',
-                      text:
-                          "Lamps notice each other over the air and greet, mimic, follow. Adopt a few and they'll keep each other company.",
-                    ),
-                    _Feature(
-                      icon: Icons.home,
-                      title: 'Home sense',
-                      text:
-                          'They feel when your home Wi-Fi is nearby and quiet down on their own — no timers to fuss with.',
-                    ),
-                  ],
+                child: Text(
+                  "You can pick the colors $name wears, layer little "
+                  'expressions so they shimmer on their own, and even tune '
+                  'their personality — how they greet your other lamps and '
+                  "how calm they get around home. Nothing to set up now; "
+                  "it's all a tap away in $name's tabs, whenever you're "
+                  'ready.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: BrandColors.lampWhite,
+                    fontSize: 14,
+                    height: 1.55,
+                  ),
                 ),
               ),
             ),
+            const SizedBox(height: 16),
             Row(
               children: [
                 TextButton(
@@ -88,13 +77,6 @@ class AddLampMeetStep extends ConsumerWidget {
                   child: const Text('Back'),
                 ),
                 const Spacer(),
-                TextButton(
-                  onPressed: notifier.next,
-                  style: TextButton.styleFrom(
-                      foregroundColor: BrandColors.slateGrey),
-                  child: const Text('Skip the tour'),
-                ),
-                const SizedBox(width: 8),
                 FilledButton(
                   onPressed: notifier.next,
                   child: const Text('Sounds good'),
@@ -103,60 +85,6 @@ class AddLampMeetStep extends ConsumerWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _Feature extends StatelessWidget {
-  const _Feature({required this.icon, required this.title, required this.text});
-  final IconData icon;
-  final String title;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: BrandColors.glowPink.withValues(alpha: 0.16),
-            ),
-            child: Icon(icon, color: BrandColors.glowPink, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: BrandColors.lampWhite,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  text,
-                  style: const TextStyle(
-                    color: BrandColors.fogGrey,
-                    fontSize: 12,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
