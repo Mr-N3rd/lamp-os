@@ -123,12 +123,21 @@ String formatVersion(uint32_t v) {
   return String(buf);
 }
 
-void dumpInventory(uint32_t nowMs) {
+void dumpInventory(uint32_t /*nowMs*/) {
+  // Re-sample millis() here rather than trusting the loop()-top nowMs.
+  // HELLOs can arrive between the loop-top sample and this dump call
+  // (auroraClient.loop() can run for hundreds of ms between them), and
+  // lastSeenMs gets stamped with the recv-time millis(). If lastSeenMs
+  // is fresher than the captured nowMs, the unsigned subtraction wraps
+  // and we'd print age=4294965031ms instead of 18ms.
+  const uint32_t nowMs = millis();
   auto roster = inventory.snapshot();
   Serial.printf("[wisp] roster (%u lamp%s):\n",
                 (unsigned)roster.size(), roster.size() == 1 ? "" : "s");
   for (const auto& e : roster) {
-    const uint32_t ageMs = nowMs - e.lastSeenMs;
+    // Defensive: if lastSeenMs is still somehow ahead of now (e.g. millis()
+    // overflow boundary), clamp to 0 instead of wrapping.
+    const uint32_t ageMs = (nowMs >= e.lastSeenMs) ? nowMs - e.lastSeenMs : 0;
     Serial.printf("  %02X:%02X:%02X:%02X:%02X:%02X  %-12s  fw=%s  age=%lums\n",
                   e.mac[0], e.mac[1], e.mac[2], e.mac[3], e.mac[4], e.mac[5],
                   e.name.c_str(), formatVersion(e.firmwareVersion).c_str(),

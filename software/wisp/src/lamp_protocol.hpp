@@ -99,9 +99,16 @@ enum class EventKind : uint8_t {
 };
 
 constexpr size_t HEADER_SIZE = 6;
-// HELLO fixed prefix: header(6) + sourceMac(6) + shade(4) + base(4) + firmwareVersion(4).
-// Name length byte + name bytes follow this prefix.
-constexpr size_t HELLO_FIXED_SIZE = 23;
+// 6 (header: magic+ver+type+seq) + 6 (sourceMac) + 4 (shade RGBW) +
+// 4 (base RGBW) + 4 (firmwareVersion LE) = 24 bytes. Previously declared
+// as 23 — an off-by-one that made buildHello report 1 fewer byte than
+// it actually wrote (the firmwareVersion's MSB landed at offset 23 but
+// HELLO_FIXED_SIZE said the prefix ended at offset 22). Effect on the
+// wire: the last byte of the name field was truncated and parseHello
+// read stack garbage into its last slot ("jacko" → "jackx" in the
+// roster). Both lamp and wisp must run the same value here — protocol
+// is verbatim-mirrored.
+constexpr size_t HELLO_FIXED_SIZE = 24;
 constexpr size_t HELLO_MAX_NAME = 32;
 constexpr size_t HELLO_MAX_SIZE = HELLO_FIXED_SIZE + 1 + HELLO_MAX_NAME;  // +1 for name length byte
 
