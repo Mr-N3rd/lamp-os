@@ -1,11 +1,11 @@
 // Native-host unit tests for DedupRing data behavior.
 //
-// Context: audit finding #7 (Stability finding #3) flagged the three
-// DedupRing instances inside ShowReceiver (helloDedup_, colorsDedup_,
-// controlOpDedup_) as mutated from BOTH the WiFi recv task (Core 0) and
-// the Arduino loop task (Core 1, via sendControlOp's record()). Without
-// a mutex, two concurrent record() calls can corrupt the ring or cause
-// memcmp to run against a half-written mac[].
+// Context: audit finding #7 (Stability finding #3) flagged the
+// DedupRing instances inside ShowReceiver (helloDedup_, controlOpDedup_)
+// as mutated from BOTH the WiFi recv task (Core 0) and the Arduino loop
+// task (Core 1, via sendControlOp's record()). Without a mutex, two
+// concurrent record() calls can corrupt the ring or cause memcmp to run
+// against a half-written mac[].
 //
 // Fix in lamp_protocol.hpp: add a portMUX_TYPE mux_ and wrap the
 // record()-body critical section (compare loop + slot write). The

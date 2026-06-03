@@ -62,7 +62,6 @@ Captured at end of the session that landed:
 
 - **OTA firmware updates.** Info-page button that polls a release manifest URL when on home WiFi, downloads `firmware.bin`, verifies hash, flashes via `FadeOutBehavior` reboot. Gotcha: `partitions.csv` needs to be OTA-capable; the first OTA-enabling flash must go over USB.
 - **Web UI hybrid.** Small `ESPAsyncWebServer` bound to STA, serves a stripped-down `lamp-ui` for desktop browser config when the lamp is on home WiFi. BLE stays the primary control path.
-- **Repeater repurpose → wisp.** The Seeed Xiao ESP32-C6 board formerly hosting `software/artnet-repeater/` is being rebuilt as **wisp** under `software/wisp/` — a palette bridge that follows an Aurora device and fans paint to the lamp mesh, plus a firmware carrier for mesh OTA. Spec: `docs/superpowers/specs/2026-06-03-wisp-design.md`. The old `software/artnet-repeater/` tree stays in place as reference until the wisp build is solid; archive or delete it after that.
 
 ## Stale concerns to verify or close
 

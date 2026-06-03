@@ -1,8 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-#include <freertos/FreeRTOS.h>
-#include <portmacro.h>
 
 #include <cstdint>
 #include <functional>
@@ -33,13 +31,14 @@ namespace lamp {
 using ControlOpHandler = std::function<void(const uint8_t* payload, size_t len,
                                             const uint8_t srcMac[6])>;
 
-// Receives streamed show frames + control ops over ESP-NOW, and announces
-// this lamp's presence (HELLO) so peers can populate their registry with
-// our MAC + name + colors. Also maintains the grid peer list (incoming
-// HELLOs) and dispatches MSG_CONTROL_OP via the registered handler.
+// Receives HELLO + CONTROL_OP frames over ESP-NOW, and announces this
+// lamp's presence (HELLO) so peers can populate their registry with our
+// MAC + name + colors. Maintains the grid peer list (incoming HELLOs)
+// and dispatches MSG_CONTROL_OP via the registered handler.
 //
-// Recv runs on the Wi-Fi task; all shared state is guarded by portMUX so
-// the Arduino loop task can read safely.
+// Recv runs on the Wi-Fi task; the DedupRing instances guard themselves
+// with portMUX internally so the Arduino loop task can call sendControlOp
+// concurrently without racing the recv path.
 class ShowReceiver {
  public:
   // `cfg` is used to read the lamp's friendly name and current configured
@@ -52,12 +51,6 @@ class ShowReceiver {
 
   // Read this lamp's own MAC. Populated after begin().
   void getMyMac(uint8_t out[6]) const;
-
-  // True if a COLORS frame for this lamp arrived within `maxAgeMs`.
-  bool hasRecentFrame(uint32_t maxAgeMs);
-
-  // Snapshot the latest received colors. Returns false if no frame yet.
-  bool snapshot(uint8_t shade[4], uint8_t base[4], uint8_t* mode, uint8_t* parameter);
 
   // Register a handler for MSG_CONTROL_OP addressed to this lamp or
   // broadcast. Called on the WiFi recv task — handler must be fast and
@@ -101,18 +94,7 @@ class ShowReceiver {
   Config* config_ = nullptr;
   uint8_t myMac_[6] = {0};
 
-  // Protected by mux_.
-  bool haveFrame_ = false;
-  uint8_t latestShade_[4] = {0, 0, 0, 0};
-  uint8_t latestBase_[4]  = {0, 0, 0, 0};
-  uint8_t latestMode_ = 0;
-  uint8_t latestParam_ = 0;
-  uint32_t latestFrameMs_ = 0;
-
-  portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
-
   lamp_protocol::DedupRing helloDedup_;
-  lamp_protocol::DedupRing colorsDedup_;
   lamp_protocol::DedupRing controlOpDedup_;
 
   uint32_t lastHelloMs_ = 0;

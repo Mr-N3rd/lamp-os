@@ -13,7 +13,6 @@
 #include "components/network/nearby_lamps.hpp"
 #include "components/network/show_receiver.hpp"
 #include "components/network/wifi.hpp"
-#include "behaviors/show_behavior.hpp"
 #include "expressions/expression_manager.hpp"
 #include "util/color.hpp"
 #include "behaviors/configurator.hpp"
@@ -144,8 +143,6 @@ lamp::KnockoutBehavior baseKnockoutBehavior;
 lamp::ExpressionManager expressionManager;
 lamp::Config config;
 lamp::ShowReceiver showReceiver;
-lamp::ShowBehavior shadeShowBehavior;
-lamp::ShowBehavior baseShowBehavior;
 
 // ----- Local appliers for mesh-received ops --------------------------------
 //
@@ -479,16 +476,6 @@ void initBehaviors() {
   baseKnockoutBehavior = lamp::KnockoutBehavior(&base, 0, true);
   baseKnockoutBehavior.knockoutPixels = config.base.knockoutPixels;
 
-  // ShowBehaviors render the latest COLORS frame received via ESP-NOW. They
-  // only run while ShowReceiver reports a fresh frame; otherwise they stay
-  // STOPPED and lower-priority behaviors (expressions, idle) render.
-  shadeShowBehavior = lamp::ShowBehavior(&shade, 0, true);
-  shadeShowBehavior.setSide(lamp::ShowBehavior::SHADE);
-  shadeShowBehavior.setReceiver(&showReceiver);
-  baseShowBehavior = lamp::ShowBehavior(&base, 0, true);
-  baseShowBehavior.setSide(lamp::ShowBehavior::BASE);
-  baseShowBehavior.setReceiver(&showReceiver);
-
   expressionManager.begin(&shade, &base);
   expressionManager.loadFromConfig(config.expressions);
 
@@ -497,11 +484,6 @@ void initBehaviors() {
   // Expression behaviors (lowest priority — automated effects)
   auto exprBehaviors = expressionManager.getBehaviors();
   allBehaviors.insert(allBehaviors.end(), exprBehaviors.begin(), exprBehaviors.end());
-
-  // ShowBehaviors sit just above expressions: when a grid COLORS frame is
-  // fresh they take over; when it ages out they yield to expressions.
-  allBehaviors.push_back(&shadeShowBehavior);
-  allBehaviors.push_back(&baseShowBehavior);
 
   // Social greeting behaviors (high priority)
   allBehaviors.push_back(&shadeSocialBehavior);

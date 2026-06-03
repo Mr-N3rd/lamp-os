@@ -1,15 +1,11 @@
 #pragma once
 
-// Shared wire format for repeater <-> lamp over ESP-NOW broadcast.
-// Header-only and identical between software/artnet-repeater/src/lamp_protocol.hpp
-// and software/lamp-os/src/components/network/lamp_protocol.hpp — keep them in sync
-// manually until either side is ready to live in a shared lib.
+// Wire format for lamp <-> lamp ESP-NOW broadcast (HELLO + CONTROL_OP).
 
 #include <cstdint>
 #include <cstring>
 
-// portMUX is FreeRTOS-only. The header is shared with the artnet-repeater
-// (also ESP32, FreeRTOS available) but is also indirectly mirrored in
+// portMUX is FreeRTOS-only. The header is also indirectly mirrored in
 // native unit tests — guard the include so a hypothetical native compile
 // of THIS header doesn't break, and provide a no-op fallback.
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
@@ -40,7 +36,6 @@ constexpr uint8_t PROTOCOL_VERSION = 0x02;
 
 enum MsgType : uint8_t {
   MSG_HELLO = 0x01,
-  MSG_COLORS = 0x02,
   // Forwarded BLE control write. Payload is JSON tagged with a `char` field
   // naming the local control surface to invoke (brightness, shadeColors,
   // baseColors, knockout, expressionOp, settings, ...). The local
@@ -58,7 +53,6 @@ constexpr uint8_t FLAG_LOCAL_ONLY = 0x80;
 constexpr uint8_t MSG_TYPE_MASK   = 0x7F;
 
 constexpr size_t HEADER_SIZE = 6;
-constexpr size_t COLORS_SIZE = 24;       // header(6) + payload(18)
 // HELLO fixed prefix: header(6) + sourceMac(6) + shade(4) + base(4) + firmwareVersion(4).
 // Name length byte + name bytes follow this prefix.
 constexpr size_t HELLO_FIXED_SIZE = 23;
@@ -74,15 +68,6 @@ constexpr size_t CONTROL_MAX_SIZE    = CONTROL_FIXED + CONTROL_MAX_PAYLOAD;
 constexpr size_t MAX_PACKET_SIZE = CONTROL_MAX_SIZE > HELLO_MAX_SIZE
                                        ? CONTROL_MAX_SIZE
                                        : HELLO_MAX_SIZE;
-
-struct ParsedColors {
-  uint16_t seq;
-  uint8_t targetMac[6];
-  uint8_t shade[4];  // RGBW
-  uint8_t base[4];   // RGBW
-  uint8_t mode;
-  uint8_t parameter;
-};
 
 struct ParsedHello {
   uint16_t seq;
@@ -105,28 +90,6 @@ struct ParsedControlOp {
   const uint8_t* payload;  // points into the recv buffer; caller must not retain past this call
   bool localOnly;          // FLAG_LOCAL_ONLY was set on the wire
 };
-
-// Build a COLORS frame into `buf`. Returns 0 on bad args, COLORS_SIZE on success.
-inline size_t buildColors(uint8_t* buf, size_t bufLen, uint16_t seq,
-                          const uint8_t targetMac[6],
-                          const uint8_t shadeRGBW[4], const uint8_t baseRGBW[4],
-                          uint8_t mode, uint8_t parameter) {
-  if (!buf || bufLen < COLORS_SIZE || !targetMac || !shadeRGBW || !baseRGBW) return 0;
-  buf[0] = MAGIC_0;
-  buf[1] = MAGIC_1;
-  buf[2] = PROTOCOL_VERSION;
-  buf[3] = MSG_COLORS;
-  buf[4] = static_cast<uint8_t>(seq & 0xFF);
-  buf[5] = static_cast<uint8_t>((seq >> 8) & 0xFF);
-  std::memcpy(&buf[6], targetMac, 6);
-  std::memcpy(&buf[12], shadeRGBW, 4);
-  std::memcpy(&buf[16], baseRGBW, 4);
-  buf[20] = mode;
-  buf[21] = parameter;
-  buf[22] = 0;
-  buf[23] = 0;
-  return COLORS_SIZE;
-}
 
 // Build a HELLO frame into `buf`. `name` is utf-8, NOT null-terminated on the wire.
 // `nameLen` clamped to HELLO_MAX_NAME. `firmwareVersion` is the sender's packed
@@ -203,17 +166,6 @@ inline bool isLocalOnly(const uint8_t* data, size_t len) {
   if (data[0] != MAGIC_0 || data[1] != MAGIC_1) return false;
   if (data[2] != PROTOCOL_VERSION) return false;
   return (data[3] & FLAG_LOCAL_ONLY) != 0;
-}
-
-inline bool parseColors(const uint8_t* data, size_t len, ParsedColors& out) {
-  if (inspect(data, len) != MSG_COLORS || len < COLORS_SIZE) return false;
-  out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
-  std::memcpy(out.targetMac, &data[6], 6);
-  std::memcpy(out.shade, &data[12], 4);
-  std::memcpy(out.base, &data[16], 4);
-  out.mode = data[20];
-  out.parameter = data[21];
-  return true;
 }
 
 inline bool parseControlOp(const uint8_t* data, size_t len, ParsedControlOp& out) {

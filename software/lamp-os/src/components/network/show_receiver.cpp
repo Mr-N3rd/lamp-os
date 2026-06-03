@@ -142,54 +142,9 @@ bool ShowReceiver::sendControlOp(const uint8_t targetMac[6],
   return link_.broadcast(buf, n);
 }
 
-bool ShowReceiver::hasRecentFrame(uint32_t maxAgeMs) {
-  bool have;
-  uint32_t lastMs;
-  portENTER_CRITICAL(&mux_);
-  have = haveFrame_;
-  lastMs = latestFrameMs_;
-  portEXIT_CRITICAL(&mux_);
-  if (!have) return false;
-  return (millis() - lastMs) <= maxAgeMs;
-}
-
-bool ShowReceiver::snapshot(uint8_t shade[4], uint8_t base[4], uint8_t* mode, uint8_t* parameter) {
-  bool have;
-  portENTER_CRITICAL(&mux_);
-  have = haveFrame_;
-  if (have) {
-    std::memcpy(shade, latestShade_, 4);
-    std::memcpy(base, latestBase_, 4);
-    if (mode) *mode = latestMode_;
-    if (parameter) *parameter = latestParam_;
-  }
-  portEXIT_CRITICAL(&mux_);
-  return have;
-}
-
 void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len) {
   const uint8_t msgType = lamp_protocol::inspect(data, len);
-  if (msgType == lamp_protocol::MSG_COLORS) {
-    lamp_protocol::ParsedColors c;
-    if (!lamp_protocol::parseColors(data, len, c)) return;
-    // Dedup by (targetMac, seq) — also gates whether to rebroadcast.
-    if (!colorsDedup_.record(c.targetMac, lamp_protocol::MSG_COLORS, c.seq)) return;
-
-    // Rebroadcast unseen COLORS once for gossip range extension.
-    link_.broadcast(data, len);
-
-    // If addressed to us, latch the state.
-    if (std::memcmp(c.targetMac, myMac_, 6) == 0) {
-      portENTER_CRITICAL(&mux_);
-      std::memcpy(latestShade_, c.shade, 4);
-      std::memcpy(latestBase_,  c.base,  4);
-      latestMode_ = c.mode;
-      latestParam_ = c.parameter;
-      latestFrameMs_ = millis();
-      haveFrame_ = true;
-      portEXIT_CRITICAL(&mux_);
-    }
-  } else if (msgType == lamp_protocol::MSG_HELLO) {
+  if (msgType == lamp_protocol::MSG_HELLO) {
     lamp_protocol::ParsedHello h;
     if (!lamp_protocol::parseHello(data, len, h)) return;
     if (!helloDedup_.record(h.sourceMac, lamp_protocol::MSG_HELLO, h.seq)) return;
