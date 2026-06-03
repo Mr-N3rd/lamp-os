@@ -795,6 +795,19 @@ void loop() {
 #ifdef LAMP_DEBUG
       Serial.printf("[loop] settingsBlob: incoming JSON parse failed\n");
 #endif
+    } else if (incomingDoc["factoryReset"].as<bool>()) {
+      // Factory reset sentinel — wipe the lamp's NVS namespace entirely
+      // and reboot. Comes up with empty NVS → Config defaults → awaiting
+      // adoption. App auth-gates this write, so unauthenticated peers
+      // can't trigger a reset.
+#ifdef LAMP_DEBUG
+      Serial.println("[loop] settingsBlob: factoryReset sentinel, wiping NVS");
+#endif
+      prefs.begin("lamp", false);
+      prefs.clear();
+      prefs.end();
+      ble_control::notifyStateChange();
+      lamp::fadeOutRebootRequested = true;
     } else {
       JsonDocument fullDoc = config.asJsonDocument();
       JsonObject full = fullDoc.as<JsonObject>();

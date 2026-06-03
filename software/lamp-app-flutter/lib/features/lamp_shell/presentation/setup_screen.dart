@@ -112,6 +112,15 @@ class _SetupBody extends ConsumerWidget {
                 'Shade ${state.shade.px}×${state.shade.byteOrder}',
             onTap: () => context.push(AppRoutes.advancedLeds(lampId)),
           ),
+        // Factory reset — also gated on session-advanced. Destructive:
+        // wipes NVS and re-adopts. Dialog confirms before firing.
+        if (ref.watch(advancedSessionProvider(lampId)))
+          SettingsRow(
+            icon: Icons.restore_outlined,
+            title: 'Factory reset',
+            subtitle: 'Wipe all settings and re-adopt',
+            onTap: () => _showFactoryResetDialog(context, n.factoryReset),
+          ),
       ],
     );
   }
@@ -252,3 +261,44 @@ class _PasswordDialogState extends State<_PasswordDialog> {
     );
   }
 }
+
+/// Factory-reset confirmation. Destructive operation, so we go through a
+/// straightforward Cancel/Reset dialog (no text confirmation step like
+/// some apps require — the advanced-mode gesture barrier and the
+/// confirm-tap are gate enough). On Reset, the notifier sends the
+/// settings_blob sentinel and the lamp reboots into factory defaults.
+/// We pop the dialog before the BLE write returns so the UI doesn't
+/// hang on the reboot-disconnect.
+Future<void> _showFactoryResetDialog(
+  BuildContext context,
+  Future<void> Function() onReset,
+) =>
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: BrandColors.midnightBlack,
+        title: const Text('Factory reset?',
+            style: TextStyle(color: BrandColors.lampWhite)),
+        content: const Text(
+          "This wipes all settings on this lamp and returns it to its "
+          "out-of-box state. You'll need to onboard it again.",
+          style: TextStyle(color: BrandColors.fogGrey),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: BrandColors.error,
+            ),
+            onPressed: () {
+              onReset();
+              Navigator.of(context).pop();
+            },
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );

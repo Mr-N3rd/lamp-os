@@ -726,6 +726,71 @@ class ControlNotifier extends _$ControlNotifier {
     ));
   }
 
+  /// Wipe the lamp back to factory defaults. Writes the
+  /// `{factoryReset: true}` sentinel to settings_blob (encrypted with the
+  /// CURRENT password — the lamp authenticates the request before
+  /// clearing). Firmware clears its NVS namespace and reboots into the
+  /// awaiting-adoption state.
+  ///
+  /// After the expected reboot-disconnect, removes this lamp from the
+  /// inventory: it no longer has a password we know, and from the user's
+  /// POV it's a fresh lamp again. The caller (UI) typically navigates
+  /// back to the lamp picker.
+  Future<void> factoryReset() async {
+    final cur = state.value;
+    if (cur == null) return;
+    if (!cur.connected) return;
+
+    final ble = ref.read(bleClientProvider);
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final entry = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () =>
+          throw StateError('lamp $_deviceId not in inventory'),
+    );
+    final pw = entry.controlPassword ?? '';
+
+    final blob = <String, dynamic>{'factoryReset': true};
+    final blobJson = jsonEncode(blob);
+    final payload = pw.isEmpty
+        ? Uint8List.fromList([
+            LampCrypto.magicPlaintext,
+            ...utf8.encode(blobJson),
+          ])
+        : await LampCrypto.encryptOp(
+            op: blob,
+            password: pw,
+            saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+            charShortName: 'settingsBlob',
+          );
+
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.settingsBlob,
+        payload,
+        allowLongWrite: true,
+      );
+    } catch (e) {
+      // Expected: the reboot disconnects mid-write.
+      final msg = e.toString().toLowerCase();
+      final looksLikeReboot =
+          msg.contains('not connected') || msg.contains('disconnect');
+      if (!looksLikeReboot) rethrow;
+    }
+
+    // Lamp is now factory-fresh. Drop it from the inventory; the user
+    // re-onboards if they want to use it again. Cancel any pending
+    // reconnect — auth would fail anyway (the lamp's password is gone)
+    // and this lamp isn't in inventory anymore so there's nothing for
+    // the reconnect logic to authenticate as.
+    _reconnectTimer?.cancel();
+    await ref
+        .read(inventoryNotifierProvider.notifier)
+        .remove(_deviceId);
+  }
+
   /// Change the lamp's auth password. Writes a partial settings_blob with
   /// just `{lamp: {password: newPassword}}` — same path the onboarding
   /// claim uses to set the initial password. The lamp drains the write,
