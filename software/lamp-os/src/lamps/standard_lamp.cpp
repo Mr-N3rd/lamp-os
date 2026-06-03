@@ -25,6 +25,7 @@
 #include "./core/compositor.hpp"
 #include "./core/frame_buffer.hpp"
 #include "./globals.hpp"
+#include "./lamps/pending_json_slot.hpp"
 #include "./util/color.hpp"
 #include "./util/gradient.hpp"
 #include "./util/levels.hpp"
@@ -37,23 +38,15 @@ Preferences prefs;
 // (Core 0) only do a fixed-size memcpy under portMUX into these slots. The
 // loop task (Core 1) drains them and does ALL heap work — JSON parsing,
 // vector building, state mutation. Single-core memory pattern.
+//
+// The slot data shape (valid bit + length + bounded buffer + memcpy under
+// portMUX) is templated as lamp::PendingJsonSlot<N> in
+// src/lamps/pending_json_slot.hpp. Each post-helper below is a one-line
+// forwarder; each drain block below uses slot.drain(mux, buf) to read.
+// Audit fix #9 — collapses nine open-coded copies of the same idiom.
 
 constexpr size_t MAX_PENDING_JSON = 256;
 constexpr size_t MAX_PENDING_OP_JSON = 512;  // expression op payloads are larger
-
-struct PendingJsonUpdate {
-  bool valid = false;
-  uint16_t length = 0;
-  char json[MAX_PENDING_JSON];
-};
-
-struct PendingOpJsonUpdate {
-  bool valid = false;
-  uint16_t length = 0;
-  uint8_t srcMac[6] = {0};   // sender's WiFi STA MAC for cascade coalesce;
-                             // zero for non-mesh paths (BLE expressionOp etc.)
-  char json[MAX_PENDING_OP_JSON];
-};
 
 struct PendingKnockoutUpdate {
   bool valid = false;
@@ -73,17 +66,17 @@ volatile bool pendingApplyEffectiveBrightness = false;
 // window elapses. Core 1 drain calls config.flushDispositionsNow().
 // Audit finding #5 (NVS write amplification) — see config.hpp.
 volatile bool pendingFlushDispositionsRequested = false;
-PendingJsonUpdate pendingBaseColorsJson;
-PendingJsonUpdate pendingShadeColorsJson;
+lamp::PendingJsonSlot<MAX_PENDING_JSON> pendingBaseColorsJson;
+lamp::PendingJsonSlot<MAX_PENDING_JSON> pendingShadeColorsJson;
 PendingKnockoutUpdate pendingKnockout;
-PendingOpJsonUpdate pendingExpressionOpJson;
-PendingOpJsonUpdate pendingWifiOpJson;
-PendingOpJsonUpdate pendingTestActionJson;
-PendingOpJsonUpdate pendingRemoteOpJson;
+lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingExpressionOpJson;
+lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingWifiOpJson;
+lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingTestActionJson;
+lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingRemoteOpJson;
 // Disposition map writes from CHAR_SOCIAL_DISPOSITIONS land here from
 // Core 0; the loop drain on Core 1 parses + persists via Config so NVS
 // writes serialise with the settings_blob drain on the same core.
-PendingOpJsonUpdate pendingSocialDispositionsJson;
+lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingSocialDispositionsJson;
 
 // Pending triggerExpression invocations whose delayMs > 0 — drained from the
 // loop task once millis() reaches fireAtMs. Loop-task only (the WiFi-task
@@ -101,24 +94,21 @@ std::vector<DelayedInvocation> pendingTriggers;
 // the other pending-op drains (especially expressionOp) on the same core.
 // Decrypt + auth still happen on Core 0's BLE callback; the merge +
 // putString + fadeOut happens here. See drain block in loop().
-PendingOpJsonUpdate pendingSettingsBlobJson;
+lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingSettingsBlobJson;
 // Slot for ESP-NOW-inbound CONTROL_OP payloads. ShowReceiver runs the recv
 // callback on the WiFi task; it memcpys the payload here and the loop task
 // drains + dispatches. Mirrors the BLE Core 0 → loop pattern.
-PendingOpJsonUpdate pendingInboundOpJson;
+// Uses the WithMac variant because the inbound path carries the sender's
+// MAC alongside the payload (downstream coalesce keys on it).
+lamp::PendingJsonSlotWithMac<MAX_PENDING_OP_JSON> pendingInboundOpJson;
 portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
 
-static void postPendingJson(PendingJsonUpdate& slot, const char* data, size_t len) {
-  if (len > MAX_PENDING_JSON) return;
-  portENTER_CRITICAL(&pendingMux);
-  slot.length = static_cast<uint16_t>(len);
-  memcpy(slot.json, data, len);
-  slot.valid = true;
-  portEXIT_CRITICAL(&pendingMux);
-}
-
-void postPendingShadeColorsJson(const char* data, size_t len) { postPendingJson(pendingShadeColorsJson, data, len); }
-void postPendingBaseColorsJson(const char* data, size_t len)  { postPendingJson(pendingBaseColorsJson, data, len); }
+// Thin forwarders into the template. Each slot's bounds check + mux
+// discipline lives inside PendingJsonSlot::post — these helpers exist
+// only so ble_control.cpp (and the ESP-NOW recv callback) can stay
+// blissfully unaware of which slot a particular char's payload lands in.
+void postPendingShadeColorsJson(const char* data, size_t len) { pendingShadeColorsJson.post(pendingMux, data, len); }
+void postPendingBaseColorsJson(const char* data, size_t len)  { pendingBaseColorsJson.post(pendingMux, data, len); }
 void postPendingBrightness(int8_t level) { pendingBrightness = level; }
 void postPendingApplyEffectiveBrightness() { pendingApplyEffectiveBrightness = true; }
 // Single-bit post called from the NimBLE host task (Core 0) inside
@@ -134,59 +124,12 @@ void postPendingKnockout(uint8_t pixel, uint8_t brightness) {
   portEXIT_CRITICAL(&pendingMux);
 }
 
-void postPendingExpressionOpJson(const char* data, size_t len) {
-  if (len > MAX_PENDING_OP_JSON) return;
-  portENTER_CRITICAL(&pendingMux);
-  pendingExpressionOpJson.length = static_cast<uint16_t>(len);
-  memcpy(pendingExpressionOpJson.json, data, len);
-  pendingExpressionOpJson.valid = true;
-  portEXIT_CRITICAL(&pendingMux);
-}
-
-void postPendingWifiOpJson(const char* data, size_t len) {
-  if (len > MAX_PENDING_OP_JSON) return;
-  portENTER_CRITICAL(&pendingMux);
-  pendingWifiOpJson.length = static_cast<uint16_t>(len);
-  memcpy(pendingWifiOpJson.json, data, len);
-  pendingWifiOpJson.valid = true;
-  portEXIT_CRITICAL(&pendingMux);
-}
-
-void postPendingTestActionJson(const char* data, size_t len) {
-  if (len > MAX_PENDING_OP_JSON) return;
-  portENTER_CRITICAL(&pendingMux);
-  pendingTestActionJson.length = static_cast<uint16_t>(len);
-  memcpy(pendingTestActionJson.json, data, len);
-  pendingTestActionJson.valid = true;
-  portEXIT_CRITICAL(&pendingMux);
-}
-
-void postPendingSettingsBlobJson(const char* data, size_t len) {
-  if (len > MAX_PENDING_OP_JSON) return;
-  portENTER_CRITICAL(&pendingMux);
-  pendingSettingsBlobJson.length = static_cast<uint16_t>(len);
-  memcpy(pendingSettingsBlobJson.json, data, len);
-  pendingSettingsBlobJson.valid = true;
-  portEXIT_CRITICAL(&pendingMux);
-}
-
-void postPendingRemoteOpJson(const char* data, size_t len) {
-  if (len > MAX_PENDING_OP_JSON) return;
-  portENTER_CRITICAL(&pendingMux);
-  pendingRemoteOpJson.length = static_cast<uint16_t>(len);
-  memcpy(pendingRemoteOpJson.json, data, len);
-  pendingRemoteOpJson.valid = true;
-  portEXIT_CRITICAL(&pendingMux);
-}
-
-void postPendingSocialDispositionsJson(const char* data, size_t len) {
-  if (len > MAX_PENDING_OP_JSON) return;
-  portENTER_CRITICAL(&pendingMux);
-  pendingSocialDispositionsJson.length = static_cast<uint16_t>(len);
-  memcpy(pendingSocialDispositionsJson.json, data, len);
-  pendingSocialDispositionsJson.valid = true;
-  portEXIT_CRITICAL(&pendingMux);
-}
+void postPendingExpressionOpJson(const char* data, size_t len)      { pendingExpressionOpJson.post(pendingMux, data, len); }
+void postPendingWifiOpJson(const char* data, size_t len)            { pendingWifiOpJson.post(pendingMux, data, len); }
+void postPendingTestActionJson(const char* data, size_t len)        { pendingTestActionJson.post(pendingMux, data, len); }
+void postPendingSettingsBlobJson(const char* data, size_t len)      { pendingSettingsBlobJson.post(pendingMux, data, len); }
+void postPendingRemoteOpJson(const char* data, size_t len)          { pendingRemoteOpJson.post(pendingMux, data, len); }
+void postPendingSocialDispositionsJson(const char* data, size_t len){ pendingSocialDispositionsJson.post(pendingMux, data, len); }
 
 // Forward decl — defined further below alongside the other globals so we can
 // route triggerExpression invocations into the manager from this function.
@@ -545,13 +488,8 @@ void setup() {
   // that arrives in the gap is dropped because controlOpHandler_ is null.
   showReceiver.setControlOpHandler(
       [](const uint8_t* payload, size_t len, const uint8_t srcMac[6]) {
-        if (len > MAX_PENDING_OP_JSON) return;
-        portENTER_CRITICAL(&pendingMux);
-        pendingInboundOpJson.length = static_cast<uint16_t>(len);
-        memcpy(pendingInboundOpJson.json, payload, len);
-        memcpy(pendingInboundOpJson.srcMac, srcMac, 6);
-        pendingInboundOpJson.valid = true;
-        portEXIT_CRITICAL(&pendingMux);
+        pendingInboundOpJson.post(
+            pendingMux, reinterpret_cast<const char*>(payload), len, srcMac);
       });
   // Bring up ESP-NOW grid presence (HELLO + COLORS). Independent of home
   // WiFi — runs on whatever channel the radio is on. See lamp_protocol.hpp.
@@ -639,13 +577,7 @@ void loop() {
 
   if (pendingShadeColorsJson.valid) {
     char buf[MAX_PENDING_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingShadeColorsJson.length;
-    memcpy(buf, pendingShadeColorsJson.json, len);
-    pendingShadeColorsJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingShadeColorsJson.drain(pendingMux, buf);
 
 #ifdef LAMP_DEBUG
     Serial.printf("[drain] shadeColors len=%u t_us=%lu\n",
@@ -676,13 +608,7 @@ void loop() {
 
   if (pendingBaseColorsJson.valid) {
     char buf[MAX_PENDING_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingBaseColorsJson.length;
-    memcpy(buf, pendingBaseColorsJson.json, len);
-    pendingBaseColorsJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingBaseColorsJson.drain(pendingMux, buf);
 
 #ifdef LAMP_DEBUG
     Serial.printf("[drain] baseColors len=%u t_us=%lu\n",
@@ -730,13 +656,7 @@ void loop() {
 
   if (pendingExpressionOpJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingExpressionOpJson.length;
-    memcpy(buf, pendingExpressionOpJson.json, len);
-    pendingExpressionOpJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingExpressionOpJson.drain(pendingMux, buf);
 
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain expressionOp len=%u\n", (unsigned)len);
@@ -811,13 +731,7 @@ void loop() {
   // app omits is preserved from current state.
   if (pendingSettingsBlobJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingSettingsBlobJson.length;
-    memcpy(buf, pendingSettingsBlobJson.json, len);
-    pendingSettingsBlobJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingSettingsBlobJson.drain(pendingMux, buf);
 
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain settingsBlob len=%u\n", (unsigned)len);
@@ -922,13 +836,7 @@ void loop() {
   // BLE callback already verified isAuthed before posting.
   if (pendingSocialDispositionsJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingSocialDispositionsJson.length;
-    memcpy(buf, pendingSocialDispositionsJson.json, len);
-    pendingSocialDispositionsJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingSocialDispositionsJson.drain(pendingMux, buf);
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain socialDispositions len=%u\n", (unsigned)len);
 #endif
@@ -937,13 +845,7 @@ void loop() {
 
   if (pendingTestActionJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingTestActionJson.length;
-    memcpy(buf, pendingTestActionJson.json, len);
-    pendingTestActionJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingTestActionJson.drain(pendingMux, buf);
 
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain testAction len=%u\n", (unsigned)len);
@@ -974,13 +876,7 @@ void loop() {
 
   if (pendingWifiOpJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingWifiOpJson.length;
-    memcpy(buf, pendingWifiOpJson.json, len);
-    pendingWifiOpJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingWifiOpJson.drain(pendingMux, buf);
 
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain wifiOp len=%u\n", (unsigned)len);
@@ -1002,15 +898,8 @@ void loop() {
   // task) — JSON parse + local dispatch.
   if (pendingInboundOpJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
-    uint16_t len;
     uint8_t srcMac[6];
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingInboundOpJson.length;
-    memcpy(buf, pendingInboundOpJson.json, len);
-    memcpy(srcMac, pendingInboundOpJson.srcMac, 6);
-    pendingInboundOpJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingInboundOpJson.drain(pendingMux, buf, srcMac);
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain inboundOp len=%u\n", (unsigned)len);
 #endif
@@ -1021,13 +910,7 @@ void loop() {
   // self or "broadcast") or forward over ESP-NOW to the addressed peer.
   if (pendingRemoteOpJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingRemoteOpJson.length;
-    memcpy(buf, pendingRemoteOpJson.json, len);
-    pendingRemoteOpJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
+    uint16_t len = pendingRemoteOpJson.drain(pendingMux, buf);
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain remoteOp len=%u\n", (unsigned)len);
 #endif

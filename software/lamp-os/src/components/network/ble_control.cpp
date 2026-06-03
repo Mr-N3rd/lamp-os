@@ -20,6 +20,7 @@
 #include "./nearby_lamps.hpp"
 #include "./show_receiver.hpp"
 #include "./wifi.hpp"
+#include "./write_router.hpp"
 
 // Defined in standard_lamp.cpp. Each BLE callback does ONLY a fixed-size
 // byte copy into a pending slot — zero heap allocation on Core 0. The loop
@@ -373,37 +374,9 @@ class BrightnessCallback : public NimBLECharacteristicCallbacks {
 };
 
 // ---------------------------------------------------------------------------
-// Shade colors — write-without-response, JSON array of hex strings
+// Shade colors / Base colors — plaintext JSON arrays of hex strings.
+// Routed through WriteRouter; instantiated below in start().
 // ---------------------------------------------------------------------------
-
-class ShadeColorsCallback : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) return;
-    std::string val = c->getValue();
-    if (val.empty() || val.size() > MAX_PENDING_JSON) return;
-#ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE shadeColors len=%u\n", (unsigned)val.size());
-#endif
-    // Pure memcpy. The loop drain parses the JSON on Core 1.
-    postPendingShadeColorsJson(val.data(), val.size());
-  }
-};
-
-// ---------------------------------------------------------------------------
-// Base colors — write-without-response, JSON array of hex strings
-// ---------------------------------------------------------------------------
-
-class BaseColorsCallback : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) return;
-    std::string val = c->getValue();
-    if (val.empty() || val.size() > MAX_PENDING_JSON) return;
-#ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE baseColors len=%u\n", (unsigned)val.size());
-#endif
-    postPendingBaseColorsJson(val.data(), val.size());
-  }
-};
 
 // ---------------------------------------------------------------------------
 // Base knockout — write-without-response, 2 bytes: [pixelIndex u8, brightness% u8]
@@ -447,54 +420,8 @@ class BaseKnockoutCallback : public NimBLECharacteristicCallbacks {
   }
 };
 
-class ExpressionOpCallback : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) return;
-    std::string val = c->getValue();
-    if (val.empty() || val.size() > MAX_PENDING_OP_JSON) return;
-#ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE expressionOp len=%u\n", (unsigned)val.size());
-#endif
-    postPendingExpressionOpJson(val.data(), val.size());
-  }
-};
-
-class WifiOpCallback : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    static const auto uuid = uuidSaltLE(CHAR_WIFI_OP);
-    const uint16_t handle = connInfo.getConnHandle();
-    const std::string raw = c->getValue();
-    if (raw.size() > MAX_PENDING_OP_JSON + 64) return;  // headroom for prefix+tag
-    std::string json;
-    bool authed = false;
-    if (!decodeIncomingOp(raw, handle, uuid.data(), "wifiOp", json, authed)) return;
-    if (!authed) return;
-    if (json.empty() || json.size() > MAX_PENDING_OP_JSON) return;
-#ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE wifiOp len=%u (decoded)\n", (unsigned)json.size());
-#endif
-    postPendingWifiOpJson(json.data(), json.size());
-  }
-};
-
-// ── Remote-op: forward a BLE control write to a far lamp via ESP-NOW ─────
-class RemoteOpCallback : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    static const auto uuid = uuidSaltLE(CHAR_REMOTE_OP);
-    const uint16_t handle = connInfo.getConnHandle();
-    const std::string raw = c->getValue();
-    if (raw.size() > MAX_PENDING_OP_JSON + 64) return;  // headroom for prefix+tag
-    std::string json;
-    bool authed = false;
-    if (!decodeIncomingOp(raw, handle, uuid.data(), "remoteOp", json, authed)) return;
-    if (!authed) return;
-    if (json.empty() || json.size() > MAX_PENDING_OP_JSON) return;
-#ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE remoteOp len=%u (decoded)\n", (unsigned)json.size());
-#endif
-    postPendingRemoteOpJson(json.data(), json.size());
-  }
-};
+// ExpressionOp (plaintext JSON), WifiOp + RemoteOp (AES-GCM ciphertext) are
+// routed through WriteRouter; instantiated in start() below.
 
 // ── Nearby lamps: read+notify the unified per-transport list ────────────
 // Pulls from nearbyLamps.getAll() and tags each entry with viaBle /
@@ -652,18 +579,9 @@ void notifyWifiState() {
   s_wifiStateChar->notify();
 }
 
-class ExpressionTestCallback : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) return;
-    std::string val = c->getValue();
-    if (val.size() > MAX_PENDING_OP_JSON) return;
-#ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE expressionTest len=%u\n", (unsigned)val.size());
-#endif
-    // Empty payload is the "test complete" signal — must reach the drain.
-    postPendingTestActionJson(val.data(), val.size());
-  }
-};
+// ExpressionTest (plaintext) is routed through WriteRouter. Unique flag:
+// empty-payload writes (the "test complete" sentinel) MUST reach the drain,
+// so the router is constructed with allowEmpty(true).
 
 // ---------------------------------------------------------------------------
 // Settings blob — read + write-with-response
@@ -895,23 +813,42 @@ void start(lamp::Config* config, Preferences* prefs) {
 
   s_service->createCharacteristic(CHAR_BRIGHTNESS, LIVE_WRITE_PROPS)
       ->setCallbacks(new BrightnessCallback());
+  // Plaintext live-preview JSON chars — collapsed into WriteRouter.
+  // Each instance captures its own (slot cap, post helper, debug tag).
   s_service->createCharacteristic(CHAR_SHADE_COLORS, LIVE_WRITE_PROPS)
-      ->setCallbacks(new ShadeColorsCallback());
+      ->setCallbacks((new WriteRouter(
+          MAX_PENDING_JSON, postPendingShadeColorsJson, isAuthed))
+              ->setDebugTag("shadeColors"));
   s_service->createCharacteristic(CHAR_BASE_COLORS, LIVE_WRITE_PROPS)
-      ->setCallbacks(new BaseColorsCallback());
+      ->setCallbacks((new WriteRouter(
+          MAX_PENDING_JSON, postPendingBaseColorsJson, isAuthed))
+              ->setDebugTag("baseColors"));
   s_service->createCharacteristic(CHAR_BASE_KNOCKOUT, LIVE_WRITE_PROPS)
       ->setCallbacks(new BaseKnockoutCallback());
   // Home-mode focus: app signals whether the user is on the Home Mode
   // setup page. See HomeModeFocusCallback above.
   s_service->createCharacteristic(CHAR_HOME_MODE_FOCUS, LIVE_WRITE_PROPS)
       ->setCallbacks(new HomeModeFocusCallback());
+  // CHAR_EXPRESSION_TEST: empty payload is the "test complete" sentinel
+  // and MUST reach the loop drain — allowEmpty(true) on the router.
   s_service->createCharacteristic(CHAR_EXPRESSION_TEST, NIMBLE_PROPERTY::WRITE)
-      ->setCallbacks(new ExpressionTestCallback());
+      ->setCallbacks((new WriteRouter(
+          MAX_PENDING_OP_JSON, postPendingTestActionJson, isAuthed))
+              ->setDebugTag("expressionTest")
+              ->setAllowEmpty(true));
   s_service->createCharacteristic(CHAR_EXPRESSION_OP, NIMBLE_PROPERTY::WRITE)
-      ->setCallbacks(new ExpressionOpCallback());
+      ->setCallbacks((new WriteRouter(
+          MAX_PENDING_OP_JSON, postPendingExpressionOpJson, isAuthed))
+              ->setDebugTag("expressionOp"));
+  // WiFi op — AES-GCM ciphertext. Salt array lives function-local-static
+  // so the router can hold a stable pointer for the life of the service.
+  static const auto kWifiOpSalt = uuidSaltLE(CHAR_WIFI_OP);
   s_service->createCharacteristic(CHAR_WIFI_OP,
       NIMBLE_PROPERTY::WRITE)
-      ->setCallbacks(new WifiOpCallback());
+      ->setCallbacks((new WriteRouter(
+          MAX_PENDING_OP_JSON, postPendingWifiOpJson, isAuthed,
+          decodeIncomingOp, kWifiOpSalt.data(), "wifiOp"))
+              ->setDebugTag("wifiOp"));
   s_wifiStateChar = s_service->createCharacteristic(
       CHAR_WIFI_STATE,
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
@@ -965,10 +902,14 @@ void start(lamp::Config* config, Preferences* prefs) {
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new SocialDispositionsCallback());
 
-  // App-layer crypto protects forwarded credentials; no link-layer bonding.
+  // Remote op — AES-GCM ciphertext, same shape as wifi op.
+  static const auto kRemoteOpSalt = uuidSaltLE(CHAR_REMOTE_OP);
   s_service->createCharacteristic(CHAR_REMOTE_OP,
       NIMBLE_PROPERTY::WRITE)
-      ->setCallbacks(new RemoteOpCallback());
+      ->setCallbacks((new WriteRouter(
+          MAX_PENDING_OP_JSON, postPendingRemoteOpJson, isAuthed,
+          decodeIncomingOp, kRemoteOpSalt.data(), "remoteOp"))
+              ->setDebugTag("remoteOp"));
 
   // Settings blob — write-only. Reads now go through the per-section
   // characteristics (CHAR_LAMP_SECTION etc.), each well under MTU. The
