@@ -9,6 +9,25 @@
 #include <cstdint>
 #include <cstring>
 
+// portMUX is FreeRTOS-only. The header is shared with the artnet-repeater
+// (also ESP32, FreeRTOS available) but is also indirectly mirrored in
+// native unit tests — guard the include so a hypothetical native compile
+// of THIS header doesn't break, and provide a no-op fallback.
+#if defined(ARDUINO) || defined(ESP_PLATFORM)
+#include <freertos/FreeRTOS.h>
+#include <portmacro.h>
+#define LAMP_PROTOCOL_PORTMUX_TYPE        portMUX_TYPE
+#define LAMP_PROTOCOL_PORTMUX_INIT        portMUX_INITIALIZER_UNLOCKED
+#define LAMP_PROTOCOL_PORTMUX_ENTER(mux)  portENTER_CRITICAL(mux)
+#define LAMP_PROTOCOL_PORTMUX_EXIT(mux)   portEXIT_CRITICAL(mux)
+#else
+struct LampProtocolNullMux {};
+#define LAMP_PROTOCOL_PORTMUX_TYPE        LampProtocolNullMux
+#define LAMP_PROTOCOL_PORTMUX_INIT        {}
+#define LAMP_PROTOCOL_PORTMUX_ENTER(mux)  ((void)(mux))
+#define LAMP_PROTOCOL_PORTMUX_EXIT(mux)   ((void)(mux))
+#endif
+
 namespace lamp_protocol {
 
 constexpr uint8_t MAGIC_0 = 'L';
@@ -186,16 +205,25 @@ inline bool parseHello(const uint8_t* data, size_t len, ParsedHello& out) {
 
 // Gossip dedup: small fixed-size ring tracking (sourceMac, msgType, seq) tuples
 // seen recently. Drops duplicates so re-broadcasts terminate.
+//
+// Concurrency: record() can be called from BOTH the ESP-NOW recv task
+// (Core 0, via ShowReceiver::handleRecv) AND the Arduino loop task
+// (Core 1, via ShowReceiver::sendControlOp recording our own sent ops
+// so the inbound re-broadcast doesn't loop back). The critical section
+// is the compare loop + slot write — kept SHORT: no allocations, no
+// network calls, no logging. See audit finding #7 / Stability #3.
 class DedupRing {
  public:
   static constexpr size_t CAPACITY = 32;
 
   // Returns true if (mac, msgType, seq) is new (and records it); false if seen.
   bool record(const uint8_t mac[6], uint8_t msgType, uint16_t seq) {
+    LAMP_PROTOCOL_PORTMUX_ENTER(&mux_);
     for (size_t i = 0; i < CAPACITY; i++) {
       const Entry& e = entries_[i];
       if (e.used && e.msgType == msgType && e.seq == seq &&
           std::memcmp(e.mac, mac, 6) == 0) {
+        LAMP_PROTOCOL_PORTMUX_EXIT(&mux_);
         return false;
       }
     }
@@ -205,6 +233,7 @@ class DedupRing {
     slot.seq = seq;
     std::memcpy(slot.mac, mac, 6);
     head_ = (head_ + 1) % CAPACITY;
+    LAMP_PROTOCOL_PORTMUX_EXIT(&mux_);
     return true;
   }
 
@@ -217,6 +246,7 @@ class DedupRing {
   };
   Entry entries_[CAPACITY];
   size_t head_ = 0;
+  LAMP_PROTOCOL_PORTMUX_TYPE mux_ = LAMP_PROTOCOL_PORTMUX_INIT;
 };
 
 }  // namespace lamp_protocol
