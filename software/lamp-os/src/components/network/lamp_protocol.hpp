@@ -54,17 +54,10 @@ enum MsgType : uint8_t {
 
 // Phase C: explicit reserve of the high bit on msgType. Previously
 // FLAG_LOCAL_ONLY rode there for the cascade-locality hack; C.3 retires
-// that path. Keep the bit reserved so future protocol changes don't
-// silently corrupt parsing.
+// that path (cascade now uses MSG_EVENT broadcast). The bit is reserved
+// for future protocol changes; inspect() no longer masks it so any future
+// reuse will surface immediately as an unrecognised msgType byte.
 constexpr uint8_t kReservedMsgTypeHighBit = 0x80;
-
-// High bit of the msgType byte. When set, receivers apply the frame locally
-// but skip the rebroadcast relay — cascade stays within direct radio range
-// instead of fanning across the grid. Set by the expression-cascade path;
-// other senders leave it off and the existing relay extends reach as before.
-// inspect() masks this bit out so existing msgType comparisons keep working.
-constexpr uint8_t FLAG_LOCAL_ONLY = 0x80;
-constexpr uint8_t MSG_TYPE_MASK   = 0x7F;
 
 // Phase C single-source-of-truth caps.
 constexpr size_t kMaxOverrideColorsPerFrame = 8;   // ESP-NOW 250-byte cap math
@@ -186,7 +179,6 @@ struct ParsedControlOp {
   uint8_t sourceMac[6];
   uint16_t payloadLen;
   const uint8_t* payload;  // points into the recv buffer; caller must not retain past this call
-  bool localOnly;          // FLAG_LOCAL_ONLY was set on the wire
 };
 
 // --- Phase C parsed structs ---
@@ -327,8 +319,7 @@ inline size_t buildHello(uint8_t* buf, size_t bufLen, uint16_t seq,
 inline size_t buildControlOp(uint8_t* buf, size_t bufLen, uint16_t seq,
                              const uint8_t targetMac[6],
                              const uint8_t sourceMac[6],
-                             const uint8_t* payload, size_t payloadLen,
-                             bool localOnly = false) {
+                             const uint8_t* payload, size_t payloadLen) {
   if (!buf || !targetMac || !sourceMac) return 0;
   if (payloadLen > CONTROL_MAX_PAYLOAD) return 0;
   const size_t total = CONTROL_FIXED + payloadLen;
@@ -336,9 +327,7 @@ inline size_t buildControlOp(uint8_t* buf, size_t bufLen, uint16_t seq,
   buf[0] = MAGIC_0;
   buf[1] = MAGIC_1;
   buf[2] = PROTOCOL_VERSION;
-  // High bit signals "apply locally + skip relay" to receivers. inspect()
-  // masks this so msgType comparisons keep working unchanged.
-  buf[3] = MSG_CONTROL_OP | (localOnly ? FLAG_LOCAL_ONLY : 0);
+  buf[3] = MSG_CONTROL_OP;
   buf[4] = static_cast<uint8_t>(seq & 0xFF);
   buf[5] = static_cast<uint8_t>((seq >> 8) & 0xFF);
   std::memcpy(&buf[6], targetMac, 6);
@@ -534,23 +523,15 @@ inline size_t buildEvent(uint8_t* buf, size_t bufLen, uint16_t seq,
   return total;
 }
 
-// Validate magic + version. Returns the msg type (with the FLAG_LOCAL_ONLY
-// high bit masked out so MSG_TYPE comparisons keep working) or 0 if invalid.
-// TODO(C.3): remove FLAG_LOCAL_ONLY masking once cascade migrates to MSG_EVENT.
+// Validate magic + version. Returns the msg type byte verbatim or 0 if
+// invalid. C.3 retired FLAG_LOCAL_ONLY; the high bit is reserved for
+// future use, so we no longer mask it — any future reuse of that bit
+// will surface immediately as an unrecognised msgType.
 inline uint8_t inspect(const uint8_t* data, size_t len) {
   if (!data || len < HEADER_SIZE) return 0;
   if (data[0] != MAGIC_0 || data[1] != MAGIC_1) return 0;
   if (data[2] != PROTOCOL_VERSION) return 0;
-  return data[3] & MSG_TYPE_MASK;
-}
-
-// Peek at the FLAG_LOCAL_ONLY bit without parsing the rest of the frame.
-// Returns false for malformed / non-matching frames.
-inline bool isLocalOnly(const uint8_t* data, size_t len) {
-  if (!data || len < HEADER_SIZE) return false;
-  if (data[0] != MAGIC_0 || data[1] != MAGIC_1) return false;
-  if (data[2] != PROTOCOL_VERSION) return false;
-  return (data[3] & FLAG_LOCAL_ONLY) != 0;
+  return data[3];
 }
 
 inline bool parseControlOp(const uint8_t* data, size_t len, ParsedControlOp& out) {
@@ -562,7 +543,6 @@ inline bool parseControlOp(const uint8_t* data, size_t len, ParsedControlOp& out
   if (out.payloadLen > CONTROL_MAX_PAYLOAD) return false;
   if (len < CONTROL_FIXED + out.payloadLen) return false;
   out.payload = &data[CONTROL_FIXED];
-  out.localOnly = (data[3] & FLAG_LOCAL_ONLY) != 0;
   return true;
 }
 

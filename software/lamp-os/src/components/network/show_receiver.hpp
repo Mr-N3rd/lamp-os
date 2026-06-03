@@ -85,6 +85,19 @@ struct PendingWispHello {
   uint32_t carriedFwVersion;
 };
 
+// MSG_EVENT pending slot. ShowReceiver's WiFi-task recv path does the
+// stagger-list lookup (own MAC → delayMs) and memcpys the result here;
+// the Core 1 drain calls ExpressionManager::tryHandleExpressionEvent
+// which does the expensive JSON parse + cascade-config check + dedup +
+// trigger. EVENT_MAX_PAYLOAD caps the payload at 138 bytes so the slot
+// is POD with a fixed-size buffer (no heap).
+struct PendingEvent {
+  uint8_t  sourceMac[6];
+  uint16_t delayMs;          // already resolved by recv-side stagger lookup
+  uint16_t payloadLen;
+  uint8_t  payload[lamp_protocol::EVENT_MAX_PAYLOAD];
+};
+
 // Forwarders implemented in standard_lamp.cpp. ShowReceiver's WiFi-task
 // recv path calls these — they own posting into the loop-task pending
 // slots so the receiver's handleRecv stays a thin parse-and-route layer
@@ -94,6 +107,7 @@ void postPendingRestoreColors(const PendingRestoreColors& src);
 void postPendingOverrideBrightness(const PendingOverrideBrightness& src);
 void postPendingRestoreBrightness(const PendingRestoreBrightness& src);
 void postPendingWispHello(const PendingWispHello& src);
+void postPendingEvent(const PendingEvent& src);
 
 // Receives HELLO + CONTROL_OP frames over ESP-NOW, and announces this
 // lamp's presence (HELLO) so peers can populate their registry with our
@@ -123,15 +137,19 @@ class ShowReceiver {
 
   // Broadcast a CONTROL_OP frame onto the grid. Used by the BLE
   // CHAR_REMOTE_OP drain to forward a write to a far lamp.
-  //
-  // localOnly = true sets the wire flag that tells receivers to apply the
-  // op locally but skip the rebroadcast relay — reach is limited to the
-  // sender's direct radio range. Used by the expression-cascade path so
-  // expressions stay within the room rather than fanning across the grid.
-  // Other senders (BLE remoteOp forwarding, etc.) leave it false and the
-  // existing relay extends mesh reach as before.
   bool sendControlOp(const uint8_t targetMac[6], const uint8_t* payload,
-                     size_t payloadLen, bool localOnly = false);
+                     size_t payloadLen);
+
+  // Broadcast a raw pre-built ESP-NOW frame onto the grid. Used by the
+  // MSG_EVENT cascade path which builds the frame in ExpressionManager.
+  // Caller is responsible for size limits.
+  bool broadcastRaw(const uint8_t* data, size_t len);
+
+  // Allocate the next outbound event sequence number. The cascade path
+  // emits two copies of the same MSG_EVENT (~20 ms jitter) for broadcast-
+  // loss resilience; both share the same seq so receivers' eventDedup_
+  // collapses the second copy after applying the first.
+  uint16_t nextEventSeq();
 
   // Mesh expression-trigger API. Wraps `inv` in a
   // `{char:"triggerExpression", ...}` CONTROL_OP payload and unicasts it.
@@ -140,18 +158,12 @@ class ShowReceiver {
   //
   // sendExpressionTo: addressed to one peer by name. Returns false if the
   // peer isn't currently reachable via ESP-NOW (no recent HELLO).
-  //
-  // sendExpressionToAll: fans out to every ESP-NOW-reachable peer (excluding
-  // self). When staggerMs > 0, each successive peer is assigned a delayMs
-  // of `inv.delayMs + i * staggerMs` so receivers can self-pace the cascade
-  // off their own millis() — no shared clock needed. Peers are iterated in
-  // name order for deterministic visual ordering.
   bool sendExpressionTo(const std::string& peerName, const ExpressionInvocation& inv);
-  void sendExpressionToAll(const ExpressionInvocation& inv, uint32_t staggerMs = 0);
 
   // Static recv glue (the EspNowLink hands us a C function pointer).
   static ShowReceiver* s_instance;
-  static void onRecv(const uint8_t* mac, const uint8_t* data, size_t len);
+  static void onRecv(const uint8_t* mac, const uint8_t* data, size_t len,
+                     int8_t rssi);
 
  private:
   EspNowLink link_;
@@ -168,14 +180,16 @@ class ShowReceiver {
   lamp_protocol::DedupRing overrideBrightnessDedup_;
   lamp_protocol::DedupRing restoreBrightnessDedup_;
   lamp_protocol::DedupRing wispHelloDedup_;
+  lamp_protocol::DedupRing eventDedup_;
 
   uint32_t lastHelloMs_ = 0;
   uint16_t helloSeq_ = 0;
   uint16_t controlOpSeq_ = 0;
+  uint16_t eventSeq_ = 0;
 
   ControlOpHandler controlOpHandler_;
 
-  void handleRecv(const uint8_t* mac, const uint8_t* data, size_t len);
+  void handleRecv(const uint8_t* mac, const uint8_t* data, size_t len, int8_t rssi);
   void emitHello();
 };
 

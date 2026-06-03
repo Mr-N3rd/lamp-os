@@ -336,15 +336,25 @@ void test_event_too_many_stagger_entries_rejected_by_parser() {
                                     out));
 }
 
-void test_inspect_masks_local_only_flag_bit() {
-  // CONTROL_OP with localOnly=true sets the high bit. inspect() must
-  // mask it so msgType comparisons keep working.
+void test_inspect_no_longer_masks_high_bit() {
+  // C.3 retired FLAG_LOCAL_ONLY. inspect() now returns data[3] verbatim,
+  // so a frame with the high bit set on the msgType byte (a hypothetical
+  // future use of kReservedMsgTypeHighBit) presents as an unknown type
+  // rather than silently mapping back to MSG_CONTROL_OP. This is the
+  // forward-compat guarantee: any reuse of the bit MUST come with an
+  // explicit parser update.
   uint8_t buf[lp::CONTROL_MAX_SIZE];
   const size_t n = lp::buildControlOp(buf, sizeof(buf), 1, kTargetMac, kSrcMac,
-                                      nullptr, 0, /*localOnly=*/true);
+                                      nullptr, 0);
   TEST_ASSERT_GREATER_THAN_UINT32(0, n);
   TEST_ASSERT_EQUAL_UINT8(lp::MSG_CONTROL_OP, lp::inspect(buf, n));
-  TEST_ASSERT_TRUE(lp::isLocalOnly(buf, n));
+
+  // Manually flip the high bit; inspect() must now return the high-bit
+  // variant verbatim (i.e. not equal to MSG_CONTROL_OP).
+  buf[3] = lp::MSG_CONTROL_OP | lp::kReservedMsgTypeHighBit;
+  TEST_ASSERT_EQUAL_UINT8(lp::MSG_CONTROL_OP | lp::kReservedMsgTypeHighBit,
+                          lp::inspect(buf, n));
+  TEST_ASSERT_NOT_EQUAL(lp::MSG_CONTROL_OP, lp::inspect(buf, n));
 }
 
 int main(int argc, char** argv) {
@@ -376,7 +386,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_event_too_many_stagger_entries_rejected_by_builder);
   RUN_TEST(test_event_too_many_stagger_entries_rejected_by_parser);
 
-  RUN_TEST(test_inspect_masks_local_only_flag_bit);
+  RUN_TEST(test_inspect_no_longer_masks_high_bit);
 
   return UNITY_END();
 }

@@ -1,8 +1,11 @@
 #include "expression_manager.hpp"
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <algorithm>
 #include <cstring>
 
+#include "components/network/lamp_protocol.hpp"
+#include "components/network/nearby_lamps.hpp"
 #include "components/network/show_receiver.hpp"
 #include "core/behavior_context.hpp"
 #include "core/compositor.hpp"
@@ -151,19 +154,99 @@ void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
 
   const uint32_t staggerMs = entry.config.getParameter(kParamCascadeStaggerMs, 0);
 
+  // Build the invocation payload (JSON, serialised once).
   ExpressionInvocation inv;
   inv.type = entry.config.type;
   inv.colors = entry.expression->getColors();
   inv.target = static_cast<uint8_t>(entry.expression->getTarget());
   inv.parameters = parametersWithoutCascadeKeys(entry.config.parameters);
-  // inv.delayMs defaults to 0; sendExpressionToAll assigns per-peer stagger.
+  // inv.delayMs stays 0 — per-peer stagger rides the wire as the
+  // MSG_EVENT staggerEntries list, NOT inside the JSON payload. Receivers
+  // pull their own delayMs from the stagger list at recv time.
+
+  std::string json;
+  serializeInvocation(inv, json);
+  if (json.size() > lamp_protocol::EVENT_MAX_PAYLOAD) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: payload %u > max %u, dropping\n",
+                  entry.config.type.c_str(),
+                  (unsigned)json.size(),
+                  (unsigned)lamp_protocol::EVENT_MAX_PAYLOAD);
+#endif
+    return;
+  }
+
+  // Build the RSSI-sorted stagger list. Take a snapshot, filter out self +
+  // peers with no MAC, sort by lastRssi descending (strongest signal =
+  // physically closest → fires earliest in the wave), cap at
+  // kMaxStaggerEntries so the wire frame stays bounded.
+  auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
+  uint8_t myMac[6];
+  showReceiver_->getMyMac(myMac);
+  std::vector<NearbyLamp> targets;
+  targets.reserve(peers.size());
+  for (const auto& p : peers) {
+    if (!p.hasMac) continue;
+    if (std::memcmp(p.mac, myMac, 6) == 0) continue;
+    targets.push_back(p);
+  }
+  std::sort(targets.begin(), targets.end(),
+            [](const NearbyLamp& a, const NearbyLamp& b) {
+              // Higher RSSI = stronger signal → fires first. Unknown
+              // (-127) sorts to the back automatically.
+              return a.lastRssi > b.lastRssi;
+            });
+  if (targets.size() > lamp_protocol::kMaxStaggerEntries) {
+    targets.resize(lamp_protocol::kMaxStaggerEntries);
+  }
+  // Pack the wire-shape arrays. Each per-peer delay = i * staggerMs,
+  // clamped to kMaxDelayMs defensively. i fits in uint8_t (we capped at 12).
+  uint8_t staggerMacs[lamp_protocol::kMaxStaggerEntries * 6];
+  uint16_t staggerDelays[lamp_protocol::kMaxStaggerEntries];
+  const uint8_t numStagger = static_cast<uint8_t>(targets.size());
+  for (uint8_t i = 0; i < numStagger; ++i) {
+    std::memcpy(&staggerMacs[i * 6], targets[i].mac, 6);
+    const uint32_t d = static_cast<uint32_t>(i) * staggerMs;
+    staggerDelays[i] = static_cast<uint16_t>(
+        d > kMaxDelayMs ? kMaxDelayMs : d);
+  }
 
 #ifdef LAMP_DEBUG
-  Serial.printf("[cascade] %s: fanning out (target=%u staggerMs=%u)\n",
+  Serial.printf("[cascade] %s: broadcasting MSG_EVENT (target=%u staggerMs=%u peers=%u)\n",
                 entry.config.type.c_str(), (unsigned)intervalIdx,
-                (unsigned)staggerMs);
+                (unsigned)staggerMs, (unsigned)numStagger);
+  for (uint8_t i = 0; i < numStagger; ++i) {
+    Serial.printf("[cascade]   peer rssi=%d delayMs=%u\n",
+                  (int)targets[i].lastRssi, (unsigned)staggerDelays[i]);
+  }
 #endif
-  showReceiver_->sendExpressionToAll(inv, staggerMs);
+
+  // Build the MSG_EVENT frame and broadcast it twice with ~20 ms jitter
+  // so a single dropped frame doesn't sink the whole cascade. Receivers'
+  // eventDedup_ collapses the second copy by (sourceMac, seq) so this is
+  // cheap: same wire cost as a 2-peer unicast cascade today.
+  uint8_t frame[lamp_protocol::EVENT_MAX_SIZE];
+  const uint16_t seq = showReceiver_->nextEventSeq();
+  const size_t frameLen = lamp_protocol::buildEvent(
+      frame, sizeof(frame), seq, myMac,
+      static_cast<uint8_t>(lamp_protocol::EventKind::ExpressionTriggered),
+      staggerMacs, staggerDelays, numStagger,
+      reinterpret_cast<const uint8_t*>(json.data()),
+      static_cast<uint16_t>(json.size()));
+  if (frameLen == 0) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: buildEvent failed (frameLen=0)\n",
+                  entry.config.type.c_str());
+#endif
+    return;
+  }
+  showReceiver_->broadcastRaw(frame, frameLen);
+  // Best-effort retry. delay(20) on Core 1 is fine — the loop pacing
+  // tolerates it (compositor.tick runs ~30 ms cadence anyway), and it
+  // keeps the second broadcast a separate radio transmission rather than
+  // a back-to-back queue spam.
+  delay(20);
+  showReceiver_->broadcastRaw(frame, frameLen);
 }
 
 std::vector<AnimatedBehavior*> ExpressionManager::getBehaviors() {
@@ -346,6 +429,131 @@ void ExpressionManager::removeExpression(const std::string& type, ExpressionTarg
     } else {
       ++it;
     }
+  }
+}
+
+// Cheap "is `key` present as a JSON string value" peek. Walks `payload`
+// (NOT NUL-terminated; bounded by payloadLen) looking for `"key":"value"`
+// and copies the value substring into `outValue` up to outMaxLen-1 chars.
+// Returns true on match. Used by tryHandleExpressionEvent to extract the
+// expression type without paying for a full JsonDocument parse — the
+// payload may be dropped seconds later if the local lamp doesn't have
+// that type cascaded.
+//
+// Doesn't handle escapes or whitespace inside the key/value — fine for
+// our serializeInvocation output which is single-line ArduinoJson with
+// no fancy formatting. Worst case a false negative leaves us with the
+// full parse, same as the legacy path.
+static bool peekJsonStringField(const uint8_t* payload, uint16_t payloadLen,
+                                const char* key,
+                                char* outValue, size_t outMaxLen) {
+  if (!payload || !key || !outValue || outMaxLen == 0) return false;
+  const size_t keyLen = std::strlen(key);
+  // Need at minimum: `"key":""` which is keyLen + 6 chars (quotes + colon
+  // + empty value pair). Guard so the index math below can't underflow.
+  if (payloadLen < keyLen + 6) return false;
+  // Scan for `"key":"`. Stop early enough that the lookahead can't read
+  // off the end.
+  const size_t needleLen = keyLen + 4;  // "key":"
+  for (size_t i = 0; i + needleLen <= payloadLen; ++i) {
+    if (payload[i] != '"') continue;
+    if (std::memcmp(&payload[i + 1], key, keyLen) != 0) continue;
+    if (payload[i + 1 + keyLen] != '"') continue;
+    if (payload[i + 2 + keyLen] != ':') continue;
+    if (payload[i + 3 + keyLen] != '"') continue;
+    // Found it. Copy until the next unescaped `"`, capping at outMaxLen-1.
+    size_t valueStart = i + 4 + keyLen;
+    size_t w = 0;
+    for (size_t j = valueStart; j < payloadLen && w + 1 < outMaxLen; ++j) {
+      if (payload[j] == '"') {
+        outValue[w] = '\0';
+        return true;
+      }
+      outValue[w++] = static_cast<char>(payload[j]);
+    }
+    // Ran off the buffer without closing quote — bad payload.
+    return false;
+  }
+  return false;
+}
+
+void ExpressionManager::tryHandleExpressionEvent(const uint8_t sourceMac[6],
+                                                  uint16_t suppliedDelayMs,
+                                                  const uint8_t* payload,
+                                                  uint16_t payloadLen) {
+  if (!payload || payloadLen == 0) return;
+
+  // 1) Cheap peek for the type. If the payload doesn't carry one we have
+  // no way to decide cascadeEnabled — drop. The JSON we emit always has
+  // it; an attacker-crafted MSG_EVENT without one is ignored silently.
+  char type[64] = {0};
+  if (!peekJsonStringField(payload, payloadLen, "type", type, sizeof(type))) {
+#ifdef LAMP_DEBUG
+    Serial.println("[event] no type peek, drop");
+#endif
+    return;
+  }
+
+  // 2) Look up our own config for this type. If cascadeEnabled isn't set
+  // (or no entry of this type exists at all), drop. Receivers only act on
+  // cascade events for types they themselves participate in — keeps the
+  // user's per-lamp opt-in honest and stops a rogue sender from forcing a
+  // visual on a lamp that opted out.
+  bool typeOptedIn = false;
+  for (const auto& entry : expressions) {
+    if (entry.config.type == type &&
+        entry.config.getParameter(kParamCascadeEnabled, 0) != 0) {
+      typeOptedIn = true;
+      break;
+    }
+  }
+  if (!typeOptedIn) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[event] type=%s not cascaded locally, drop\n", type);
+#endif
+    return;
+  }
+
+  // 3) RecentCascade dedup. Keep the same key shape the local-trigger
+  // path uses (type, target). We don't know `target` yet without the
+  // full parse, but the wire format defines TARGET_BOTH as 3 and that's
+  // what cascade events almost always carry. Use a per-type bucket
+  // keyed at intervalIdx=0 to mirror the simpler remote-side dedup —
+  // suppression scope is "same type from any sender within window."
+  const uint32_t nowMs = millis();
+  if (recentCascades_.seen(std::string(type), 0, nowMs)) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[event] type=%s recent-cascade dedup\n", type);
+#endif
+    return;
+  }
+  recentCascades_.record(std::string(type), 0, nowMs);
+
+  // 4) Full parse now that we've confirmed we'll act on it.
+  JsonDocument doc;
+  if (deserializeJson(doc, payload, payloadLen) != DeserializationError::Ok) {
+#ifdef LAMP_DEBUG
+    Serial.println("[event] full parse failed");
+#endif
+    return;
+  }
+  ExpressionInvocation inv;
+  if (!parseInvocation(doc.as<JsonObjectConst>(), inv)) {
+#ifdef LAMP_DEBUG
+    Serial.println("[event] parseInvocation failed");
+#endif
+    return;
+  }
+
+  // 5) Defense-in-depth: clamp the supplied delay. parseInvocation clamps
+  // `inv.delayMs` but the stagger-list-delivered delay is a separate
+  // attacker-controlled quantity. kMaxDelayMs (10s) is plenty for any
+  // realistic cascade UX.
+  const uint32_t delayMs = clampDelayMs(static_cast<uint32_t>(suppliedDelayMs));
+  if (delayMs == 0) {
+    triggerInvocation(inv, sourceMac);
+  } else {
+    enqueueDelayedInvocation(inv, sourceMac, delayMs);
   }
 }
 

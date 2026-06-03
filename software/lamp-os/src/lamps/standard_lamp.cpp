@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 #include "components/network/bluetooth.hpp"
@@ -114,6 +115,11 @@ lamp::PendingTypedSlot<lamp::PendingRestoreColors>      pendingRestoreColors;
 lamp::PendingTypedSlot<lamp::PendingOverrideBrightness> pendingOverrideBrightness;
 lamp::PendingTypedSlot<lamp::PendingRestoreBrightness>  pendingRestoreBrightness;
 lamp::PendingTypedSlot<lamp::PendingWispHello>          pendingWispHello;
+// MSG_EVENT slot — ShowReceiver's WiFi recv path resolves the per-peer
+// delayMs from the stagger list, memcpys the payload here, and the Core 1
+// drain hands off to expressionManager.tryHandleExpressionEvent which does
+// the JSON peek + config check + (optional pendingTriggers enqueue).
+lamp::PendingTypedSlot<lamp::PendingEvent>              pendingEvent;
 portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
 
 // Thin forwarders into the template. Each slot's bounds check + mux
@@ -153,6 +159,30 @@ void postPendingRestoreColors(const PendingRestoreColors& src)           { pendi
 void postPendingOverrideBrightness(const PendingOverrideBrightness& src) { pendingOverrideBrightness.post(pendingMux, src); }
 void postPendingRestoreBrightness(const PendingRestoreBrightness& src)   { pendingRestoreBrightness.post(pendingMux, src); }
 void postPendingWispHello(const PendingWispHello& src)                   { pendingWispHello.post(pendingMux, src); }
+void postPendingEvent(const PendingEvent& src)                           { pendingEvent.post(pendingMux, src); }
+
+// Forwarder used by ExpressionManager::tryHandleExpressionEvent (and the
+// legacy triggerExpression CONTROL_OP recv path) to schedule a future
+// triggerInvocation without each call site having to know the queue
+// storage lives here. Runs on Core 1 (drain task); the pendingTriggers
+// vector is loop-task-only so no mutex needed. FIFO eviction on overflow
+// — most-recent intent wins, dropping the newest would lose the user's
+// latest cascade in a mesh storm.
+void enqueueDelayedInvocation(const ExpressionInvocation& inv,
+                              const uint8_t srcMac[6],
+                              uint32_t delayMs) {
+  if (pendingTriggers.size() >= MAX_PENDING_TRIGGERS) {
+#ifdef LAMP_DEBUG
+    Serial.println("[loop] delayed-trigger queue full, evicting oldest");
+#endif
+    pendingTriggers.erase(pendingTriggers.begin());
+  }
+  DelayedInvocation d;
+  d.inv = inv;
+  d.fireAtMs = millis() + delayMs;
+  std::memcpy(d.srcMac, srcMac, 6);
+  pendingTriggers.push_back(d);
+}
 }  // namespace lamp
 
 lamp::BluetoothComponent bt;
@@ -368,27 +398,17 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     config.invalidateExpressionsSection();
 
   } else if (strcmp(ch, "triggerExpression") == 0) {
-    // Receive side of the mesh expression-trigger primitive. The payload IS
-    // the invocation (the `char` key is the only wrapper). We never re-emit
-    // — that's the structural loop break.
+    // Receive side of the legacy single-peer-named triggerExpression
+    // CONTROL_OP primitive (sendExpressionTo). The MSG_EVENT broadcast
+    // cascade has its own recv path through tryHandleExpressionEvent and
+    // does NOT route through here. We never re-emit — that's the
+    // structural loop break.
     lamp::ExpressionInvocation inv;
     if (!lamp::parseInvocation(doc.as<JsonObjectConst>(), inv)) return;
     if (inv.delayMs == 0) {
       expressionManager.triggerInvocation(inv, srcMac);
     } else {
-      if (pendingTriggers.size() >= MAX_PENDING_TRIGGERS) {
-        // FIFO eviction — most-recent intent wins. Dropping the newest
-        // would lose the user's latest command in a mesh storm.
-#ifdef LAMP_DEBUG
-        Serial.println("[loop] triggerExpression queue full, evicting oldest");
-#endif
-        pendingTriggers.erase(pendingTriggers.begin());
-      }
-      DelayedInvocation d;
-      d.inv = inv;
-      d.fireAtMs = millis() + inv.delayMs;
-      memcpy(d.srcMac, srcMac, 6);
-      pendingTriggers.push_back(d);
+      lamp::enqueueDelayedInvocation(inv, srcMac, inv.delayMs);
     }
   }
   // settings forwarding is intentionally deferred — it triggers a remote
@@ -1215,6 +1235,24 @@ void loop() {
       lamp::nearbyLamps.cacheWispHello(cmd.sourceMac, cmd.wispVersion, cmd.flags,
                                        cmd.paletteIdPrefix, cmd.carriedFwChannel,
                                        cmd.carriedFwVersion);
+    }
+  }
+  // MSG_EVENT drain. The recv side already resolved our delayMs from the
+  // stagger entries list and copied the payload bytes into the slot;
+  // tryHandleExpressionEvent does the (cheap-peek → config check →
+  // RecentCascade dedup → full parse → trigger) dance on Core 1.
+  {
+    lamp::PendingEvent cmd;
+    if (pendingEvent.drain(pendingMux, cmd)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] drain event src=%02X:%02X:%02X:%02X:%02X:%02X "
+                    "delayMs=%u payloadLen=%u\n",
+                    cmd.sourceMac[0], cmd.sourceMac[1], cmd.sourceMac[2],
+                    cmd.sourceMac[3], cmd.sourceMac[4], cmd.sourceMac[5],
+                    (unsigned)cmd.delayMs, (unsigned)cmd.payloadLen);
+#endif
+      expressionManager.tryHandleExpressionEvent(cmd.sourceMac, cmd.delayMs,
+                                                 cmd.payload, cmd.payloadLen);
     }
   }
 

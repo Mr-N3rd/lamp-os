@@ -48,6 +48,12 @@ struct NearbyLamp {
   // Only set via the ESP-NOW path; BLE adv doesn't carry it. Zero until
   // we've heard at least one HELLO from this peer.
   uint32_t firmwareVersion = 0;
+  // Most recent ESP-NOW RSSI (dBm) reported by the radio for any frame
+  // from this peer. The cascade path sorts peers by lastRssi descending
+  // so that the lamp closest to the originator fires first, producing an
+  // outward spatial wave. -127 means "unknown" (no ESP-NOW frame seen
+  // yet, or the rx_ctrl block was unavailable on the recv callback).
+  int8_t lastRssi = -127;
 };
 
 /**
@@ -88,7 +94,8 @@ class NearbyLamps {
                           const Color& base, const Color& shade);
   void addOrUpdateFromEspNow(const std::string& name, const uint8_t mac[6],
                              const Color& base, const Color& shade,
-                             uint32_t firmwareVersion = 0);
+                             uint32_t firmwareVersion = 0,
+                             int8_t rssi = -127);
 
   // Drop entries whose most-recent sighting (max of the two transports)
   // is older than `maxAgeMs`.

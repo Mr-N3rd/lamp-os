@@ -23,7 +23,15 @@ static void recvTrampoline(const esp_now_recv_info_t* info, const uint8_t* data,
 #endif
     return;
   }
-  EspNowLink::s_recv(info->src_addr, data, static_cast<size_t>(len));
+  // RSSI lives in the IDF rx_ctrl block. Older drivers / synthetic frames
+  // can hand us a null rx_ctrl, so guard and default to -127 ("unknown").
+  // -127 sorts to the back of the RSSI-desc list so a peer with no signal
+  // info ends up firing last in the cascade — sensible fallback.
+  int8_t rssi = -127;
+  if (info->rx_ctrl != nullptr) {
+    rssi = static_cast<int8_t>(info->rx_ctrl->rssi);
+  }
+  EspNowLink::s_recv(info->src_addr, data, static_cast<size_t>(len), rssi);
 }
 
 bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
