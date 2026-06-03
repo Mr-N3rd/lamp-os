@@ -57,7 +57,8 @@ void NearbyLamps::addOrUpdateFromBle(const std::string& name,
 }
 
 void NearbyLamps::addOrUpdateFromEspNow(const std::string& name, const uint8_t mac[6],
-                                        const Color& base, const Color& shade) {
+                                        const Color& base, const Color& shade,
+                                        uint32_t firmwareVersion) {
   uint32_t now = millis();
   // Bounded take: this runs on the ESP-NOW recv callback (WiFi task). A long
   // wait here stalls subsequent recv frames and the immediate
@@ -88,6 +89,7 @@ void NearbyLamps::addOrUpdateFromEspNow(const std::string& name, const uint8_t m
     std::memcpy(e.mac, mac, 6);
     e.hasMac = true;
     e.lastSeenViaEspNowMs = now;
+    e.firmwareVersion = firmwareVersion;
     store_.push_back(e);
   } else {
     store_[idx].baseColor = base;
@@ -95,6 +97,9 @@ void NearbyLamps::addOrUpdateFromEspNow(const std::string& name, const uint8_t m
     std::memcpy(store_[idx].mac, mac, 6);
     store_[idx].hasMac = true;
     store_[idx].lastSeenViaEspNowMs = now;
+    // Don't clobber a known version with a 0 — pre-HELLO BLE-only callers
+    // pass the default; we only refresh once we actually got a HELLO.
+    if (firmwareVersion != 0) store_[idx].firmwareVersion = firmwareVersion;
   }
   xSemaphoreGive(mutex_);
 }

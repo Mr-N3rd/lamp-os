@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "../../version.hpp"
+
 namespace lamp {
 
 ShowReceiver* ShowReceiver::s_instance = nullptr;
@@ -200,7 +202,8 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, si
         peerName,
         h.sourceMac,
         Color(h.base[0],  h.base[1],  h.base[2],  h.base[3]),
-        Color(h.shade[0], h.shade[1], h.shade[2], h.shade[3]));
+        Color(h.shade[0], h.shade[1], h.shade[2], h.shade[3]),
+        h.firmwareVersion);
     link_.broadcast(data, len);
   } else if (msgType == lamp_protocol::MSG_CONTROL_OP) {
     lamp_protocol::ParsedControlOp op;
@@ -252,7 +255,8 @@ void ShowReceiver::emitHello() {
 
   uint8_t buf[lamp_protocol::HELLO_MAX_SIZE];
   size_t n = lamp_protocol::buildHello(buf, sizeof(buf), helloSeq_++, myMac_,
-                                       shade, base, name.data(), nameLen);
+                                       shade, base, FIRMWARE_VERSION,
+                                       name.data(), nameLen);
   if (n) {
     link_.broadcast(buf, n);
   }

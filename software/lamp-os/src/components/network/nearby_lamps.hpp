@@ -44,6 +44,10 @@ struct NearbyLamp {
   uint32_t lastSeenViaBleMs = 0;
   uint32_t lastSeenViaEspNowMs = 0;
   bool acknowledged = false;  // SocialBehavior's per-name greeting state
+  // Packed semver (major<<16|minor<<8|patch) — extracted from MSG_HELLO.
+  // Only set via the ESP-NOW path; BLE adv doesn't carry it. Zero until
+  // we've heard at least one HELLO from this peer.
+  uint32_t firmwareVersion = 0;
 };
 
 /**
@@ -61,7 +65,8 @@ class NearbyLamps {
   void addOrUpdateFromBle(const std::string& name,
                           const Color& base, const Color& shade);
   void addOrUpdateFromEspNow(const std::string& name, const uint8_t mac[6],
-                             const Color& base, const Color& shade);
+                             const Color& base, const Color& shade,
+                             uint32_t firmwareVersion = 0);
 
   // Drop entries whose most-recent sighting (max of the two transports)
   // is older than `maxAgeMs`.

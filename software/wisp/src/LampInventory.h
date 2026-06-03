@@ -1,0 +1,77 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace wisp {
+
+// Mirror lamp-os's prune window so a peer that drops off the mesh disappears
+// from wisp's roster at the same wall-clock moment it disappears from peer
+// lamps' nearby lists. 2 minutes.
+#ifndef LAMP_PRUNE_TIME_MS
+#define LAMP_PRUNE_TIME_MS 120000
+#endif
+
+// One lamp wisp has heard from. Keyed by MAC because name can change live via
+// the app (and wisp doesn't want to fold two MACs onto one name when a user
+// renames mid-session). baseColor + shadeColor track the lamp's currently
+// advertised personality; firmwareVersion gates Phase F's OTA picker.
+struct InventoryEntry {
+  uint8_t mac[6] = {0};
+  std::string name;
+  uint8_t baseColor[4] = {0};   // RGBW
+  uint8_t shadeColor[4] = {0};  // RGBW
+  uint32_t firmwareVersion = 0;
+  uint32_t lastSeenMs = 0;
+};
+
+/**
+ * @brief Wisp's roster of lamps on the mesh.
+ *
+ * Fed from MeshLink's recv handler (on a non-Arduino task in practice — the
+ * ESP-NOW driver runs callbacks from a high-priority WiFi task). Read from
+ * the loop task. Single mutex guards everything; critical sections are kept
+ * short (no logging inside the lock).
+ *
+ * Phase A consumer: serial dump every 10s.
+ * Phase C consumer: PaintDistributor walks the snapshot to fan out paint.
+ * Phase D consumer: StatusBeacon includes the count in HELLO; OpHandler
+ *                   surfaces the snapshot to the app via BLE proxy.
+ * Phase F consumer: FirmwareDistributor picks lowest-version peer.
+ */
+class LampInventory {
+ public:
+  LampInventory();
+
+  // Called from MeshLink recv handler (WiFi task). Bounded mutex take so a
+  // contended loop reader can't stall recv; on contention we drop the update
+  // — HELLOs repeat every 2 s, so the lamp is caught on the next beacon.
+  void recordHello(const uint8_t mac[6], const std::string& name,
+                   const uint8_t baseRGBW[4], const uint8_t shadeRGBW[4],
+                   uint32_t firmwareVersion, uint32_t nowMs);
+
+  // Drop entries older than maxAgeMs. Call periodically from loop().
+  void prune(uint32_t nowMs, uint32_t maxAgeMs);
+
+  // Copy of the current roster. Caller can do whatever they want with it
+  // without holding the lock. Cost is O(N) memcpy; N <= MAX_LAMPS.
+  std::vector<InventoryEntry> snapshot();
+
+  // Cheap count for diagnostics; doesn't allocate.
+  size_t size();
+
+  static constexpr size_t MAX_LAMPS = 32;
+
+ private:
+  // Find by MAC. Caller holds the mutex. Returns entries_.size() if missing.
+  size_t findByMacLocked(const uint8_t mac[6]) const;
+  void evictOldestIfFullLocked(uint32_t nowMs);
+
+  std::vector<InventoryEntry> entries_;
+  // Opaque to keep the FreeRTOS dependency out of the header (host tests in
+  // Phase B might want to include this file).
+  void* mutex_ = nullptr;
+};
+
+}  // namespace wisp

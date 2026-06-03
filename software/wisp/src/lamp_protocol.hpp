@@ -1,9 +1,15 @@
 #pragma once
 
-// Shared wire format for repeater <-> lamp over ESP-NOW broadcast.
-// Header-only and identical between software/artnet-repeater/src/lamp_protocol.hpp
-// and software/lamp-os/src/components/network/lamp_protocol.hpp — keep them in sync
-// manually until either side is ready to live in a shared lib.
+// Shared wire format for wisp <-> lamp over ESP-NOW broadcast.
+//
+// THIS IS A VERBATIM MIRROR of
+// software/lamp-os/src/components/network/lamp_protocol.hpp. We duplicate
+// instead of vendoring as a shared lib because (a) the two PlatformIO
+// projects target different boards/frameworks and bundling the lamp-os
+// `components/network/` tree just to pick up one header would drag in the
+// world, and (b) the protocol churn rate is low. Whenever you touch the
+// lamp-os copy, copy the file across — `diff -u` the two sides should show
+// only this comment block.
 
 #include <cstdint>
 #include <cstring>
