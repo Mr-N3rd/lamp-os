@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/brand_colors.dart';
+import '../../control/application/advanced_session.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/application/control_state.dart';
 import '../../control/application/expression_draft.dart';
@@ -325,9 +326,15 @@ class _ExpressionEditorScreenState
               ],
 
               // Per-type parameters (replaces the old JSON text field).
+              // advancedMode gates session-only controls like the mesh
+              // cascade toggle — the user must have unlocked advanced mode
+              // (tap-5-times on the Info screen wordmark) for this to be
+              // true. Resets on BLE disconnect.
               ExpressionParamsPanel(
                 type: draft.type,
                 parameters: draft.parameters,
+                advancedMode:
+                    ref.watch(advancedSessionProvider(widget.lampId)),
                 onChanged: (p) => _updateDraft((d) => _withParameters(d, p)),
               ),
               if (meta != null) ...[

@@ -9,6 +9,7 @@ import '../../../core/utils/tap_counter.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../../core/widgets/lamp_icon.dart';
 import '../../../core/widgets/status_dot.dart';
+import '../../control/application/advanced_session.dart';
 import '../../control/application/control_notifier.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../../inventory/domain/inventory_lamp.dart';
@@ -42,9 +43,12 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
       count: 5,
       window: const Duration(seconds: 3),
       onTriggered: () {
-        final notifier =
-            ref.read(controlNotifierProvider(widget.lampId).notifier);
-        notifier.setLampAdvancedEnabled(true);
+        // Session-only unlock: flips the app-side advancedSession flag for
+        // this lamp. Resets to false on BLE disconnect (handled by
+        // ControlNotifier._onConnectionChange). The user re-does the tap
+        // gesture each session — by design, advanced mode never lingers
+        // across reconnects.
+        ref.read(advancedSessionProvider(widget.lampId).notifier).enable();
         if (context.mounted) {
           // Land on the Setup hub rather than drilling straight into the
           // Advanced LED screen — that way the user sees the lamp name +

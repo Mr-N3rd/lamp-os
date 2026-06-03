@@ -23,6 +23,7 @@ class ExpressionParamsPanel extends StatelessWidget {
     required this.type,
     required this.parameters,
     required this.onChanged,
+    this.advancedMode = false,
   });
 
   final String type;
@@ -33,6 +34,12 @@ class ExpressionParamsPanel extends StatelessWidget {
   /// Called with a new map (NOT a mutated copy of the existing map) so the
   /// parent can drive a notifier update.
   final ValueChanged<Map<String, int>> onChanged;
+
+  /// When false, advanced controls (currently: mesh cascade toggle +
+  /// delay slider) stay hidden. The parameter is still preserved in the
+  /// underlying map — hiding the UI doesn't clear cascadeEnabled /
+  /// cascadeStaggerMs values that were saved earlier.
+  final bool advancedMode;
 
   int _get(String key, int fallback) => parameters[key] ?? fallback;
 
@@ -59,6 +66,7 @@ class ExpressionParamsPanel extends StatelessWidget {
       'pulse' => _PulseParams(
           pulseSpeed: _get('pulseSpeed', 3),
           onPulseSpeed: (v) => _set('pulseSpeed', v),
+          showCascade: advancedMode,
           cascadeEnabled: _get('cascadeEnabled', 0) != 0,
           cascadeStaggerMs: _get('cascadeStaggerMs', 0),
           onCascadeEnabled: (v) => _set('cascadeEnabled', v ? 1 : 0),
@@ -77,6 +85,7 @@ class ExpressionParamsPanel extends StatelessWidget {
           durMax: _get('durationMax', 3),
           onRange: (lo, hi) =>
               _setBoth('durationMin', lo, 'durationMax', hi),
+          showCascade: advancedMode,
           cascadeEnabled: _get('cascadeEnabled', 0) != 0,
           cascadeStaggerMs: _get('cascadeStaggerMs', 0),
           onCascadeEnabled: (v) => _set('cascadeEnabled', v ? 1 : 0),
@@ -335,6 +344,7 @@ class _PulseParams extends StatelessWidget {
   const _PulseParams({
     required this.pulseSpeed,
     required this.onPulseSpeed,
+    required this.showCascade,
     required this.cascadeEnabled,
     required this.cascadeStaggerMs,
     required this.onCascadeEnabled,
@@ -342,6 +352,7 @@ class _PulseParams extends StatelessWidget {
   });
   final int pulseSpeed;
   final ValueChanged<int> onPulseSpeed;
+  final bool showCascade;
   final bool cascadeEnabled;
   final int cascadeStaggerMs;
   final ValueChanged<bool> onCascadeEnabled;
@@ -380,27 +391,32 @@ class _PulseParams extends StatelessWidget {
           rightLabel: 'fast',
           format: (v) => '${v}s',
         ),
-        Row(
-          children: [
-            const Expanded(child: _SectionLabel('Cascade to other lamps')),
-            Switch(
-              value: cascadeEnabled,
-              onChanged: onCascadeEnabled,
-            ),
-          ],
-        ),
-        _ParamSlider(
-          label: 'Delay between lamps',
-          value: (cascadeStaggerMs / 100).round().clamp(0, 50),
-          min: 0,
-          max: 50,
-          onChanged: cascadeEnabled
-              ? (v) => onCascadeStaggerMs(v * 100)
-              : null,
-          leftLabel: 'instant',
-          rightLabel: 'slow ripple',
-          format: fmtMs,
-        ),
+        // Cascade controls only render when advanced mode is unlocked in
+        // the current session. Hidden state preserves saved values — the
+        // firmware still cascades if cascadeEnabled was set previously.
+        if (showCascade) ...[
+          Row(
+            children: [
+              const Expanded(child: _SectionLabel('Cascade to other lamps')),
+              Switch(
+                value: cascadeEnabled,
+                onChanged: onCascadeEnabled,
+              ),
+            ],
+          ),
+          _ParamSlider(
+            label: 'Delay between lamps',
+            value: (cascadeStaggerMs / 100).round().clamp(0, 50),
+            min: 0,
+            max: 50,
+            onChanged: cascadeEnabled
+                ? (v) => onCascadeStaggerMs(v * 100)
+                : null,
+            leftLabel: 'instant',
+            rightLabel: 'slow ripple',
+            format: fmtMs,
+          ),
+        ],
       ],
     );
   }
@@ -468,6 +484,7 @@ class _GlitchyParams extends StatelessWidget {
     required this.durMin,
     required this.durMax,
     required this.onRange,
+    required this.showCascade,
     required this.cascadeEnabled,
     required this.cascadeStaggerMs,
     required this.onCascadeEnabled,
@@ -476,6 +493,7 @@ class _GlitchyParams extends StatelessWidget {
   final int durMin;
   final int durMax;
   final void Function(int, int) onRange;
+  final bool showCascade;
   final bool cascadeEnabled;
   final int cascadeStaggerMs;
   final ValueChanged<bool> onCascadeEnabled;
@@ -524,32 +542,37 @@ class _GlitchyParams extends StatelessWidget {
           rightLabel: 'long',
           format: fmt,
         ),
-        // Toggle row uses _SectionLabel for the label so it shares typography
-        // and padding with every other section header in this file.
-        Row(
-          children: [
-            const Expanded(child: _SectionLabel('Cascade to other lamps')),
-            Switch(
-              value: cascadeEnabled,
-              onChanged: onCascadeEnabled,
-            ),
-          ],
-        ),
-        // Slider stays visible when cascade is off (disabled by passing
-        // null onChanged) so users can see what the control does before
-        // enabling it. Material Slider renders the disabled style itself.
-        _ParamSlider(
-          label: 'Delay between lamps',
-          value: (cascadeStaggerMs / 100).round().clamp(0, 50),
-          min: 0,
-          max: 50,
-          onChanged: cascadeEnabled
-              ? (v) => onCascadeStaggerMs(v * 100)
-              : null,
-          leftLabel: 'instant',
-          rightLabel: 'slow ripple',
-          format: fmtMs,
-        ),
+        // Cascade controls only render when advanced mode is unlocked in
+        // the current session. Hidden state preserves saved values — the
+        // firmware still cascades if cascadeEnabled was set previously.
+        if (showCascade) ...[
+          // Toggle row uses _SectionLabel for the label so it shares typography
+          // and padding with every other section header in this file.
+          Row(
+            children: [
+              const Expanded(child: _SectionLabel('Cascade to other lamps')),
+              Switch(
+                value: cascadeEnabled,
+                onChanged: onCascadeEnabled,
+              ),
+            ],
+          ),
+          // Slider stays visible when cascade is off (disabled by passing
+          // null onChanged) so users can see what the control does before
+          // enabling it. Material Slider renders the disabled style itself.
+          _ParamSlider(
+            label: 'Delay between lamps',
+            value: (cascadeStaggerMs / 100).round().clamp(0, 50),
+            min: 0,
+            max: 50,
+            onChanged: cascadeEnabled
+                ? (v) => onCascadeStaggerMs(v * 100)
+                : null,
+            leftLabel: 'instant',
+            rightLabel: 'slow ripple',
+            format: fmtMs,
+          ),
+        ],
       ],
     );
   }

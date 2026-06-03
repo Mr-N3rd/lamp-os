@@ -12,6 +12,7 @@ import '../../../core/ble/write_coalescer.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../domain/lamp_color.dart';
 import '../domain/sections.dart';
+import 'advanced_session.dart';
 import 'auth_client.dart';
 import 'control_state.dart';
 import 'lamp_save_status.dart';
@@ -1019,6 +1020,9 @@ class ControlNotifier extends _$ControlNotifier {
     }
     if (!isConnected && cur.connected) {
       state = AsyncData(cur.copyWith(connected: false));
+      // Advanced mode is session-only — drop the unlock the moment the BLE
+      // session ends. User must re-do the tap gesture after reconnect.
+      ref.read(advancedSessionProvider(_deviceId).notifier).disable();
       _scheduleReconnect();
     }
   }

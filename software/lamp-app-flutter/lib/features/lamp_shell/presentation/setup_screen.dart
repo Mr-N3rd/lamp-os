@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../../core/widgets/settings_row.dart';
+import '../../control/application/advanced_session.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/application/control_state.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
@@ -93,7 +94,10 @@ class _SetupBody extends ConsumerWidget {
           subtitle: '${state.base.knockout.length} pixel(s) masked',
           onTap: () => context.push(AppRoutes.knockout(lampId)),
         ),
-        if (state.lamp.advancedEnabled)
+        // Advanced LED setup is gated on the session-only advanced flag —
+        // user must have tapped 5× on the Info wordmark this connection.
+        // Flag resets on BLE disconnect (see ControlNotifier._onConnectionChange).
+        if (ref.watch(advancedSessionProvider(lampId)))
           SettingsRow(
             icon: Icons.memory,
             title: 'Advanced LED setup',

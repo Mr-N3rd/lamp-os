@@ -7,6 +7,7 @@ import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
+import 'package:lamp_app/features/control/application/advanced_session.dart';
 import 'package:lamp_app/features/control/application/control_notifier.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/setup_screen.dart';
 
@@ -105,9 +106,14 @@ void main() {
     expect(find.text('Advanced LED setup'), findsNothing);
   });
 
-  testWidgets('Advanced LED row appears when advanced is enabled',
+  testWidgets('Advanced LED row appears when session advanced is enabled',
       (tester) async {
-    final c = await _makeContainer(advancedEnabled: true);
+    // Advanced gating moved from persisted firmware advancedEnabled to a
+    // session-only Riverpod flag so the unlock doesn't survive a
+    // disconnect/reconnect. Flip the session flag directly instead of
+    // seeding the firmware bit.
+    final c = await _makeContainer();
+    c.read(advancedSessionProvider(_devId).notifier).enable();
     addTearDown(c.dispose);
     await tester.pumpWidget(_wrap(c));
     await _pumpToData(tester);
