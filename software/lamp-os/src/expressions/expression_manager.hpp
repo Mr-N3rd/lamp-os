@@ -29,10 +29,6 @@ class Compositor;
 class ExpressionManager;
 class ShowReceiver;
 
-// Global expression manager access
-void setGlobalExpressionManager(ExpressionManager* manager);
-ExpressionManager* getGlobalExpressionManager();
-
 /**
  * @brief Manages active expressions and their lifecycle
  */

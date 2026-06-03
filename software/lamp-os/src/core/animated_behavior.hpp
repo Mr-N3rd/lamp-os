@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "./behavior_context.hpp"
 #include "./frame_buffer.hpp"
 
 namespace lamp {
@@ -96,6 +97,23 @@ class AnimatedBehavior {
    * @brief conclude the draw procedure and advance the internal frame counters
    */
   void nextFrame();
+
+  /**
+   * @brief Wire a BehaviorContext into this behavior. Called by the Compositor
+   *        the moment a behavior is registered (via addBehavior or begin()),
+   *        and by ExpressionManager just before handing a transient to the
+   *        compositor. Replaces the previous globalCompositor /
+   *        globalExpressionManager / expressionFrameBuffers singleton path.
+   *        The context is owned by the Compositor; behaviors only hold a
+   *        non-owning pointer.
+   */
+  void setBehaviorContext(BehaviorContext* ctx) { context_ = ctx; }
+  BehaviorContext* behaviorContext() const { return context_; }
+
+ protected:
+  // Non-owning. Null until the Compositor (or ExpressionManager, for
+  // transients) wires it during registration. Consumers must null-check.
+  BehaviorContext* context_ = nullptr;
 };
 }  // namespace lamp
 

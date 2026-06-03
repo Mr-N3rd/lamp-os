@@ -175,8 +175,8 @@ void ShiftyExpression::onUpdate() {
 void ShiftyExpression::onComplete() {
   // Always trigger glitch on unshift if glitchy is available and we just finished fading back
   if (state == IDLE) {
-    if (auto* manager = getGlobalExpressionManager()) {
-      manager->triggerExpression("glitchy");
+    if (context_ && context_->expressionManager) {
+      context_->expressionManager->triggerExpression("glitchy");
     }
   }
 }

@@ -520,8 +520,16 @@ void initBehaviors() {
   compositor.setExpressionBandEnd(exprBehaviors.size());
   compositor.overlayBehaviors.push_back(&baseKnockoutBehavior);
 
-  lamp::setGlobalCompositor(&compositor);
-  lamp::setGlobalExpressionManager(&expressionManager);
+  // Finish wiring the shared BehaviorContext. The Compositor self-publishes
+  // in its constructor; we publish the ExpressionManager + frame buffer list
+  // here so the expressions just registered by compositor.begin() can reach
+  // both from this point onward. (setCompositor() later in setup() repeats
+  // these writes idempotently — they're cheap pointer assignments.)
+  auto& behaviorCtx = compositor.behaviorContext();
+  behaviorCtx.expressionManager = &expressionManager;
+  behaviorCtx.expressionFrameBuffers.clear();
+  behaviorCtx.expressionFrameBuffers.push_back(&shade);
+  behaviorCtx.expressionFrameBuffers.push_back(&base);
 }
 
 /**

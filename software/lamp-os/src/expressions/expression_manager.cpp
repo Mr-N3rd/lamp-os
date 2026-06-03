@@ -4,32 +4,25 @@
 #include <cstring>
 
 #include "../components/network/show_receiver.hpp"
+#include "../core/behavior_context.hpp"
 #include "../core/compositor.hpp"
 
 namespace lamp {
-
-// Define the global frame buffer vector for expressions
-std::vector<FrameBuffer*> expressionFrameBuffers;
-
-// Global expression manager pointer
-static ExpressionManager* globalExpressionManager = nullptr;
-
-void setGlobalExpressionManager(ExpressionManager* manager) {
-  globalExpressionManager = manager;
-}
-
-ExpressionManager* getGlobalExpressionManager() {
-  return globalExpressionManager;
-}
 
 void ExpressionManager::begin(FrameBuffer* shade, FrameBuffer* base) {
   shadeBuffer = shade;
   baseBuffer = base;
 
-  // Set up global frame buffer references
-  expressionFrameBuffers.clear();
-  expressionFrameBuffers.push_back(shade);
-  expressionFrameBuffers.push_back(base);
+  // Publish the frame buffers into the shared BehaviorContext, replacing the
+  // previous `expressionFrameBuffers` extern vector. If the compositor has
+  // already been wired (setCompositor was called before begin()), publish now;
+  // otherwise setCompositor will publish.
+  if (compositor_) {
+    auto& ctx = compositor_->behaviorContext();
+    ctx.expressionFrameBuffers.clear();
+    ctx.expressionFrameBuffers.push_back(shade);
+    ctx.expressionFrameBuffers.push_back(base);
+  }
 }
 
 void ExpressionManager::loadFromConfig(const ExpressionSettings& settings) {
@@ -107,6 +100,17 @@ void ExpressionManager::setShowReceiver(ShowReceiver* receiver) {
 
 void ExpressionManager::setCompositor(Compositor* compositor) {
   compositor_ = compositor;
+  if (!compositor_) return;
+  // Publish ourselves and (if begin() already ran) the frame buffer list
+  // into the compositor's BehaviorContext so registered behaviors can reach
+  // both without a global. Safe to call before or after begin().
+  auto& ctx = compositor_->behaviorContext();
+  ctx.expressionManager = this;
+  if (shadeBuffer && baseBuffer) {
+    ctx.expressionFrameBuffers.clear();
+    ctx.expressionFrameBuffers.push_back(shadeBuffer);
+    ctx.expressionFrameBuffers.push_back(baseBuffer);
+  }
 }
 
 void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {

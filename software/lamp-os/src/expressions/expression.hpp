@@ -12,12 +12,6 @@
 
 namespace lamp {
 
-// Forward declaration
-class Compositor;
-
-// Set global compositor for expressions to check exclusive state
-void setGlobalCompositor(Compositor* compositor);
-
 enum ExpressionTarget {
   TARGET_SHADE = 1,
   TARGET_BASE = 2,

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "./animated_behavior.hpp"
+#include "./behavior_context.hpp"
 #include "./frame_buffer.hpp"
 
 #define MINIMUM_FRAME_DRAW_TIME_MS 16
@@ -21,6 +22,12 @@ class Compositor {
   // pushing initial expressions; runtime adds/removes maintain it so new
   // expressions land before higher-priority behaviors (configurator etc).
   size_t expressionBandEnd = 0;
+
+  // The shared per-behavior context. We own it; every behavior we register
+  // gets a pointer to it via setBehaviorContext. ExpressionManager wires
+  // itself into this context via setExpressionManager(); standard_lamp pokes
+  // its frame-buffer list in too. Single instance, multiple readers.
+  BehaviorContext context_;
 
  public:
   std::vector<AnimatedBehavior*> underlayBehaviors;
@@ -81,6 +88,14 @@ class Compositor {
    *        decrements the band-end index.
    */
   void removeBehavior(AnimatedBehavior* b);
+
+  /**
+   * @brief Mutable access to the shared BehaviorContext. Used by
+   *        standard_lamp.cpp at boot to wire the ExpressionManager pointer
+   *        and let ExpressionManager publish its frame buffer list. The
+   *        compositor itself self-publishes via the constructor.
+   */
+  BehaviorContext& behaviorContext() { return context_; }
 };
 }  // namespace lamp
 #endif
