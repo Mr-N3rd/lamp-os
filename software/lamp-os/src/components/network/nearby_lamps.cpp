@@ -59,7 +59,25 @@ void NearbyLamps::addOrUpdateFromBle(const std::string& name,
 void NearbyLamps::addOrUpdateFromEspNow(const std::string& name, const uint8_t mac[6],
                                         const Color& base, const Color& shade) {
   uint32_t now = millis();
-  xSemaphoreTake(mutex_, portMAX_DELAY);
+  // Bounded take: this runs on the ESP-NOW recv callback (WiFi task). A long
+  // wait here stalls subsequent recv frames and the immediate
+  // link_.broadcast() rebroadcast on the same task. 2 ms is well above
+  // typical loop-task contention and well below any radio housekeeping
+  // threshold. On timeout we silently drop the write — HELLO repeats every
+  // 2 s, so the lamp is caught on the next beacon. Drop is preferable to a
+  // recv-task stall.
+  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(2)) != pdTRUE) {
+#ifdef LAMP_DEBUG
+    static uint32_t lastDropLogMs = 0;
+    uint32_t logNow = millis();
+    if (logNow - lastDropLogMs > 1000) {
+      Serial.printf("[nearby] addOrUpdateFromEspNow: mutex contended, dropped (name=%s)\n",
+                    name.c_str());
+      lastDropLogMs = logNow;
+    }
+#endif
+    return;
+  }
   size_t idx = findIndexLocked(name);
   if (idx == store_.size()) {
     evictOldestIfFullLocked();
@@ -98,43 +116,51 @@ void NearbyLamps::prune(uint32_t maxAgeMs) {
   xSemaphoreGive(mutex_);
 }
 
+// Reader pattern: take lock just long enough to copy store_ into a stack
+// snapshot, then release before any filtering/allocation work. Keeps the
+// critical section bounded by the vector copy itself (no per-element
+// predicate evaluation inside the lock) so ESP-NOW recv-side bounded takes
+// don't time out waiting on a loop-task reader.
 std::vector<NearbyLamp> NearbyLamps::getReachableViaBle(uint32_t maxAgeMs) {
   uint32_t now = millis();
-  std::vector<NearbyLamp> out;
   xSemaphoreTake(mutex_, portMAX_DELAY);
-  for (const auto& e : store_) {
+  std::vector<NearbyLamp> snapshot = store_;
+  xSemaphoreGive(mutex_);
+  std::vector<NearbyLamp> out;
+  out.reserve(snapshot.size());
+  for (const auto& e : snapshot) {
     if (e.lastSeenViaBleMs != 0 && (now - e.lastSeenViaBleMs) <= maxAgeMs) {
       out.push_back(e);
     }
   }
-  xSemaphoreGive(mutex_);
   return out;
 }
 
 bool NearbyLamps::hasAnyReachableViaBle(uint32_t maxAgeMs) {
   uint32_t now = millis();
-  bool found = false;
   xSemaphoreTake(mutex_, portMAX_DELAY);
-  for (const auto& e : store_) {
+  std::vector<NearbyLamp> snapshot = store_;
+  xSemaphoreGive(mutex_);
+  for (const auto& e : snapshot) {
     if (e.lastSeenViaBleMs != 0 && (now - e.lastSeenViaBleMs) <= maxAgeMs) {
-      found = true;
-      break;
+      return true;
     }
   }
-  xSemaphoreGive(mutex_);
-  return found;
+  return false;
 }
 
 std::vector<NearbyLamp> NearbyLamps::getReachableViaEspNow(uint32_t maxAgeMs) {
   uint32_t now = millis();
-  std::vector<NearbyLamp> out;
   xSemaphoreTake(mutex_, portMAX_DELAY);
-  for (const auto& e : store_) {
+  std::vector<NearbyLamp> snapshot = store_;
+  xSemaphoreGive(mutex_);
+  std::vector<NearbyLamp> out;
+  out.reserve(snapshot.size());
+  for (const auto& e : snapshot) {
     if (e.lastSeenViaEspNowMs != 0 && (now - e.lastSeenViaEspNowMs) <= maxAgeMs) {
       out.push_back(e);
     }
   }
-  xSemaphoreGive(mutex_);
   return out;
 }
 
