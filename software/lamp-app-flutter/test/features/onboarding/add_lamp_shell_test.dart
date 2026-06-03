@@ -21,6 +21,6 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Scanning for lamps...'), findsOneWidget);
+    expect(find.text('Searching for a stray lamp…'), findsOneWidget);
   });
 }

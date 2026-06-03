@@ -1,12 +1,11 @@
-#ifndef LAMP_BEHAVIORS_CONFIGURATOR_H
-#define LAMP_BEHAVIORS_CONFIGURATOR_H
+#pragma once
 
 #include <cstdint>
 #include <vector>
 
-#include "../config/config_types.hpp"
-#include "../core/animated_behavior.hpp"
-#include "../util/color.hpp"
+#include "config/config_types.hpp"
+#include "core/animated_behavior.hpp"
+#include "util/color.hpp"
 
 #define CONFIGURATOR_WEBSOCKET_TIMEOUT_MS 60000
 
@@ -31,4 +30,3 @@ class ConfiguratorBehavior : public AnimatedBehavior {
   void control() override;
 };
 }  // namespace lamp
-#endif

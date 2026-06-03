@@ -1,5 +1,4 @@
-#ifndef LAMP_EXPRESSIONS_EXPRESSION_H
-#define LAMP_EXPRESSIONS_EXPRESSION_H
+#pragma once
 
 #include <cstdint>
 #include <map>
@@ -7,16 +6,10 @@
 #include <variant>
 #include <vector>
 
-#include "../core/animated_behavior.hpp"
-#include "../util/color.hpp"
+#include "core/animated_behavior.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
-
-// Forward declaration
-class Compositor;
-
-// Set global compositor for expressions to check exclusive state
-void setGlobalCompositor(Compositor* compositor);
 
 enum ExpressionTarget {
   TARGET_SHADE = 1,
@@ -92,6 +85,24 @@ class Expression : public AnimatedBehavior {
   const std::vector<Color>& getColors() const { return colors; }
   ExpressionTarget getTarget() const { return target; }
 
+  /**
+   * @brief Swap the palette without touching interval / target / schedule.
+   *        Distinct from configure() which resets the auto-trigger clock.
+   */
+  void setColors(const std::vector<Color>& inColors) { colors = inColors; }
+
+  /**
+   * @brief True once the expression has finished at least one animation cycle
+   *        and is back in STOPPED. Used by ExpressionManager's transient GC
+   *        to know when a remote-cascaded one-shot can be removed from the
+   *        compositor and destroyed. Defaults are STOPPED + lastCompletedLoop=0
+   *        on a fresh instance, so this returns false until trigger() has
+   *        fired AND that firing has completed.
+   */
+  bool isAnimationComplete() const {
+    return animationState == STOPPED && lastCompletedLoop > 0;
+  }
+
   // Suppresses auto-trigger from control() while true. Manual trigger() and
   // chain-triggered firing still work. Listing's enabled toggle drives this.
   bool autoTriggerEnabled = true;
@@ -120,5 +131,3 @@ protected:
 };
 
 }  // namespace lamp
-
-#endif

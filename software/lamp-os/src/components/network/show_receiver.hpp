@@ -1,5 +1,4 @@
-#ifndef LAMP_COMPONENTS_NETWORK_SHOW_RECEIVER_H
-#define LAMP_COMPONENTS_NETWORK_SHOW_RECEIVER_H
+#pragma once
 
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -10,10 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "../../config/config.hpp"
-#include "./espnow_link.hpp"
-#include "./lamp_protocol.hpp"
-#include "./nearby_lamps.hpp"
+#include "config/config.hpp"
+#include "expressions/expression_invocation.hpp"
+#include "espnow_link.hpp"
+#include "lamp_protocol.hpp"
+#include "nearby_lamps.hpp"
 
 #ifndef LAMP_ESPNOW_CHANNEL
 #define LAMP_ESPNOW_CHANNEL 1
@@ -25,9 +25,13 @@ namespace lamp {
 
 // Called from the loop task when a MSG_CONTROL_OP arrives addressed to this
 // lamp (or broadcast). Payload is JSON; caller is expected to parse `char`
-// and route to the matching local postPending* function. Pointer is only
-// valid during the call.
-using ControlOpHandler = std::function<void(const uint8_t* payload, size_t len)>;
+// and route to the matching local postPending* function. `srcMac` is the
+// sender's WiFi STA MAC (6 bytes; used by the receiver-side cascade
+// coalesce so spam from one sender collapses while genuinely concurrent
+// cascades from different senders both land). Pointers are only valid
+// during the call.
+using ControlOpHandler = std::function<void(const uint8_t* payload, size_t len,
+                                            const uint8_t srcMac[6])>;
 
 // Receives streamed show frames + control ops over ESP-NOW, and announces
 // this lamp's presence (HELLO) so peers can populate their registry with
@@ -62,7 +66,31 @@ class ShowReceiver {
 
   // Broadcast a CONTROL_OP frame onto the grid. Used by the BLE
   // CHAR_REMOTE_OP drain to forward a write to a far lamp.
-  bool sendControlOp(const uint8_t targetMac[6], const uint8_t* payload, size_t payloadLen);
+  //
+  // localOnly = true sets the wire flag that tells receivers to apply the
+  // op locally but skip the rebroadcast relay — reach is limited to the
+  // sender's direct radio range. Used by the expression-cascade path so
+  // expressions stay within the room rather than fanning across the grid.
+  // Other senders (BLE remoteOp forwarding, etc.) leave it false and the
+  // existing relay extends mesh reach as before.
+  bool sendControlOp(const uint8_t targetMac[6], const uint8_t* payload,
+                     size_t payloadLen, bool localOnly = false);
+
+  // Mesh expression-trigger API. Wraps `inv` in a
+  // `{char:"triggerExpression", ...}` CONTROL_OP payload and unicasts it.
+  // Receivers parse and dispatch to ExpressionManager::triggerInvocation,
+  // which never re-cascades — loop break is structural.
+  //
+  // sendExpressionTo: addressed to one peer by name. Returns false if the
+  // peer isn't currently reachable via ESP-NOW (no recent HELLO).
+  //
+  // sendExpressionToAll: fans out to every ESP-NOW-reachable peer (excluding
+  // self). When staggerMs > 0, each successive peer is assigned a delayMs
+  // of `inv.delayMs + i * staggerMs` so receivers can self-pace the cascade
+  // off their own millis() — no shared clock needed. Peers are iterated in
+  // name order for deterministic visual ordering.
+  bool sendExpressionTo(const std::string& peerName, const ExpressionInvocation& inv);
+  void sendExpressionToAll(const ExpressionInvocation& inv, uint32_t staggerMs = 0);
 
   // Static recv glue (the EspNowLink hands us a C function pointer).
   static ShowReceiver* s_instance;
@@ -98,5 +126,3 @@ class ShowReceiver {
 };
 
 }  // namespace lamp
-
-#endif

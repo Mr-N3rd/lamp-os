@@ -6,6 +6,7 @@ import '../../control/presentation/widgets/connecting_view.dart';
 import '../application/add_lamp_notifier.dart';
 import '../domain/add_lamp_state.dart';
 import 'widgets/add_lamp_done_step.dart';
+import 'widgets/add_lamp_meet_step.dart';
 import 'widgets/add_lamp_name_step.dart';
 import 'widgets/add_lamp_password_step.dart';
 import 'widgets/add_lamp_scan_step.dart';
@@ -65,6 +66,7 @@ class _AddLampShellState extends ConsumerState<AddLampShell> {
       AddLampStep.scan => const AddLampScanStep(),
       AddLampStep.connecting => ConnectingView(deviceId: state.deviceId),
       AddLampStep.name => const AddLampNameStep(),
+      AddLampStep.meet => const AddLampMeetStep(),
       AddLampStep.password => const AddLampPasswordStep(),
       AddLampStep.verifying => const AddLampPasswordStep(),
       AddLampStep.done => const AddLampDoneStep(),
@@ -76,13 +78,13 @@ class _AddLampShellState extends ConsumerState<AddLampShell> {
         step != AddLampStep.scan && step != AddLampStep.connecting;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Add a lamp'),
+        title: const Text('Adopt a lamp'),
         bottom: showDots
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(8),
                 // Name = 2 in the enum, but it's the first user-visible
-                // dot — subtract 2 so name=>0, password=>1, verifying=>2,
-                // done=>3 against the 4-dot row below.
+                // dot — subtract 2 so name=>0, meet=>1, password=>2,
+                // verifying=>3, done=>4 against the 5-dot row below.
                 child: _ProgressDots(currentIndex: step.index - 2),
               )
             : null,
@@ -102,7 +104,7 @@ class _ProgressDots extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: List.generate(4, (i) {
+        children: List.generate(5, (i) {
           final active = i == currentIndex;
           return Container(
             margin: const EdgeInsets.symmetric(horizontal: 4),

@@ -1,9 +1,9 @@
-#include "./fade_out.hpp"
+#include "fade_out.hpp"
 
 #include <Arduino.h>
 
-#include "../util/color.hpp"
-#include "../util/fade.hpp"
+#include "util/color.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
 

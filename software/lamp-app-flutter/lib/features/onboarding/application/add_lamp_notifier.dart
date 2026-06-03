@@ -53,7 +53,8 @@ class AddLampNotifier extends _$AddLampNotifier {
     state = state.copyWith(step: switch (state.step) {
       AddLampStep.scan => AddLampStep.connecting,
       AddLampStep.connecting => AddLampStep.name,
-      AddLampStep.name => AddLampStep.password,
+      AddLampStep.name => AddLampStep.meet,
+      AddLampStep.meet => AddLampStep.password,
       AddLampStep.password => AddLampStep.verifying,
       AddLampStep.verifying => AddLampStep.done,
       AddLampStep.done => AddLampStep.done,
@@ -65,7 +66,8 @@ class AddLampNotifier extends _$AddLampNotifier {
       AddLampStep.scan => AddLampStep.scan,
       AddLampStep.connecting => AddLampStep.scan,
       AddLampStep.name => AddLampStep.scan,
-      AddLampStep.password => AddLampStep.name,
+      AddLampStep.meet => AddLampStep.name,
+      AddLampStep.password => AddLampStep.meet,
       AddLampStep.verifying => AddLampStep.password,
       AddLampStep.done => AddLampStep.password,
     });

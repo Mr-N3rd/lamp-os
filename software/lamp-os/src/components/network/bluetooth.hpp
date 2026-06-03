@@ -1,9 +1,8 @@
-#ifndef LAMP_COMPONENTS_NETWORK_BLUETOOTH_H
-#define LAMP_COMPONENTS_NETWORK_BLUETOOTH_H
+#pragma once
 
 #include <string>
 
-#include "../../config/config.hpp"
+#include "config/config.hpp"
 
 // Lamp manufacturer identifier
 #define BLE_LAMP_MAGIC_NUMBER 42069
@@ -31,10 +30,6 @@
 #define BLE_MINIMUM_RSSI_VALUE -94
 
 namespace lamp {
-// Set by ble_control on GATT connect/disconnect. While true, the scan
-// auto-restart in onScanEnd is suppressed. Defined in bluetooth.cpp.
-extern volatile bool scanPausedForGattClient;
-
 /**
  * @brief Entrypoint class to advertise and track lamps by Bluetooth LE
  */
@@ -89,4 +84,3 @@ class BluetoothComponent {
   uint32_t m_lastAdvFlushMs = 0;
 };
 }  // namespace lamp
-#endif

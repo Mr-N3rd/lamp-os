@@ -21,7 +21,7 @@ import '../domain/last_seen.dart';
 
 /// The app's home / landing screen for users with at least one lamp in
 /// their inventory. Lists every owned lamp with status + last-seen colors,
-/// plus an "Add a lamp" tile at the end. Tapping a lamp routes to its
+/// plus an "Adopt a lamp" tile at the end. Tapping a lamp routes to its
 /// control screen — or, when the lamp is currently visible on BLE but its
 /// firmware doesn't speak the mesh protocol (`isMesh == false`), to the
 /// dedicated BT-only screen.
@@ -183,7 +183,7 @@ class _MyLampTile extends ConsumerWidget {
   }
 }
 
-/// Catch-all "Add a lamp" tile rendered after the inventory list.
+/// Catch-all "Adopt a lamp" tile rendered after the inventory list.
 class _AddLampTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -206,7 +206,7 @@ class _AddLampTile extends StatelessWidget {
             const SizedBox(width: 14),
             const Expanded(
               child: Text(
-                'Add a lamp',
+                'Adopt a lamp',
                 style: TextStyle(
                   color: BrandColors.lampWhite,
                   fontSize: 15,

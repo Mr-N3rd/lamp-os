@@ -1,12 +1,11 @@
-#ifndef LAMP_CORE_FRAME_BUFFER_H
-#define LAMP_CORE_FRAME_BUFFER_H
+#pragma once
 
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 
 #include <vector>
 
-#include "./util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 /**
@@ -15,9 +14,6 @@ namespace lamp {
  * when the bitmap buffer or brightness is changed
  */
 class FrameBuffer {
- private:
-  uint8_t i = 0;
-
  public:
   std::vector<Color> defaultColors;
   std::vector<Color> previousBuffer;
@@ -47,4 +43,3 @@ class FrameBuffer {
   void flush();
 };
 }  // namespace lamp
-#endif

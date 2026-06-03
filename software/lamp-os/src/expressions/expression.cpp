@@ -1,21 +1,10 @@
-#include "./expression.hpp"
+#include "expression.hpp"
 
 #include <Arduino.h>
 
-#include "../core/compositor.hpp"
-#include "./expression_manager.hpp"
-
-// Global frame buffer references (set by ExpressionManager)
-namespace lamp {
-  extern std::vector<FrameBuffer*> expressionFrameBuffers;
-
-  // Global compositor pointer (set by standard_lamp)
-  static Compositor* globalCompositor = nullptr;
-
-  void setGlobalCompositor(Compositor* compositor) {
-    globalCompositor = compositor;
-  }
-}
+#include "core/behavior_context.hpp"
+#include "core/compositor.hpp"
+#include "expression_manager.hpp"
 
 namespace lamp {
 
@@ -40,11 +29,15 @@ void Expression::saveBufferState() {
 }
 
 bool Expression::shouldAffectBuffer() {
-  if (expressionFrameBuffers.empty()) return false;
+  // Context is wired by Compositor::addBehavior at register time (or by
+  // ExpressionManager::setCompositor for transients). Until both are wired
+  // and ExpressionManager::begin() has published the buffer list, treat as
+  // not-yet-routable and skip — same behavior as the old empty-vector guard.
+  if (!context_ || context_->expressionFrameBuffers.size() < 2) return false;
 
   // Check if current buffer matches our target
-  bool isShade = (fb == expressionFrameBuffers[0]);  // Shade is first
-  bool isBase = (fb == expressionFrameBuffers[1]);   // Base is second
+  bool isShade = (fb == context_->expressionFrameBuffers[0]);  // Shade is first
+  bool isBase = (fb == context_->expressionFrameBuffers[1]);   // Base is second
 
   switch (target) {
     case TARGET_SHADE:
@@ -61,7 +54,6 @@ bool Expression::shouldAffectBuffer() {
 void Expression::control() {
   // Pause if an exclusive behavior is running (unless we are exclusive)
   if (shouldPause()) return;
-
 
   // Check for automatic trigger
   if (autoTriggerEnabled && animationState == STOPPED && millis() > nextTriggerMs) {
@@ -84,8 +76,10 @@ bool Expression::shouldPause() const {
   // Don't pause if this expression is exclusive
   if (isExclusive) return false;
 
-  // Check if compositor has an active exclusive
-  return globalCompositor && globalCompositor->hasActiveExclusive();
+  // Check if compositor has an active exclusive. Context is null until the
+  // Compositor registers us via addBehavior — pre-registration we can't be
+  // running anyway, so treat as "no exclusive".
+  return context_ && context_->compositor && context_->compositor->hasActiveExclusive();
 }
 
 Color Expression::getRandomColor() {
@@ -97,18 +91,25 @@ Color Expression::getRandomColor() {
 }
 
 void Expression::trigger() {
-
   // Only trigger if this expression should affect this buffer
   // This ensures expressions respect their target configuration
   if (!shouldAffectBuffer()) {
     return;
   }
 
-
   // Start immediately
   onTrigger();            // Expression-specific setup
   scheduleNextTrigger();  // Reset next automatic trigger
   playOnce();
+
+  // Notify the manager so the cascade convention fires for ALL trigger paths,
+  // including the per-entry auto-trigger from control() (which previously
+  // bypassed maybeCascade entirely). triggerExpression/triggerInvocation set
+  // a suppress flag on the manager around their own loops so this callback
+  // doesn't double-cascade (or re-cascade for remote-arrived invocations).
+  if (context_ && context_->expressionManager) {
+    context_->expressionManager->onExpressionFired(this);
+  }
 }
 
 }  // namespace lamp

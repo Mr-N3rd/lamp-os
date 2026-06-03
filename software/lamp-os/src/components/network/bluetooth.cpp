@@ -1,7 +1,7 @@
 /**
  *  Lamp Bluetooth Management. Pure-BLE v1 — no WiFi, no stage mode, no ArtNet.
  */
-#include "./bluetooth.hpp"
+#include "bluetooth.hpp"
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -9,16 +9,12 @@
 #include <string>
 #include <vector>
 
-#include "../../config/config.hpp"
-#include "../../util/color.hpp"
-#include "./ble_control.hpp"
-#include "./nearby_lamps.hpp"
+#include "config/config.hpp"
+#include "util/color.hpp"
+#include "ble_control.hpp"
+#include "nearby_lamps.hpp"
 
 namespace lamp {
-
-// Set true by ble_control on GATT connect; suppresses scan-restart in
-// onScanEnd. Cleared on disconnect.
-volatile bool scanPausedForGattClient = false;
 
 // Cached manufacturer-data vector. `begin()` populates it;
 // `setAdvertisedColors()` rebuilds + re-applies when shade or base
@@ -95,7 +91,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     nearbyLamps.prune(LAMP_PRUNE_TIME_MS);
     // Skip restart while a phone is using the GATT control service.
     // ble_control resumes the scan on disconnect.
-    if (!scanPausedForGattClient) {
+    if (!ble_control::isScanPaused()) {
       NimBLEDevice::getScan()->start(BLE_GAP_SCAN_TIME_MS);
     }
   }

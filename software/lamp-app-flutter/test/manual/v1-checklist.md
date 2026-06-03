@@ -106,11 +106,11 @@ Hardware verification for things automated tests can't cover. Walk through this 
 
 ### Other nearby lamps
 
-- [ ] Bring an unconfigured ("standard") lamp near the phone → it appears under "Other nearby lamps" within seconds with an amber "adopt" pill.
+- [ ] Bring an unconfigured ("stray") lamp near the phone → it appears under "Other nearby lamps" within seconds with an amber "adopt" pill.
 - [ ] Tap it → AddLamp wizard opens (factory-default path; sheet pops).
 - [ ] Bring a friend's already-configured lamp near the phone → it appears under "Other nearby lamps" with a green "add" pill.
 - [ ] Tap → confirmation dialog → "Add" → lamp lands in inventory + becomes the active lamp. Sheet pops.
-- [ ] Tap "+ Add a lamp" in the footer → onboarding shell opens.
+- [ ] Tap "+ Adopt a lamp" in the footer → onboarding shell opens.
 
 ### Live color cache
 

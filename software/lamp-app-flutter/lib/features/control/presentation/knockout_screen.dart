@@ -2,6 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../application/control_notifier.dart';
 import 'widgets/connecting_view.dart';
@@ -151,15 +152,12 @@ class _KnockoutScreenState extends ConsumerState<KnockoutScreen> {
       ),
       body: async.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
-        error: (e, _) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not reach this lamp: $e',
-              style: const TextStyle(color: BrandColors.fogGrey),
-              textAlign: TextAlign.center,
-            ),
-          ),
+        error: (e, _) => FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
         ),
         data: (state) {
           _original ??= Map.of(state.base.knockout);

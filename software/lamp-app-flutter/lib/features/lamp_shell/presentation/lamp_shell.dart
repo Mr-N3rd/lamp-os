@@ -10,6 +10,7 @@ import '../../inventory/application/inventory_notifier.dart';
 import '../../inventory/presentation/widgets/lamp_picker_sheet.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
 import '../application/lamp_status.dart';
+import '../../social/presentation/social_screen.dart';
 import 'expressions_screen.dart';
 import 'info_screen.dart';
 import 'setup_screen.dart';
@@ -23,7 +24,7 @@ const _brandGradient = LinearGradient(
   colors: [BrandColors.auroraBlue, BrandColors.glowPink],
 );
 
-enum LampTab { control, expressions, setup, info }
+enum LampTab { control, expressions, setup, social, info }
 
 class LampShell extends ConsumerStatefulWidget {
   const LampShell({
@@ -56,6 +57,7 @@ class _LampShellState extends ConsumerState<LampShell> {
       LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsScreen(lampId: widget.lampId),
       LampTab.setup => SetupScreen(lampId: widget.lampId),
+      LampTab.social => SocialScreen(lampId: widget.lampId),
       LampTab.info => InfoScreen(lampId: widget.lampId),
     };
 
@@ -93,8 +95,8 @@ class _LampShellState extends ConsumerState<LampShell> {
           ),
         ),
         actions: [
-          // Save is visible on every editing tab (Colors, Setup,
-          // Expressions). All three ride the same isDirty + settings-blob
+          // Save is visible on the editing tabs (Colors, Setup,
+          // Expressions, Social). All ride the same isDirty + settings-blob
           // save flow — Expressions edits live-preview via
           // CHAR_EXPRESSION_OP for instant feedback but only persist to
           // NVS when the global Save Changes pill is tapped. Info is
@@ -143,6 +145,8 @@ class _LampShellState extends ConsumerState<LampShell> {
                 Icons.auto_awesome, 'Expressions', _tab == LampTab.expressions),
             _gradientDestination(
                 Icons.settings, 'Setup', _tab == LampTab.setup),
+            _gradientDestination(Icons.handshake_outlined, 'Social',
+                _tab == LampTab.social),
             _gradientDestination(
                 Icons.info_outline, 'Info', _tab == LampTab.info),
           ],

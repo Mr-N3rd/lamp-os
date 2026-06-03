@@ -1,12 +1,42 @@
-#include "./shifty_expression.hpp"
+#include "shifty_expression.hpp"
 
 #include <Arduino.h>
 #include <algorithm>
 
-#include "../util/fade.hpp"
-#include "./expression_manager.hpp"
+#include "util/fade.hpp"
+#include "expression_manager.hpp"
 
 namespace lamp {
+
+namespace {
+// Mirror of easeLinear()'s factor calculation (see src/util/fade.cpp). Kept
+// in lockstep so behavior is bit-identical when hoisted out of the per-pixel
+// hot path. linear[i] == i * 511 by construction, so we elide the LUT and
+// compute the factor analytically.
+inline uint32_t computeLinearFactor(uint32_t currentStep, uint32_t duration) {
+  return static_cast<uint32_t>(
+             static_cast<uint16_t>((currentStep * 511u / duration * 511u) / 511u)) *
+         511u;
+}
+
+// Per-channel linear mix using a precomputed factor. Mirrors easeLinear()'s
+// body bit-for-bit (same integer types, same divisor, same start==end
+// short-circuit).
+inline uint8_t mixByteLinear(uint8_t start, uint8_t end, uint32_t factor) {
+  if (start == end) return end;
+  return static_cast<uint8_t>(
+      ((static_cast<uint32_t>(end) - static_cast<uint32_t>(start)) * factor) /
+          262144u +
+      start);
+}
+
+inline Color mixColorLinear(const Color& start, const Color& end, uint32_t factor) {
+  return Color(mixByteLinear(start.r, end.r, factor),
+               mixByteLinear(start.g, end.g, factor),
+               mixByteLinear(start.b, end.b, factor),
+               mixByteLinear(start.w, end.w, factor));
+}
+}  // namespace
 
 ShiftyExpression::ShiftyExpression(FrameBuffer* inBuffer, uint32_t inFrames)
     : Expression(inBuffer, inFrames) {
@@ -127,13 +157,26 @@ void ShiftyExpression::onUpdate() {
     default:
       break;
   }
+
+  // Perf: precompute the per-frame fade factor here so draw() can apply it
+  // per pixel without redoing the LUT-equivalent math for every channel.
+  // (frame, frames) are frame-scoped; per-pixel work in draw() only reads
+  // fadeStartColors[i] / fadeTargetColors[i]. Only meaningful in FADING_*
+  // states; SHIFTED and IDLE branches in draw() don't consult the factor.
+  if (state == FADING_TO_PALETTE || state == FADING_BACK) {
+    cachedFadeAtEnd_ = (frame >= frames);
+    // When cachedFadeAtEnd_ is true, draw() short-circuits to the end color
+    // and never reads cachedFadeFactor_, so a divide-by-zero in
+    // computeLinearFactor (when frames == 0) is unreachable here.
+    cachedFadeFactor_ = cachedFadeAtEnd_ ? 0u : computeLinearFactor(frame, frames);
+  }
 }
 
 void ShiftyExpression::onComplete() {
   // Always trigger glitch on unshift if glitchy is available and we just finished fading back
   if (state == IDLE) {
-    if (auto* manager = getGlobalExpressionManager()) {
-      manager->triggerExpression("glitchy");
+    if (context_ && context_->expressionManager) {
+      context_->expressionManager->triggerExpression("glitchy");
     }
   }
 }
@@ -151,9 +194,18 @@ void ShiftyExpression::draw() {
   switch (state) {
     case FADING_TO_PALETTE:
     case FADING_BACK: {
-      // Interpolate each pixel using integer-based fade
-      for (int i = 0; i < fb->pixelCount; i++) {
-        fb->buffer[i] = fadeLinear(fadeStartColors[i], fadeTargetColors[i], frames, frame);
+      // Per-frame fade factor was cached in onUpdate(); apply per pixel here.
+      // End-clamp short-circuit mirrors easeLinear()'s `currentStep >= duration`
+      // branch which returns `end` regardless of start.
+      if (cachedFadeAtEnd_) {
+        for (int i = 0; i < fb->pixelCount; i++) {
+          fb->buffer[i] = fadeTargetColors[i];
+        }
+      } else {
+        for (int i = 0; i < fb->pixelCount; i++) {
+          fb->buffer[i] = mixColorLinear(fadeStartColors[i], fadeTargetColors[i],
+                                          cachedFadeFactor_);
+        }
       }
       break;
     }

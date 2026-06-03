@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../../../core/widgets/friendly_error.dart';
 import '../../application/add_lamp_notifier.dart';
 import '../../domain/add_lamp_state.dart';
 
@@ -18,18 +21,18 @@ Future<void> _confirmSkip(BuildContext context, AddLampNotifier notifier) async 
     context: context,
     builder: (ctx) => AlertDialog(
       backgroundColor: BrandColors.midnightBlack,
-      title: const Text('Adopt without a password?',
+      title: const Text('Adopt without a whisper?',
           style: TextStyle(color: BrandColors.lampWhite)),
       content: const Text(
-        'Not recommended. Anyone within Bluetooth range will be able to '
-        'control this lamp. You can set a password later from the lamp\'s '
-        'Setup tab.',
+        "Anyone within Bluetooth range will be able to play with this lamp. "
+        "You can set a whisper later from the Setup tab — but it's kinder to "
+        'pick one now.',
         style: TextStyle(color: BrandColors.fogGrey),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(false),
-          child: const Text('Cancel'),
+          child: const Text('Pick one'),
         ),
         FilledButton(
           style: FilledButton.styleFrom(
@@ -66,6 +69,7 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
         _confirm.text.isNotEmpty && _confirm.text != state.password;
     final canContinue = state.password.isNotEmpty &&
         _confirm.text == state.password;
+    final isVerifying = state.step == AddLampStep.verifying;
     return Padding(
       padding: const EdgeInsets.all(24),
       // SizedBox.expand fills the Padding's width so `crossAxisAlignment
@@ -77,7 +81,7 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
           const Text(
-            'Set a password',
+            'A whisper just between you two',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: BrandColors.lampWhite,
@@ -87,15 +91,14 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'This password protects the lamp so only phones you trust can '
-            'control it.',
+            "Set a password so only your trusted phones can wake them.",
             textAlign: TextAlign.center,
             style: TextStyle(color: BrandColors.fogGrey),
           ),
           if (state.error == AddLampError.wrongPassword) ...[
             const SizedBox(height: 8),
             const Text(
-              "Wrong password. The lamp didn't accept it — try again.",
+              "That whisper didn't match — try once more.",
               style: TextStyle(color: BrandColors.error),
               textAlign: TextAlign.center,
             ),
@@ -110,7 +113,7 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
               setState(() {}); // re-evaluate the mismatch banner + button
             },
             decoration: const InputDecoration(
-              labelText: 'Lamp password',
+              labelText: 'Whisper',
               border: OutlineInputBorder(),
             ),
           ),
@@ -120,19 +123,26 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
             obscureText: true,
             onChanged: (_) => setState(() {}),
             decoration: InputDecoration(
-              labelText: 'Confirm password',
+              labelText: 'Whisper again',
               border: const OutlineInputBorder(),
               errorText: showMismatch ? "Doesn't match" : null,
             ),
           ),
           const Spacer(),
+          if (isVerifying) ...[
+            const _VerifyingTips(),
+            const SizedBox(height: 16),
+          ],
           if (state.status == AddLampStatus.error &&
               state.error != AddLampError.wrongPassword)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: Text(
-                state.errorMessage ?? 'Setup failed',
-                style: const TextStyle(color: BrandColors.error),
+              child: FriendlyError.inline(
+                title: state.error == AddLampError.connectFailed
+                    ? "Your lamp drifted off — bring your phone closer "
+                        'and try again.'
+                    : "Adoption didn't go through — try once more.",
+                rawError: state.errorMessage,
               ),
             ),
           Row(
@@ -146,7 +156,7 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
               const Spacer(),
               TextButton(
                 onPressed: (state.status != AddLampStatus.working &&
-                        state.step != AddLampStep.verifying)
+                        !isVerifying)
                     ? () => _confirmSkip(context, notifier)
                     : null,
                 style: TextButton.styleFrom(
@@ -157,11 +167,10 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
               FilledButton(
                 onPressed: (canContinue &&
                         state.status != AddLampStatus.working &&
-                        state.step != AddLampStep.verifying)
+                        !isVerifying)
                     ? notifier.submit
                     : null,
-                child: (state.status == AddLampStatus.working ||
-                        state.step == AddLampStep.verifying)
+                child: (state.status == AddLampStatus.working || isVerifying)
                     ? const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -171,14 +180,72 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                           SizedBox(width: 8),
-                          Text('Verifying…'),
+                          Text('Settling in…'),
                         ],
                       )
-                    : const Text('Adopt lamp'),
+                    : const Text('Welcome them home'),
               ),
             ],
           ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Rotates through whimsical "what your lamp is doing right now" tips during
+/// the 8-second post-claim verify window. Replaces the dead-air spinner with
+/// something readable. Cancels its timer on dispose so it doesn't leak past
+/// the verifying step.
+class _VerifyingTips extends StatefulWidget {
+  const _VerifyingTips();
+
+  @override
+  State<_VerifyingTips> createState() => _VerifyingTipsState();
+}
+
+class _VerifyingTipsState extends State<_VerifyingTips> {
+  static const _tips = [
+    'Memorizing your whisper…',
+    'Picking out a critter friend…',
+    'Stretching after the long sleep…',
+    'Almost settled in…',
+  ];
+  int _i = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 2200), (_) {
+      if (!mounted) return;
+      setState(() => _i = (_i + 1) % _tips.length);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 350),
+      child: Padding(
+        key: ValueKey(_i),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Text(
+          _tips[_i],
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: BrandColors.fogGrey,
+            fontSize: 13,
+            letterSpacing: 0.3,
+            height: 1.4,
+          ),
         ),
       ),
     );

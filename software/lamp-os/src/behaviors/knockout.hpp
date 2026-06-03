@@ -1,7 +1,6 @@
-#ifndef LAMP_BEHAVIORS_KNOCKOUT_H
-#define LAMP_BEHAVIORS_KNOCKOUT_H
+#pragma once
 
-#include "../core/animated_behavior.hpp"
+#include "core/animated_behavior.hpp"
 
 /**
  * @brief selectively darken parts of the lamp to handle brightness of the
@@ -19,5 +18,3 @@ class KnockoutBehavior : public AnimatedBehavior {
   void control() override;
 };
 }  // namespace lamp
-
-#endif

@@ -1,9 +1,9 @@
-#include "./configurator.hpp"
+#include "configurator.hpp"
 
 #include <cstdint>
 
-#include "../util/color.hpp"
-#include "../util/fade.hpp"
+#include "util/color.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
 void ConfiguratorBehavior::draw() {

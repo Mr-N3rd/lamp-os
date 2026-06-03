@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
@@ -62,9 +63,12 @@ class _AdvancedLedsScreenState extends ConsumerState<AdvancedLedsScreen> {
       ),
       body: async.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
-        error: (e, _) => Center(
-          child: Text('Could not reach this lamp: $e',
-              style: const TextStyle(color: BrandColors.fogGrey)),
+        error: (e, _) => FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
         ),
         data: (state) {
           // Capture on first paint, never overwrite — the user's mid-

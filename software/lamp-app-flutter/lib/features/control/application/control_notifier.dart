@@ -12,11 +12,22 @@ import '../../../core/ble/write_coalescer.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../domain/lamp_color.dart';
 import '../domain/sections.dart';
+import '../../social/domain/social_mode.dart';
+import 'advanced_session.dart';
 import 'auth_client.dart';
 import 'control_state.dart';
+import 'lamp_auth_required_exception.dart';
 import 'lamp_save_status.dart';
 
 part 'control_notifier.g.dart';
+
+/// Marker error type set by ControlNotifier.factoryReset so callers can
+/// distinguish "user reset this lamp" from genuine BLE / parse failures.
+class FactoryResetSentinel implements Exception {
+  const FactoryResetSentinel();
+  @override
+  String toString() => 'lamp was factory-reset';
+}
 
 // Live-preview write debounce. WriteCoalescer fires on a timer, not
 // on completion of the previous write — so this value has to stay
@@ -161,6 +172,19 @@ class ControlNotifier extends _$ControlNotifier {
     ref.onDispose(() => ble.disconnect(deviceId));
     await AuthClient(ble: ble)
         .authenticate(deviceId: deviceId, password: lamp.controlPassword);
+
+    // Auth-gate canary. Post-commit 71415e0 the firmware returns empty bytes
+    // from lampSection on unauthenticated reads (so an unauth'd peer can't
+    // exfiltrate the password embedded in the section blob). If our stored
+    // credential is missing or stale, surface that as a typed sentinel the
+    // UI can catch and convert into a password prompt — otherwise the empty
+    // bytes propagate into jsonDecode and surface as a generic FormatException.
+    final canaryBytes = await ble.read(
+        deviceId, BleUuids.controlService, BleUuids.lampSection);
+    if (canaryBytes.isEmpty) {
+      throw const LampAuthRequiredException();
+    }
+
     final fresh = await _readSections(ble);
 
     // Live-preview writes are fire-and-forget. Swallow errors here so a
@@ -323,7 +347,8 @@ class ControlNotifier extends _$ControlNotifier {
   bool _isLampDirty(LampSection a, LampSection b) =>
       a.brightness != b.brightness ||
       a.name != b.name ||
-      a.advancedEnabled != b.advancedEnabled;
+      a.advancedEnabled != b.advancedEnabled ||
+      a.socialMode != b.socialMode;
 
   bool _isBaseDirty(BaseSection a, BaseSection b) =>
       a.ac != b.ac ||
@@ -415,6 +440,7 @@ class ControlNotifier extends _$ControlNotifier {
         'brightness': cur.lamp.brightness,
         'name': cur.lamp.name,
         'advancedEnabled': cur.lamp.advancedEnabled,
+        'socialMode': cur.lamp.socialMode.wire,
         // lamp.password is set by the setup-service apply path; never
         // round-trip it via settingsBlob.
       };
@@ -554,6 +580,7 @@ class ControlNotifier extends _$ControlNotifier {
         name: cur.lamp.name,
         brightness: v,
         advancedEnabled: cur.lamp.advancedEnabled,
+        socialMode: cur.lamp.socialMode,
       ),
     ));
     _brightnessWriter?.schedule(Uint8List.fromList([v]));
@@ -709,6 +736,7 @@ class ControlNotifier extends _$ControlNotifier {
         name: name,
         brightness: cur.lamp.brightness,
         advancedEnabled: cur.lamp.advancedEnabled,
+        socialMode: cur.lamp.socialMode,
       ),
     ));
   }
@@ -721,8 +749,233 @@ class ControlNotifier extends _$ControlNotifier {
         name: cur.lamp.name,
         brightness: cur.lamp.brightness,
         advancedEnabled: v,
+        socialMode: cur.lamp.socialMode,
       ),
     ));
+  }
+
+  /// Personality. State-only; rides the global Save → settings_blob path
+  /// (mirrors setLampName / setLampAdvancedEnabled). The lamp picks up
+  /// the new mode after the post-save reboot.
+  Future<void> setLampSocialMode(SocialMode mode) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      lamp: LampSection(
+        name: cur.lamp.name,
+        brightness: cur.lamp.brightness,
+        advancedEnabled: cur.lamp.advancedEnabled,
+        socialMode: mode,
+      ),
+    ));
+  }
+
+  /// Wipe the lamp back to factory defaults. Writes the
+  /// `{factoryReset: true}` sentinel to settings_blob (encrypted with the
+  /// CURRENT password — the lamp authenticates the request before
+  /// clearing). Firmware clears its NVS namespace and reboots into the
+  /// awaiting-adoption state.
+  ///
+  /// After the expected reboot-disconnect, removes this lamp from the
+  /// inventory: it no longer has a password we know, and from the user's
+  /// POV it's a fresh lamp again. The caller (UI) typically navigates
+  /// back to the lamp picker.
+  Future<void> factoryReset() async {
+    final cur = state.value;
+    if (cur == null) return;
+    if (!cur.connected) return;
+
+    final ble = ref.read(bleClientProvider);
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final entry = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () =>
+          throw StateError('lamp $_deviceId not in inventory'),
+    );
+    final pw = entry.controlPassword ?? '';
+
+    final blob = <String, dynamic>{'factoryReset': true};
+    final blobJson = jsonEncode(blob);
+    final payload = pw.isEmpty
+        ? Uint8List.fromList([
+            LampCrypto.magicPlaintext,
+            ...utf8.encode(blobJson),
+          ])
+        : await LampCrypto.encryptOp(
+            op: blob,
+            password: pw,
+            saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+            charShortName: 'settingsBlob',
+          );
+
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.settingsBlob,
+        payload,
+        allowLongWrite: true,
+      );
+    } catch (e) {
+      // Expected: the reboot disconnects mid-write.
+      final msg = e.toString().toLowerCase();
+      final looksLikeReboot =
+          msg.contains('not connected') || msg.contains('disconnect');
+      if (!looksLikeReboot) rethrow;
+    }
+
+    // Lamp is now factory-fresh — tear down everything tied to this
+    // session so the reconnect machinery doesn't churn forever against
+    // a lamp the user has deliberately abandoned.
+    //
+    // Sequence matters:
+    //   1. cancel timers + the BLE-connected stream subscription so
+    //      _onConnectionChange can't fire and re-schedule a reconnect;
+    //   2. disconnect the link explicitly (the firmware is rebooting so
+    //      this is a no-op on the wire, but it releases fbp's handle);
+    //   3. remove from inventory so any UI that watches inventory drops
+    //      this lamp;
+    //   4. flip state to AsyncError with a sentinel so anything still
+    //      watching this provider sees a terminal state rather than a
+    //      stuck AsyncLoading.
+    _reconnectTimer?.cancel();
+    _connSub?.cancel();
+    _connSub = null;
+    try {
+      await ble.disconnect(_deviceId);
+    } catch (_) {
+      // already-disconnected / lamp rebooting — both fine.
+    }
+    await ref
+        .read(inventoryNotifierProvider.notifier)
+        .remove(_deviceId);
+    state = AsyncError(
+      const FactoryResetSentinel(),
+      StackTrace.current,
+    );
+  }
+
+  /// Called by the connect-time password prompt when the user submits a
+  /// password after build() threw [LampAuthRequiredException].
+  ///
+  /// Writes CHAR_AUTH with the user-entered password and re-probes the auth
+  /// gate by reading lampSection. On success, persists the credential to
+  /// inventory (so future reconnects skip the prompt) and invalidates the
+  /// provider so build() reruns cleanly with the new password in inventory.
+  /// On failure, throws [LampAuthRequiredException] without mutating
+  /// inventory — the dialog surfaces it inline and lets the user retry.
+  ///
+  /// Reuses `_ble` / `_deviceId`, which build() set before it threw. The
+  /// BLE link is still alive: ControlNotifier is keepAlive, so the
+  /// disconnect onDispose hasn't fired.
+  Future<void> submitConnectPassword(String pw) async {
+    await AuthClient(ble: _ble)
+        .authenticate(deviceId: _deviceId, password: pw);
+    final bytes = await _ble.read(
+        _deviceId, BleUuids.controlService, BleUuids.lampSection);
+    if (bytes.isEmpty) {
+      throw const LampAuthRequiredException();
+    }
+    await ref
+        .read(inventoryNotifierProvider.notifier)
+        .updatePassword(_deviceId, pw);
+    ref.invalidateSelf();
+  }
+
+  /// Change the lamp's auth password. Writes a partial settings_blob with
+  /// just `{lamp: {password: newPassword}}` — same path the onboarding
+  /// claim uses to set the initial password. The lamp drains the write,
+  /// commits the new password to NVS, and reboots; we then reconnect and
+  /// reauth with the new password.
+  ///
+  /// Inventory is updated to the new password BEFORE the BLE write so the
+  /// post-reboot reconnect picks up the new credentials. If the write
+  /// fails (anything other than the expected reboot-disconnect), inventory
+  /// rolls back to the old password.
+  ///
+  /// Mirrors `save()`'s reboot/reconnect cadence (5s delay, then reconnect
+  /// + reauth + reread sections) and drives `lampSaveStatusProvider` so
+  /// the UI shows "Saving changes…" instead of generic "Connecting…".
+  Future<void> setLampPassword(String newPassword) async {
+    final cur = state.value;
+    if (cur == null) return;
+    if (!cur.connected) return;
+
+    final ble = ref.read(bleClientProvider);
+
+    // Snapshot for rollback on real failure.
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final entry = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () =>
+          throw StateError('lamp $_deviceId not in inventory'),
+    );
+    final oldPassword = entry.controlPassword;
+
+    // Update inventory FIRST so the post-reboot reconnect uses the new
+    // credentials. If the write fails (non-reboot error), roll back.
+    await ref
+        .read(inventoryNotifierProvider.notifier)
+        .updatePassword(_deviceId, newPassword);
+
+    final blob = <String, dynamic>{'lamp': {'password': newPassword}};
+    final blobJson = jsonEncode(blob);
+    final pw = oldPassword ?? '';
+    final payload = pw.isEmpty
+        ? Uint8List.fromList([
+            LampCrypto.magicPlaintext,
+            ...utf8.encode(blobJson),
+          ])
+        : await LampCrypto.encryptOp(
+            op: blob,
+            password: pw,
+            saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+            charShortName: 'settingsBlob',
+          );
+
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.settingsBlob,
+        payload,
+        allowLongWrite: true,
+      );
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      final looksLikeReboot =
+          msg.contains('not connected') || msg.contains('disconnect');
+      if (!looksLikeReboot) {
+        // Genuine failure — restore the old credentials so the next
+        // reconnect attempt uses what the firmware still actually has.
+        await ref
+            .read(inventoryNotifierProvider.notifier)
+            .updatePassword(_deviceId, oldPassword);
+        rethrow;
+      }
+    }
+
+    // Reuse the save()-style reconnect cadence: flip the saving banner,
+    // drop state into AsyncLoading, wait for the lamp to come back, reauth
+    // with the new password (already in inventory).
+    ref.read(lampSaveStatusProvider(_deviceId).notifier).start();
+    state = const AsyncLoading<ControlState>();
+    Future<void>.delayed(const Duration(seconds: 5), () async {
+      if (!ref.mounted) return;
+      try {
+        await ble.connect(_deviceId);
+        await AuthClient(ble: ble).authenticate(
+            deviceId: _deviceId, password: newPassword);
+        final fresh = await _readSections(ble);
+        if (!ref.mounted) return;
+        _original = fresh;
+        state = AsyncData(fresh);
+        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
+      } catch (e, st) {
+        if (ref.mounted) state = AsyncError(e, st);
+        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
+      }
+    });
   }
 
   Future<void> setHomeSsid(String ssid) async {
@@ -1019,6 +1272,9 @@ class ControlNotifier extends _$ControlNotifier {
     }
     if (!isConnected && cur.connected) {
       state = AsyncData(cur.copyWith(connected: false));
+      // Advanced mode is session-only — drop the unlock the moment the BLE
+      // session ends. User must re-do the tap gesture after reconnect.
+      ref.read(advancedSessionProvider(_deviceId).notifier).disable();
       _scheduleReconnect();
     }
   }
@@ -1047,6 +1303,18 @@ class ControlNotifier extends _$ControlNotifier {
       );
       await AuthClient(ble: ble)
           .authenticate(deviceId: _deviceId, password: lamp.controlPassword);
+      // Same canary as build(): if the firmware still returns empty bytes
+      // after our auth attempt, the stored password no longer works (e.g.
+      // it was changed on another device). Drop to error so the UI re-
+      // prompts instead of leaving the user in a silent-write-rejected
+      // state with the banner clearing as if everything was fine.
+      final canaryBytes = await ble.read(
+          _deviceId, BleUuids.controlService, BleUuids.lampSection);
+      if (canaryBytes.isEmpty) {
+        state = AsyncError(
+            const LampAuthRequiredException(), StackTrace.current);
+        return;
+      }
       // The watchConnected stream will fire `true` and _onConnectionChange
       // handles clearing the banner + pushing local state.
     } catch (_) {

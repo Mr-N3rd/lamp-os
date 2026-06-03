@@ -1,5 +1,4 @@
-#ifndef LAMP_COMPONENTS_NETWORK_NEARBY_LAMPS_H
-#define LAMP_COMPONENTS_NETWORK_NEARBY_LAMPS_H
+#pragma once
 
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -9,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "../../util/color.hpp"
+#include "util/color.hpp"
 
 // Default prune age (milliseconds) shared between callers. NimBLE scan
 // timer uses this when it runs onScanEnd; if a lamp hasn't been heard on
@@ -102,5 +101,3 @@ class NearbyLamps {
 extern NearbyLamps nearbyLamps;  // single global instance, defined in .cpp
 
 }  // namespace lamp
-
-#endif

@@ -1,23 +1,36 @@
-#include "./compositor.hpp"
+#include "compositor.hpp"
 
-#include "./behaviors/fade_in.hpp"
-#include "./behaviors/idle.hpp"
+#include "behaviors/fade_in.hpp"
+#include "behaviors/idle.hpp"
 
 namespace lamp {
-Compositor::Compositor() {};
+Compositor::Compositor() {
+  // Self-publish so behaviors registered later can reach the compositor
+  // without a global. ExpressionManager / FrameBuffer fields are wired by
+  // their respective owners (standard_lamp.cpp).
+  context_.compositor = this;
+};
 
 void Compositor::begin(std::vector<AnimatedBehavior*> inBehaviors, std::vector<FrameBuffer*> inFrameBuffers, bool homeMode) {
   frameBuffers = inFrameBuffers;
   this->homeMode = homeMode;
 
-  // Adds some basic behavior layers that are common to all framebuffers
-  for (i = 0; i < frameBuffers.size(); i++) {
-    underlayBehaviors.push_back(new IdleBehavior(frameBuffers[i], 0, true));
-    startupBehaviors.push_back(new FadeInBehavior(frameBuffers[i], STARTUP_ANIMATION_FRAMES));
+  // Adds some basic behavior layers that are common to all framebuffers.
+  // Underlay and startup behaviors get the same shared context as everything
+  // else — uniform wiring keeps the rules simple.
+  for (size_t i = 0; i < frameBuffers.size(); i++) {
+    auto* idle = new IdleBehavior(frameBuffers[i], 0, true);
+    idle->setBehaviorContext(&context_);
+    underlayBehaviors.push_back(idle);
+
+    auto* fade = new FadeInBehavior(frameBuffers[i], STARTUP_ANIMATION_FRAMES);
+    fade->setBehaviorContext(&context_);
+    startupBehaviors.push_back(fade);
   }
 
   // append all of the non critical behaviors
-  for (i = 0; i < inBehaviors.size(); i++) {
+  for (size_t i = 0; i < inBehaviors.size(); i++) {
+    inBehaviors[i]->setBehaviorContext(&context_);
     behaviors.push_back(inBehaviors[i]);
   }
 };
@@ -28,7 +41,7 @@ bool Compositor::hasActiveExclusive() const {
 
 void Compositor::tick() {
   if (!behaviorsComputed) {
-    for (i = 0; i < underlayBehaviors.size(); i++) {
+    for (size_t i = 0; i < underlayBehaviors.size(); i++) {
       underlayBehaviors[i]->control();
       underlayBehaviors[i]->draw();
     }
@@ -39,7 +52,7 @@ void Compositor::tick() {
         activeExclusive = nullptr;
       }
 
-      for (i = 0; i < behaviors.size(); i++) {
+      for (size_t i = 0; i < behaviors.size(); i++) {
         if (!homeMode || behaviors[i]->allowedInHomeMode) {
           // Check if this behavior should run
           bool canRun = !activeExclusive || behaviors[i]->isExclusive || behaviors[i] == activeExclusive;
@@ -57,7 +70,7 @@ void Compositor::tick() {
         }
       }
     } else {
-      for (i = 0; i < startupBehaviors.size(); i++) {
+      for (size_t i = 0; i < startupBehaviors.size(); i++) {
         startupBehaviors[i]->control();
         if (startupBehaviors[i]->animationState != STOPPED) {
           startupBehaviors[i]->draw();
@@ -68,7 +81,7 @@ void Compositor::tick() {
       }
     }
 
-    for (i = 0; i < overlayBehaviors.size(); i++) {
+    for (size_t i = 0; i < overlayBehaviors.size(); i++) {
       overlayBehaviors[i]->control();
       overlayBehaviors[i]->draw();
     }
@@ -79,7 +92,7 @@ void Compositor::tick() {
   if (behaviorsComputed && millis() >= lastDrawTimeMs + MINIMUM_FRAME_DRAW_TIME_MS) {
     lastDrawTimeMs = millis();
     behaviorsComputed = false;
-    for (i = 0; i < frameBuffers.size(); i++) {
+    for (size_t i = 0; i < frameBuffers.size(); i++) {
       frameBuffers[i]->flush();
     }
   };
@@ -98,6 +111,9 @@ void Compositor::setExpressionBandEnd(size_t end) {
 
 void Compositor::addBehavior(AnimatedBehavior* b) {
   if (!b) return;
+  // Wire the shared context on register so behaviors don't need to grab a
+  // global to reach the compositor / expression manager / buffer list.
+  b->setBehaviorContext(&context_);
   if (expressionBandEnd > behaviors.size()) expressionBandEnd = behaviors.size();
   behaviors.insert(behaviors.begin() + expressionBandEnd, b);
   expressionBandEnd++;

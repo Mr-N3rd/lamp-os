@@ -1,9 +1,8 @@
-#ifndef LAMP_EXPRESSIONS_SHIFTY_H
-#define LAMP_EXPRESSIONS_SHIFTY_H
+#pragma once
 
 #include <vector>
 
-#include "./expression.hpp"
+#include "expression.hpp"
 
 namespace lamp {
 
@@ -39,6 +38,12 @@ class ShiftyExpression : public Expression {
   // Color buffers for smooth transitions
   std::vector<Color> fadeStartColors;
   std::vector<Color> fadeTargetColors;
+
+  // Per-frame cache (perf): (frame, frames) → factor is identical for every
+  // pixel within a fade frame. Hoisted out of the per-pixel hot path in draw().
+  // Updated in onUpdate(); read-only in draw().
+  uint32_t cachedFadeFactor_ = 0;       // Precomputed linear "factor" (matches easeLinear)
+  bool cachedFadeAtEnd_ = false;        // True when frame >= frames (end-clamp short-circuit)
 
 
   /**
@@ -81,5 +86,3 @@ protected:
 };
 
 }  // namespace lamp
-
-#endif

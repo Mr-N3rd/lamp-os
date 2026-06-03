@@ -21,11 +21,27 @@ class FbpBleClient implements BleClient {
     final device = fbp.BluetoothDevice(
       remoteId: fbp.DeviceIdentifier(deviceId),
     );
-    await device.connect(
-      license: fbp.License.nonprofit,
-      autoConnect: false,
-      mtu: 247,
-    );
+    // Android's BLE stack throws status=133 ("generic GATT error") on the
+    // first connect attempt fairly often — stale GATT cache from a prior
+    // session, peer slot still releasing on the lamp side, or just bad RF
+    // luck. It almost always works on the second try. One retry with a
+    // short backoff swallows that flake without bubbling it to the UI; if
+    // the second attempt also throws, let it propagate so we don't mask a
+    // real failure (lamp powered off, out of range, etc.).
+    try {
+      await device.connect(
+        license: fbp.License.nonprofit,
+        autoConnect: false,
+        mtu: 247,
+      );
+    } on fbp.FlutterBluePlusException {
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      await device.connect(
+        license: fbp.License.nonprofit,
+        autoConnect: false,
+        mtu: 247,
+      );
+    }
     // Android caches the lamp's GATT service definitions per-device for
     // unbonded peers. After a firmware re-flash (which re-registers
     // services with new handles), discoverServices() will silently

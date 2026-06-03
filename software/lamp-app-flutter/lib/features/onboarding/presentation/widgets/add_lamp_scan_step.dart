@@ -23,10 +23,29 @@ class AddLampScanStep extends ConsumerWidget {
     final lamps = all.where((l) => !inventoryIds.contains(l.id)).toList();
     if (lamps.isEmpty) {
       return const Center(
-        child: Text(
-          'Scanning for lamps...',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: BrandColors.fogGrey),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Searching for a stray lamp…',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: BrandColors.lampWhite,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Make sure your new lamp is plugged in and glowing nearby. '
+                "If they're shy, give them a moment.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: BrandColors.fogGrey, fontSize: 13),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -52,7 +71,7 @@ class _LampRow extends ConsumerWidget {
       ref.read(addLampNotifierProvider.notifier).select(lamp.id);
     } else {
       // No confirm dialog — `add()` sets state.step to `done` and the
-      // AddLampShell will swap in the AddLampDoneStep ("X is ready"),
+      // AddLampShell will swap in the AddLampDoneStep ("X is home!"),
       // which serves as the visual confirmation.
       await ref
           .read(addLampNotifierProvider.notifier)

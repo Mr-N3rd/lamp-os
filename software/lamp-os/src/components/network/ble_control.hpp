@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-#include "../../config/config.hpp"
+#include "config/config.hpp"
 
 namespace ble_control {
 
@@ -66,6 +66,12 @@ constexpr const char* CHAR_REMOTE_OP       = "5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b
 // home.ssid + wifi::homeSsidVisible(). Cleared automatically on BT
 // disconnect.
 constexpr const char* CHAR_HOME_MODE_FOCUS = "5f64f4e5-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// social_dispositions (read + write, encrypted): JSON map of peer name to
+// disposition 1..5 (salty .. neutral .. smitten). Read returns the full
+// map; write replaces it. Auth-gated like the other write characteristics.
+// Stored separately from the main config blob in NVS namespace "lamp",
+// key "dispositions" — survives reboots, doesn't bloat CHAR_LAMP_SECTION.
+constexpr const char* CHAR_SOCIAL_DISPOSITIONS = "5f64f4e6-d6d9-4a44-9b3f-3a8d6f7e6b40";
 
 /**
  * @brief Start the BLE GATT control service.
@@ -74,6 +80,22 @@ void start(lamp::Config* config, Preferences* prefs);
 
 void stop();
 bool isRunning();
+
+/**
+ * @brief Per-loop housekeeping on Core 1. For each section whose JSON
+ *        cache (on Config) is dirty, rebuild it and push the bytes into
+ *        the corresponding NimBLE characteristic via setValue() — so
+ *        Core 0 BLE reads are served from NimBLE's own internal buffer
+ *        without re-walking config vectors on the hot path.
+ *
+ *        Cheap when nothing is dirty: six bool checks. Should be called
+ *        once per main-loop iteration from standard_lamp.cpp::loop().
+ *
+ *        Audit fix #6/#7: closes the cross-core race between BLE GATT
+ *        reads on Core 0 and config-mutating loop drains on Core 1, and
+ *        eliminates the per-read JSON re-serialisation cost.
+ */
+void tick();
 
 /**
  * @brief Send a state-change notification to all subscribed clients.
@@ -107,5 +129,13 @@ bool isClientConnected();
  *        page (via CHAR_HOME_MODE_FOCUS = 1). Cleared on BT disconnect.
  */
 bool isHomeModePageActive();
+
+/**
+ * @brief True while the central scan is paused because a GATT client is
+ *        connected. bluetooth.cpp's onScanEnd queries this to decide
+ *        whether to auto-restart the scan. Flipped on GATT connect /
+ *        disconnect inside ble_control.cpp.
+ */
+bool isScanPaused();
 
 }  // namespace ble_control

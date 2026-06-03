@@ -1,5 +1,4 @@
-#ifndef LAMP_CONFIG_CONFIG_TYPES_H
-#define LAMP_CONFIG_CONFIG_TYPES_H
+#pragma once
 
 #include <cstdint>
 #include <map>
@@ -7,7 +6,7 @@
 #include <variant>
 #include <vector>
 
-#include "../util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 
@@ -25,18 +24,32 @@ class KnockoutPixel {
 };
 
 /**
+ * @brief Social personality mode — tunes how often + how eagerly the lamp
+ *        greets nearby peers via SocialBehavior. Stored as uint8_t for
+ *        wire/NVS compatibility. Default Ambivert (matches the
+ *        pre-personality 30s-cooldown behavior).
+ */
+enum class SocialMode : uint8_t {
+  Introvert = 0,
+  Ambivert = 1,
+  Extrovert = 2,
+};
+
+/**
  * @brief Global lamp settings to control initialization
  * @property name - a name that can be used to identify this lamp. it can be up to 12 characters long
  * @property brightness - global brightness level for the lamp as a percentage
  * @property password - password to protect lamp BLE control surface
  * @property advancedEnabled - if true, advanced settings UI is unlocked
+ * @property socialMode - personality flavor: introvert / ambivert (default) / extrovert
  */
 class LampSettings {
  public:
-  std::string name = "standard";
+  std::string name = "stray";
   uint8_t brightness = 100;
   std::string password = "";
   bool advancedEnabled = false;
+  SocialMode socialMode = SocialMode::Ambivert;
 };
 
 /**
@@ -139,4 +152,3 @@ class HomeModeSettings {
 };
 
 }  // namespace lamp
-#endif

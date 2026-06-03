@@ -1,11 +1,11 @@
-#include "./frame_buffer.hpp"
+#include "frame_buffer.hpp"
 
 #include <Adafruit_NeoPixel.h>
 
 #include <cstdint>
 #include <vector>
 
-#include "./util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 FrameBuffer::FrameBuffer() {};
@@ -21,7 +21,7 @@ void FrameBuffer::begin(std::vector<Color> inDefaultColors, uint8_t inPixelCount
 };
 
 void FrameBuffer::fill(Color inColor) {
-  for (i = 0; i < pixelCount; i++) {
+  for (size_t i = 0; i < pixelCount; i++) {
     buffer[i] = inColor;
   }
 };
@@ -31,7 +31,7 @@ void FrameBuffer::flush() {
     return;
   }
 
-  for (i = 0; i < pixelCount; i++) {
+  for (size_t i = 0; i < pixelCount; i++) {
     driver->setPixelColor(i, (uint32_t)((buffer[i].w << 24) | (buffer[i].r << 16) | (buffer[i].g << 8) | (buffer[i].b)));
   }
 

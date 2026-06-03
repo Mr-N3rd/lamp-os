@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
+import '../../control/application/advanced_session.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/application/control_state.dart';
 import '../../control/application/expression_draft.dart';
@@ -237,15 +240,12 @@ class _ExpressionEditorScreenState
       ),
       body: async.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
-        error: (e, _) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not reach this lamp: $e',
-              style: const TextStyle(color: BrandColors.fogGrey),
-              textAlign: TextAlign.center,
-            ),
-          ),
+        error: (e, _) => FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
         ),
         data: (state) {
           final notifier =
@@ -264,7 +264,27 @@ class _ExpressionEditorScreenState
                 child: ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
-                    _Header(meta: meta, target: widget.targetKey),
+                    _Header(meta: meta),
+              const SizedBox(height: 12),
+              // Target switcher. Same chunky-pill UX as the picker so the
+              // active target reads at a glance. Tapping a different target
+              // pushReplaces the editor route for that (type, target);
+              // other-target buttons are disabled when that combo is already
+              // configured (one entry per (type, target) firmware-side).
+              _TargetRow(
+                currentTarget: widget.targetKey,
+                isTaken: (t) =>
+                    t != widget.targetKey &&
+                    state.expressions.expressions.any((e) =>
+                        e.type == widget.typeKey && e.target == t),
+                onTap: (t) {
+                  if (t == widget.targetKey) return;
+                  GoRouter.maybeOf(context)?.pushReplacement(
+                    AppRoutes.expressionEditor(
+                        widget.lampId, widget.typeKey, t),
+                  );
+                },
+              ),
               const SizedBox(height: 20),
 
               // Colors
@@ -325,9 +345,15 @@ class _ExpressionEditorScreenState
               ],
 
               // Per-type parameters (replaces the old JSON text field).
+              // advancedMode gates session-only controls like the mesh
+              // cascade toggle — the user must have unlocked advanced mode
+              // (tap-5-times on the Info screen wordmark) for this to be
+              // true. Resets on BLE disconnect.
               ExpressionParamsPanel(
                 type: draft.type,
                 parameters: draft.parameters,
+                advancedMode:
+                    ref.watch(advancedSessionProvider(widget.lampId)),
                 onChanged: (p) => _updateDraft((d) => _withParameters(d, p)),
               ),
               if (meta != null) ...[
@@ -464,9 +490,8 @@ class _Label extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.meta, required this.target});
+  const _Header({required this.meta});
   final ExpressionTypeMeta? meta;
-  final int target;
 
   @override
   Widget build(BuildContext context) {
@@ -493,28 +518,135 @@ class _Header extends StatelessWidget {
             ),
           if (meta != null) const SizedBox(width: 12),
           Expanded(
+            child: Text(
+              meta?.name ?? '(unknown)',
+              style: const TextStyle(
+                color: BrandColors.lampWhite,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Big chunky pill row: Shade / Base / Both. Same visual idiom as the
+/// picker's target chooser (`add_expression_picker_screen.dart`) so the
+/// active target reads at a glance. The current target shows as
+/// selected and is a no-op on tap; other targets disable when this type
+/// is already configured for them (firmware enforces one entry per
+/// (type, target) pair, so tapping into an in-use combo would just
+/// silently replace it — disable instead so it's obvious).
+class _TargetRow extends StatelessWidget {
+  const _TargetRow({
+    required this.currentTarget,
+    required this.isTaken,
+    required this.onTap,
+  });
+
+  final int currentTarget;
+  final bool Function(int t) isTaken;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _TargetButton(
+          label: 'Shade',
+          icon: Icons.wb_incandescent_outlined,
+          selected: currentTarget == 1,
+          enabled: !isTaken(1),
+          onTap: () => onTap(1),
+        ),
+        const SizedBox(width: 8),
+        _TargetButton(
+          label: 'Base',
+          icon: Icons.adjust,
+          selected: currentTarget == 2,
+          enabled: !isTaken(2),
+          onTap: () => onTap(2),
+        ),
+        const SizedBox(width: 8),
+        _TargetButton(
+          label: 'Both',
+          icon: Icons.all_inclusive,
+          selected: currentTarget == 3,
+          enabled: !isTaken(3),
+          onTap: () => onTap(3),
+        ),
+      ],
+    );
+  }
+}
+
+/// Local copy of the picker's `_TargetButton`. Kept duplicated (rather
+/// than extracted) because the social-tab `_PersonalityButton` already
+/// established the pattern of file-local pills, and the three usages
+/// differ enough (3 vs 4 fields, different label semantics) that a
+/// shared abstraction would carry more weight than it earns.
+class _TargetButton extends StatelessWidget {
+  const _TargetButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = selected ? BrandColors.glowPink : Colors.transparent;
+    final border = selected
+        ? BrandColors.glowPink
+        : BrandColors.slateGrey.withValues(alpha: 0.5);
+    final fg = !enabled
+        ? BrandColors.slateGrey.withValues(alpha: 0.5)
+        : (selected ? BrandColors.midnightBlack : BrandColors.lampWhite);
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            height: 64,
+            decoration: BoxDecoration(
+              color: fill,
+              border: Border.all(
+                color: border,
+                width: selected ? 2 : 1,
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                Icon(icon, color: fg, size: 22),
+                const SizedBox(height: 4),
                 Text(
-                  meta?.name ?? '(unknown)',
-                  style: const TextStyle(
-                    color: BrandColors.lampWhite,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Text(
-                  'Target: ${targetLabel(target)}',
-                  style: const TextStyle(
-                    color: BrandColors.fogGrey,
-                    fontSize: 12,
+                  label,
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 13,
+                    fontWeight:
+                        selected ? FontWeight.w700 : FontWeight.w500,
+                    letterSpacing: 0.5,
                   ),
                 ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

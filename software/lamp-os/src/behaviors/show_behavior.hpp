@@ -1,10 +1,9 @@
-#ifndef LAMP_BEHAVIORS_SHOW_BEHAVIOR_H
-#define LAMP_BEHAVIORS_SHOW_BEHAVIOR_H
+#pragma once
 
 #include <cstdint>
 
-#include "../components/network/show_receiver.hpp"
-#include "../core/animated_behavior.hpp"
+#include "components/network/show_receiver.hpp"
+#include "core/animated_behavior.hpp"
 
 #define LAMP_SHOW_FRESH_FRAME_MS 3000
 
@@ -39,5 +38,3 @@ class ShowBehavior : public AnimatedBehavior {
 };
 
 }  // namespace lamp
-
-#endif

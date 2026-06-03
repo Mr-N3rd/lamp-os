@@ -1,5 +1,4 @@
-#ifndef LAMP_COMPONENTS_NETWORK_ESPNOW_LINK_H
-#define LAMP_COMPONENTS_NETWORK_ESPNOW_LINK_H
+#pragma once
 
 #include <cstdint>
 #include <cstddef>
@@ -29,5 +28,3 @@ class EspNowLink {
 };
 
 }  // namespace lamp
-
-#endif

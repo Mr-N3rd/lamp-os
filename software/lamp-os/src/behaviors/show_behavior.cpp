@@ -1,4 +1,4 @@
-#include "./show_behavior.hpp"
+#include "show_behavior.hpp"
 
 namespace lamp {
 

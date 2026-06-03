@@ -5,13 +5,16 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
 import '../application/control_notifier.dart';
+import '../application/lamp_auth_required_exception.dart';
 import '../domain/lamp_color.dart';
 import 'widgets/base_card.dart';
 import 'widgets/base_editor_sheet.dart';
 import 'widgets/brightness_card.dart';
 import 'widgets/bt_only_info_pane.dart';
+import 'widgets/connect_password_prompt.dart';
 import 'widgets/connecting_view.dart';
 import 'widgets/connection_banner.dart';
 import 'widgets/lamp_preview.dart';
@@ -62,16 +65,18 @@ class _ControlScreenState extends ConsumerState<ControlScreen> {
     final async = ref.watch(controlNotifierProvider(lampId));
     return async.when(
       loading: () => ConnectingView(deviceId: lampId),
-      error: (e, _) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            'Could not reach this lamp: $e',
-            style: const TextStyle(color: BrandColors.fogGrey),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ),
+      error: (e, _) {
+        if (e is LampAuthRequiredException) {
+          return ConnectPasswordPrompt(lampId: lampId);
+        }
+        return FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
+        );
+      },
       data: (state) {
         final notifier =
             ref.read(controlNotifierProvider(lampId).notifier);
