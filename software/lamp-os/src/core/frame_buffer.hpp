@@ -15,9 +15,6 @@ namespace lamp {
  * when the bitmap buffer or brightness is changed
  */
 class FrameBuffer {
- private:
-  uint8_t i = 0;
-
  public:
   std::vector<Color> defaultColors;
   std::vector<Color> previousBuffer;

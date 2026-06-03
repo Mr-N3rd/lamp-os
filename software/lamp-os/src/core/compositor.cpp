@@ -11,13 +11,13 @@ void Compositor::begin(std::vector<AnimatedBehavior*> inBehaviors, std::vector<F
   this->homeMode = homeMode;
 
   // Adds some basic behavior layers that are common to all framebuffers
-  for (i = 0; i < frameBuffers.size(); i++) {
+  for (size_t i = 0; i < frameBuffers.size(); i++) {
     underlayBehaviors.push_back(new IdleBehavior(frameBuffers[i], 0, true));
     startupBehaviors.push_back(new FadeInBehavior(frameBuffers[i], STARTUP_ANIMATION_FRAMES));
   }
 
   // append all of the non critical behaviors
-  for (i = 0; i < inBehaviors.size(); i++) {
+  for (size_t i = 0; i < inBehaviors.size(); i++) {
     behaviors.push_back(inBehaviors[i]);
   }
 };
@@ -28,7 +28,7 @@ bool Compositor::hasActiveExclusive() const {
 
 void Compositor::tick() {
   if (!behaviorsComputed) {
-    for (i = 0; i < underlayBehaviors.size(); i++) {
+    for (size_t i = 0; i < underlayBehaviors.size(); i++) {
       underlayBehaviors[i]->control();
       underlayBehaviors[i]->draw();
     }
@@ -39,7 +39,7 @@ void Compositor::tick() {
         activeExclusive = nullptr;
       }
 
-      for (i = 0; i < behaviors.size(); i++) {
+      for (size_t i = 0; i < behaviors.size(); i++) {
         if (!homeMode || behaviors[i]->allowedInHomeMode) {
           // Check if this behavior should run
           bool canRun = !activeExclusive || behaviors[i]->isExclusive || behaviors[i] == activeExclusive;
@@ -57,7 +57,7 @@ void Compositor::tick() {
         }
       }
     } else {
-      for (i = 0; i < startupBehaviors.size(); i++) {
+      for (size_t i = 0; i < startupBehaviors.size(); i++) {
         startupBehaviors[i]->control();
         if (startupBehaviors[i]->animationState != STOPPED) {
           startupBehaviors[i]->draw();
@@ -68,7 +68,7 @@ void Compositor::tick() {
       }
     }
 
-    for (i = 0; i < overlayBehaviors.size(); i++) {
+    for (size_t i = 0; i < overlayBehaviors.size(); i++) {
       overlayBehaviors[i]->control();
       overlayBehaviors[i]->draw();
     }
@@ -79,7 +79,7 @@ void Compositor::tick() {
   if (behaviorsComputed && millis() >= lastDrawTimeMs + MINIMUM_FRAME_DRAW_TIME_MS) {
     lastDrawTimeMs = millis();
     behaviorsComputed = false;
-    for (i = 0; i < frameBuffers.size(); i++) {
+    for (size_t i = 0; i < frameBuffers.size(); i++) {
       frameBuffers[i]->flush();
     }
   };

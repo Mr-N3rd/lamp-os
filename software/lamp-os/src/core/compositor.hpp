@@ -17,7 +17,6 @@ namespace lamp {
  */
 class Compositor {
  private:
-  uint8_t i = 0;
   // End-of-expression-band index in `behaviors`. Set by the lamp after
   // pushing initial expressions; runtime adds/removes maintain it so new
   // expressions land before higher-priority behaviors (configurator etc).
