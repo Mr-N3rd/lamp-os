@@ -16,6 +16,8 @@
 #include "CurrentPalette.h"
 #include "LampInventory.h"
 #include "MeshLink.h"
+#include "PaintDistributor.h"
+#include "StatusBeacon.h"
 #include "aurora/AuroraPaletteClient.h"
 #include "lamp_protocol.hpp"
 
@@ -24,7 +26,13 @@ namespace {
 wisp::MeshLink mesh;
 wisp::LampInventory inventory;
 wisp::CurrentPalette currentPalette;
+wisp::PaintDistributor paintDistributor;
+wisp::StatusBeacon statusBeacon;
 AuroraPaletteClient auroraClient;
+
+// Phase C.4 temporary serial command buffer. Phase D's BLE proxy replaces
+// this with MSG_WISP_OP from the app pane.
+String serialLineBuf;
 
 // First Aurora zone we hear from latches in here. Until the wisp has a way to
 // pick a zone (app pane, later phase), the first one wins; later zones log but
@@ -66,6 +74,42 @@ void onAuroraPalette(int zone, const Palette& p) {
   for (size_t i = 0; i < cols.size(); ++i) {
     Serial.printf("  [%u] r=%u g=%u b=%u w=%u\n",
                   (unsigned)i, cols[i].r, cols[i].g, cols[i].b, cols[i].w);
+  }
+  // Notify the paint distributor; it only acts if paintMode is on.
+  paintDistributor.onPaletteChanged();
+}
+
+// Phase C.4 serial command handler. Parses one stripped line at a time.
+// Returns nothing — anything unknown logs back, anything known logs ack.
+void processSerialCommand(const String& cmd) {
+  if (cmd.length() == 0) return;
+  if (cmd == "paint:on") {
+    paintDistributor.setPaintMode(true);
+    Serial.println("[wisp.cmd] paint mode ON");
+  } else if (cmd == "paint:off") {
+    paintDistributor.setPaintMode(false);
+    Serial.println("[wisp.cmd] paint mode OFF");
+  } else {
+    Serial.printf("[wisp.cmd] unknown command: %s\n", cmd.c_str());
+  }
+}
+
+// Drain whatever is in the Serial RX FIFO into serialLineBuf, dispatching
+// on newline. Kept inside loop() so we don't need a dedicated task — the
+// FreeRTOS timer handles HELLO emission so loop() pacing here is fine.
+void pumpSerial() {
+  while (Serial.available() > 0) {
+    int ch = Serial.read();
+    if (ch < 0) break;
+    if (ch == '\r') continue;  // strip CR; macOS / Linux send LF only
+    if (ch == '\n') {
+      String cmd = serialLineBuf;
+      cmd.trim();
+      serialLineBuf = String();
+      processSerialCommand(cmd);
+      continue;
+    }
+    if (serialLineBuf.length() < 64) serialLineBuf += static_cast<char>(ch);
   }
 }
 
@@ -127,6 +171,15 @@ void setup() {
   auroraClient.begin();
   Serial.printf("[wisp] aurora client started as %s\n",
                 buildInstanceId().c_str());
+
+  // Phase C.4 wiring. Paint distributor needs the inventory + mesh + palette
+  // to walk peers and unicast tuples. Status beacon broadcasts MSG_WISP_HELLO
+  // every 2s on a FreeRTOS timer so cadence survives Aurora loop() stalls.
+  paintDistributor.begin(&inventory, &mesh, &currentPalette);
+  statusBeacon.begin(&mesh, &paintDistributor, &currentPalette);
+  statusBeacon.startTimer();
+  Serial.println("[wisp] paint distributor + status beacon online");
+  Serial.println("[wisp] cmds: paint:on / paint:off");
 }
 
 void loop() {
@@ -135,6 +188,8 @@ void loop() {
   const uint32_t now = millis();
 
   auroraClient.loop();
+  pumpSerial();
+  paintDistributor.tick(now);
 
   if (now - lastDumpMs > 10000) {
     lastDumpMs = now;
