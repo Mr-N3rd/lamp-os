@@ -16,6 +16,7 @@ import '../../social/domain/social_mode.dart';
 import 'advanced_session.dart';
 import 'auth_client.dart';
 import 'control_state.dart';
+import 'lamp_auth_required_exception.dart';
 import 'lamp_save_status.dart';
 
 part 'control_notifier.g.dart';
@@ -171,6 +172,19 @@ class ControlNotifier extends _$ControlNotifier {
     ref.onDispose(() => ble.disconnect(deviceId));
     await AuthClient(ble: ble)
         .authenticate(deviceId: deviceId, password: lamp.controlPassword);
+
+    // Auth-gate canary. Post-commit 71415e0 the firmware returns empty bytes
+    // from lampSection on unauthenticated reads (so an unauth'd peer can't
+    // exfiltrate the password embedded in the section blob). If our stored
+    // credential is missing or stale, surface that as a typed sentinel the
+    // UI can catch and convert into a password prompt — otherwise the empty
+    // bytes propagate into jsonDecode and surface as a generic FormatException.
+    final canaryBytes = await ble.read(
+        deviceId, BleUuids.controlService, BleUuids.lampSection);
+    if (canaryBytes.isEmpty) {
+      throw const LampAuthRequiredException();
+    }
+
     final fresh = await _readSections(ble);
 
     // Live-preview writes are fire-and-forget. Swallow errors here so a
@@ -841,6 +855,33 @@ class ControlNotifier extends _$ControlNotifier {
     );
   }
 
+  /// Called by the connect-time password prompt when the user submits a
+  /// password after build() threw [LampAuthRequiredException].
+  ///
+  /// Writes CHAR_AUTH with the user-entered password and re-probes the auth
+  /// gate by reading lampSection. On success, persists the credential to
+  /// inventory (so future reconnects skip the prompt) and invalidates the
+  /// provider so build() reruns cleanly with the new password in inventory.
+  /// On failure, throws [LampAuthRequiredException] without mutating
+  /// inventory — the dialog surfaces it inline and lets the user retry.
+  ///
+  /// Reuses `_ble` / `_deviceId`, which build() set before it threw. The
+  /// BLE link is still alive: ControlNotifier is keepAlive, so the
+  /// disconnect onDispose hasn't fired.
+  Future<void> submitConnectPassword(String pw) async {
+    await AuthClient(ble: _ble)
+        .authenticate(deviceId: _deviceId, password: pw);
+    final bytes = await _ble.read(
+        _deviceId, BleUuids.controlService, BleUuids.lampSection);
+    if (bytes.isEmpty) {
+      throw const LampAuthRequiredException();
+    }
+    await ref
+        .read(inventoryNotifierProvider.notifier)
+        .updatePassword(_deviceId, pw);
+    ref.invalidateSelf();
+  }
+
   /// Change the lamp's auth password. Writes a partial settings_blob with
   /// just `{lamp: {password: newPassword}}` — same path the onboarding
   /// claim uses to set the initial password. The lamp drains the write,
@@ -1262,6 +1303,18 @@ class ControlNotifier extends _$ControlNotifier {
       );
       await AuthClient(ble: ble)
           .authenticate(deviceId: _deviceId, password: lamp.controlPassword);
+      // Same canary as build(): if the firmware still returns empty bytes
+      // after our auth attempt, the stored password no longer works (e.g.
+      // it was changed on another device). Drop to error so the UI re-
+      // prompts instead of leaving the user in a silent-write-rejected
+      // state with the banner clearing as if everything was fine.
+      final canaryBytes = await ble.read(
+          _deviceId, BleUuids.controlService, BleUuids.lampSection);
+      if (canaryBytes.isEmpty) {
+        state = AsyncError(
+            const LampAuthRequiredException(), StackTrace.current);
+        return;
+      }
       // The watchConnected stream will fire `true` and _onConnectionChange
       // handles clearing the banner + pushing local state.
     } catch (_) {
