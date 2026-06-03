@@ -59,9 +59,12 @@ void main() {
       ),
     ));
     await _pumpToData(tester, 'Breathing');
-    // Header carries the resolved type name + target.
+    // Header carries the resolved type name; the target row below the
+    // header shows all three pills with the active target highlighted.
     expect(find.text('Breathing'), findsOneWidget);
-    expect(find.text('Target: Both'), findsOneWidget);
+    expect(find.text('Shade'), findsOneWidget);
+    expect(find.text('Base'), findsOneWidget);
+    expect(find.text('Both'), findsOneWidget);
 
     // Add button (new expression — existing entries say "Save") may be
     // below the fold; scroll to reveal it.
