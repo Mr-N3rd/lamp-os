@@ -40,6 +40,12 @@ class ShiftyExpression : public Expression {
   std::vector<Color> fadeStartColors;
   std::vector<Color> fadeTargetColors;
 
+  // Per-frame cache (perf): (frame, frames) → factor is identical for every
+  // pixel within a fade frame. Hoisted out of the per-pixel hot path in draw().
+  // Updated in onUpdate(); read-only in draw().
+  uint32_t cachedFadeFactor_ = 0;       // Precomputed linear "factor" (matches easeLinear)
+  bool cachedFadeAtEnd_ = false;        // True when frame >= frames (end-clamp short-circuit)
+
 
   /**
    * @brief Start shifting to a new color

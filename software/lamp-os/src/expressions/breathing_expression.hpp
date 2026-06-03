@@ -21,6 +21,12 @@ class BreathingExpression : public Expression {
   uint32_t breathSpeedMs = 10000;     // Total breath cycle time in ms (default 10s)
   Color targetColor;                   // Target color to breathe towards
 
+  // Per-frame cache (perf): (breathIntensity, 100) → factor is identical for
+  // every pixel within a frame. Hoist it out of the per-pixel hot path in
+  // draw(). Updated in onUpdate(); read-only in draw().
+  uint32_t cachedFadeFactor_ = 0;      // Precomputed linear "factor" (matches easeLinear)
+  bool cachedFadeAtEnd_ = false;       // True when breathIntensity >= 100 (end-clamp short-circuit)
+
   // Color cycling state (for multiple colors)
   uint32_t currentColorIndex = 0;      // Current color in the sequence
   bool cyclingForward = true;          // Direction of color cycling

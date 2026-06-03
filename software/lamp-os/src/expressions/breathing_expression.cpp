@@ -11,6 +11,36 @@ namespace lamp {
 // Large frame count to keep animation running continuously
 static constexpr uint32_t BREATHING_MAX_FRAMES = 100000;
 
+namespace {
+// Mirror of easeLinear()'s factor calculation (see src/util/fade.cpp). Kept
+// in lockstep so behavior is bit-identical when hoisted out of the per-pixel
+// hot path. linear[i] == i * 511 by construction, so we elide the LUT and
+// compute the factor analytically.
+inline uint32_t computeLinearFactor(uint32_t currentStep, uint32_t duration) {
+  return static_cast<uint32_t>(
+             static_cast<uint16_t>((currentStep * 511u / duration * 511u) / 511u)) *
+         511u;
+}
+
+// Per-channel linear mix using a precomputed factor. Mirrors the body of
+// easeLinear() exactly (same integer types, same divisor, same start==end
+// short-circuit) so output bytes match the unhoisted call site bit-for-bit.
+inline uint8_t mixByteLinear(uint8_t start, uint8_t end, uint32_t factor) {
+  if (start == end) return end;
+  return static_cast<uint8_t>(
+      ((static_cast<uint32_t>(end) - static_cast<uint32_t>(start)) * factor) /
+          262144u +
+      start);
+}
+
+inline Color mixColorLinear(const Color& start, const Color& end, uint32_t factor) {
+  return Color(mixByteLinear(start.r, end.r, factor),
+               mixByteLinear(start.g, end.g, factor),
+               mixByteLinear(start.b, end.b, factor),
+               mixByteLinear(start.w, end.w, factor));
+}
+}  // namespace
+
 BreathingExpression::BreathingExpression(FrameBuffer* inBuffer, uint32_t inFrames)
     : Expression(inBuffer, inFrames) {
   isExclusive = false;  // This can run and blend with other things
@@ -114,6 +144,15 @@ void BreathingExpression::onTrigger() {
 void BreathingExpression::onUpdate() {
   // Always update breath phase
   updateBreathPhase();
+
+  // Perf: precompute the per-frame fade factor here so draw() can apply it
+  // per pixel without recomputing the LUT-equivalent math for every channel.
+  // Inputs (breathPhase, breathSpeedMs) are frame-scoped, not pixel-scoped.
+  float intensity = 0.5f - 0.5f * cosf(breathPhase * 2.0f * static_cast<float>(M_PI));
+  uint32_t breathIntensity = static_cast<uint32_t>(intensity * 100.0f);
+  // Mirror easeLinear's end-clamp short-circuit (currentStep >= duration).
+  cachedFadeAtEnd_ = (breathIntensity >= 100u);
+  cachedFadeFactor_ = computeLinearFactor(breathIntensity, 100u);
 }
 
 void BreathingExpression::control() {
@@ -142,11 +181,17 @@ void BreathingExpression::draw() {
     return;
   }
 
-  float intensity = 0.5f - 0.5f * cosf(breathPhase * 2.0f * static_cast<float>(M_PI));
-  uint32_t breathIntensity = static_cast<uint32_t>(intensity * 100.0f);
-
-  for (int i = 0; i < fb->pixelCount; i++) {
-    fb->buffer[i] = fadeLinear(fb->buffer[i], targetColor, 100, breathIntensity);
+  // Per-frame fade factor was cached in onUpdate(); apply per pixel here.
+  // End-clamp short-circuit mirrors easeLinear()'s `currentStep >= duration`
+  // branch which returns `end` (== targetColor) regardless of start.
+  if (cachedFadeAtEnd_) {
+    for (int i = 0; i < fb->pixelCount; i++) {
+      fb->buffer[i] = targetColor;
+    }
+  } else {
+    for (int i = 0; i < fb->pixelCount; i++) {
+      fb->buffer[i] = mixColorLinear(fb->buffer[i], targetColor, cachedFadeFactor_);
+    }
   }
 
   nextFrame();
