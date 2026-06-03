@@ -13,6 +13,8 @@
 #include "components/network/nearby_lamps.hpp"
 #include "components/network/show_receiver.hpp"
 #include "components/network/wifi.hpp"
+#include "components/transient_override/brightness_override.hpp"
+#include "components/transient_override/color_override.hpp"
 #include "expressions/expression_manager.hpp"
 #include "util/color.hpp"
 #include "behaviors/configurator.hpp"
@@ -20,11 +22,14 @@
 #include "behaviors/knockout.hpp"
 #include "behaviors/social.hpp"
 #include "config/config.hpp"
+#include "config/config_types.hpp"
 #include "core/animated_behavior.hpp"
+#include "core/behavior_context.hpp"
 #include "core/compositor.hpp"
 #include "core/frame_buffer.hpp"
 #include "globals.hpp"
 #include "pending_json_slot.hpp"
+#include "pending_typed_slot.hpp"
 #include "util/color.hpp"
 #include "util/gradient.hpp"
 #include "util/levels.hpp"
@@ -100,6 +105,15 @@ lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingSettingsBlobJson;
 // Uses the WithMac variant because the inbound path carries the sender's
 // MAC alongside the payload (downstream coalesce keys on it).
 lamp::PendingJsonSlotWithMac<MAX_PENDING_OP_JSON> pendingInboundOpJson;
+// Phase C transient-override pending slots. ShowReceiver's WiFi recv path
+// memcpys the POD payload here; the Core 1 loop drain dispatches into the
+// override module. Same Core 0 → Core 1 hand-off shape as the BLE slots
+// above, but typed via PendingTypedSlot<T> instead of JSON byte buffer.
+lamp::PendingTypedSlot<lamp::PendingOverrideColors>     pendingOverrideColors;
+lamp::PendingTypedSlot<lamp::PendingRestoreColors>      pendingRestoreColors;
+lamp::PendingTypedSlot<lamp::PendingOverrideBrightness> pendingOverrideBrightness;
+lamp::PendingTypedSlot<lamp::PendingRestoreBrightness>  pendingRestoreBrightness;
+lamp::PendingTypedSlot<lamp::PendingWispHello>          pendingWispHello;
 portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
 
 // Thin forwarders into the template. Each slot's bounds check + mux
@@ -130,6 +144,17 @@ void postPendingSettingsBlobJson(const char* data, size_t len)      { pendingSet
 void postPendingRemoteOpJson(const char* data, size_t len)          { pendingRemoteOpJson.post(pendingMux, data, len); }
 void postPendingSocialDispositionsJson(const char* data, size_t len){ pendingSocialDispositionsJson.post(pendingMux, data, len); }
 
+namespace lamp {
+// Phase C: typed-payload posts called from ShowReceiver's WiFi recv task.
+// Same Core 0 → Core 1 hand-off discipline as the JSON slots above —
+// memcpy under portMUX, no heap, no parsing on the recv task.
+void postPendingOverrideColors(const PendingOverrideColors& src)         { pendingOverrideColors.post(pendingMux, src); }
+void postPendingRestoreColors(const PendingRestoreColors& src)           { pendingRestoreColors.post(pendingMux, src); }
+void postPendingOverrideBrightness(const PendingOverrideBrightness& src) { pendingOverrideBrightness.post(pendingMux, src); }
+void postPendingRestoreBrightness(const PendingRestoreBrightness& src)   { pendingRestoreBrightness.post(pendingMux, src); }
+void postPendingWispHello(const PendingWispHello& src)                   { pendingWispHello.post(pendingMux, src); }
+}  // namespace lamp
+
 lamp::BluetoothComponent bt;
 lamp::Compositor compositor;
 lamp::FrameBuffer shade;
@@ -143,6 +168,13 @@ lamp::KnockoutBehavior baseKnockoutBehavior;
 lamp::ExpressionManager expressionManager;
 lamp::Config config;
 lamp::ShowReceiver showReceiver;
+// Phase C transient overrides. Three instances: one ColorOverride per
+// surface (base + shade), and a single BrightnessOverride that maps the
+// whole-lamp brightness (Surface::Any in v1). bind() wires them to their
+// configurator via the BehaviorContext after compositor.begin().
+lamp::ColorOverride baseColorOverride;
+lamp::ColorOverride shadeColorOverride;
+lamp::BrightnessOverride brightnessOverride;
 
 // ----- Local appliers for mesh-received ops --------------------------------
 //
@@ -184,8 +216,14 @@ static std::vector<lamp::Color> jsonArrayToColors(JsonArray arr) {
 static void applyShadeColorsLocal(JsonArray arr) {
   if (arr.isNull() || arr.size() == 0) return;
   std::vector<lamp::Color> colors = jsonArrayToColors(arr);
-  shadeConfiguratorBehavior.colors =
+  std::vector<lamp::Color> gradient =
       lamp::buildGradientWithStops(shade.pixelCount, colors);
+  // Phase C: drive the change through beginFade() so the BLE color
+  // picker keeps its fade UX (was the easeFrames mechanism — now a
+  // duration-controlled ~250ms ease). Any active override gets a
+  // rebaseline() so a later restore lands on the new colors.
+  shadeConfiguratorBehavior.beginFade(gradient, lamp::kDefaultFadeMs);
+  shadeColorOverride.rebaseline(gradient);
   // Reflect the new shade in the BLE adv so phones and v1 neighbours see it
   // without having to connect. Use the first stop — shade in this build is
   // a single color.
@@ -197,8 +235,10 @@ static void applyShadeColorsLocal(JsonArray arr) {
 static void applyBaseColorsLocal(JsonArray arr) {
   if (arr.isNull() || arr.size() == 0) return;
   std::vector<lamp::Color> colors = jsonArrayToColors(arr);
-  baseConfiguratorBehavior.colors =
+  std::vector<lamp::Color> gradient =
       lamp::buildGradientWithStops(base.pixelCount, colors);
+  baseConfiguratorBehavior.beginFade(gradient, lamp::kDefaultFadeMs);
+  baseColorOverride.rebaseline(gradient);
   // Reflect the new base in the BLE adv — first stop is what the adv carries
   // (we don't know the user's active-stop index from this drain, and the
   // first stop is what bt.begin used initially).
@@ -455,6 +495,11 @@ static void applyRemoteOpRouted(const char* payloadJson, size_t len,
 // Forward decl — defined later, alongside effectiveBrightness which
 // shares the same gate. initBehaviors uses it to seed compositor.begin.
 static bool calculateEffectiveHomeMode();
+// Forward decl — same reasoning. The Phase C BrightnessOverride callback
+// wired in initBehaviors needs to reach the same brightness applier the
+// rest of the lamp uses. Defined below alongside effectiveBrightness.
+static void applyEffectiveBrightness();
+static uint8_t effectiveBrightness();
 
 void initBehaviors() {
   shadeSocialBehavior = lamp::SocialBehavior(&shade, 1200);
@@ -512,6 +557,19 @@ void initBehaviors() {
   behaviorCtx.expressionFrameBuffers.clear();
   behaviorCtx.expressionFrameBuffers.push_back(&shade);
   behaviorCtx.expressionFrameBuffers.push_back(&base);
+  // Phase C: publish the two configurator pointers so the per-surface
+  // ColorOverride instances can resolve their target configurator via
+  // bind() without grabbing globals.
+  behaviorCtx.baseConfigurator = &baseConfiguratorBehavior;
+  behaviorCtx.shadeConfigurator = &shadeConfiguratorBehavior;
+  // bind() the override instances. From here on apply()/restore() will
+  // drive the right configurator's beginFade.
+  baseColorOverride.bind(behaviorCtx, lamp_protocol::OverrideSurface::Base);
+  shadeColorOverride.bind(behaviorCtx, lamp_protocol::OverrideSurface::Shade);
+  // BrightnessOverride routes its change-driven callback into the
+  // existing applyEffectiveBrightness path so master-brightness fades
+  // share the same NeoPixel setBrightness entry point.
+  brightnessOverride.setOnChangeCallback([]() { applyEffectiveBrightness(); });
 }
 
 /**
@@ -617,7 +675,15 @@ static uint8_t effectiveBrightness() {
 }
 
 static void applyEffectiveBrightness() {
-  uint8_t level = effectiveBrightness();
+  // Phase C: when a BrightnessOverride is active, its interpolated value
+  // takes precedence over the user's baseline. When inactive,
+  // effective(baseline) just returns baseline so this is a no-op tax.
+  // The override's change-driven callback also funnels back through this
+  // function (see initBehaviors); recursion is bounded because the
+  // callback only fires when the rounded value moved AND the override
+  // doesn't re-read its own callback inside that critical section.
+  uint8_t baseline = effectiveBrightness();
+  uint8_t level = brightnessOverride.effective(millis(), baseline);
   if (shadeStrip) shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
   if (baseStrip) baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
 }
@@ -1068,6 +1134,99 @@ void loop() {
     uint8_t selfMac[6];
     showReceiver.getMyMac(selfMac);
     applyRemoteOpRouted(buf, len, selfMac, RemoteOpTransport::BLE);
+  }
+
+  // Phase C transient-override drains. Each block drains its typed slot
+  // and dispatches to the matching override instance based on the
+  // `surface` byte. Surface::Any maps to "both surfaces" for the color
+  // family (used by Wisp's whole-lamp recolor) and to "the brightness
+  // override" for the brightness family (single global instance in v1).
+  {
+    lamp::PendingOverrideColors cmd;
+    if (pendingOverrideColors.drain(pendingMux, cmd)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] drain overrideColors surface=0x%02X n=%u fadeMs=%u\n",
+                    (unsigned)cmd.surface, (unsigned)cmd.numColors,
+                    (unsigned)cmd.fadeDurationMs);
+#endif
+      // Surface routing. Any → apply to both base + shade. Else single.
+      if (cmd.surface == lamp_protocol::OverrideSurface::Base ||
+          cmd.surface == lamp_protocol::OverrideSurface::Any) {
+        baseColorOverride.apply(cmd.sourceMac, cmd.sourceKind,
+                                cmd.colors, cmd.numColors,
+                                cmd.fadeDurationMs);
+      }
+      if (cmd.surface == lamp_protocol::OverrideSurface::Shade ||
+          cmd.surface == lamp_protocol::OverrideSurface::Any) {
+        shadeColorOverride.apply(cmd.sourceMac, cmd.sourceKind,
+                                 cmd.colors, cmd.numColors,
+                                 cmd.fadeDurationMs);
+      }
+    }
+  }
+  {
+    lamp::PendingRestoreColors cmd;
+    if (pendingRestoreColors.drain(pendingMux, cmd)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] drain restoreColors surface=0x%02X fadeMs=%u\n",
+                    (unsigned)cmd.surface, (unsigned)cmd.fadeDurationMs);
+#endif
+      if (cmd.surface == lamp_protocol::OverrideSurface::Base ||
+          cmd.surface == lamp_protocol::OverrideSurface::Any) {
+        baseColorOverride.restore(cmd.sourceMac, cmd.sourceKind,
+                                  cmd.fadeDurationMs);
+      }
+      if (cmd.surface == lamp_protocol::OverrideSurface::Shade ||
+          cmd.surface == lamp_protocol::OverrideSurface::Any) {
+        shadeColorOverride.restore(cmd.sourceMac, cmd.sourceKind,
+                                   cmd.fadeDurationMs);
+      }
+    }
+  }
+  {
+    lamp::PendingOverrideBrightness cmd;
+    if (pendingOverrideBrightness.drain(pendingMux, cmd)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] drain overrideBrightness b=%u fadeMs=%u\n",
+                    (unsigned)cmd.brightness, (unsigned)cmd.fadeDurationMs);
+#endif
+      brightnessOverride.apply(cmd.sourceMac, cmd.sourceKind, cmd.surface,
+                               cmd.brightness, cmd.fadeDurationMs);
+    }
+  }
+  {
+    lamp::PendingRestoreBrightness cmd;
+    if (pendingRestoreBrightness.drain(pendingMux, cmd)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] drain restoreBrightness fadeMs=%u\n",
+                    (unsigned)cmd.fadeDurationMs);
+#endif
+      brightnessOverride.restore(cmd.sourceMac, cmd.sourceKind,
+                                 cmd.fadeDurationMs);
+    }
+  }
+  {
+    lamp::PendingWispHello cmd;
+    if (pendingWispHello.drain(pendingMux, cmd)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] drain wispHello flags=0x%02X v=0x%08X\n",
+                    (unsigned)cmd.flags, (unsigned)cmd.wispVersion);
+#endif
+      lamp::nearbyLamps.cacheWispHello(cmd.sourceMac, cmd.wispVersion, cmd.flags,
+                                       cmd.paletteIdPrefix, cmd.carriedFwChannel,
+                                       cmd.carriedFwVersion);
+    }
+  }
+
+  // Phase C: drive the override state machines. tick() is cheap when Idle
+  // (single load + branch) so call unconditionally. Brightness tick uses
+  // the same baseline as applyEffectiveBrightness so the change-driven
+  // callback's view stays consistent across the fade window.
+  {
+    const uint32_t now = millis();
+    baseColorOverride.tick(now);
+    shadeColorOverride.tick(now);
+    brightnessOverride.tick(now, effectiveBrightness());
   }
 
   // Fire any delayed triggerExpression invocations whose deadline has passed.

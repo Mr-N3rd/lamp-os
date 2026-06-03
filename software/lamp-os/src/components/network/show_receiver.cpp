@@ -142,6 +142,14 @@ bool ShowReceiver::sendControlOp(const uint8_t targetMac[6],
   return link_.broadcast(buf, n);
 }
 
+// Decide whether `targetMac` addresses this lamp. Single helper so the
+// per-message-type branches below stay readable. Broadcast = all-FF.
+static bool addressedToUs(const uint8_t targetMac[6], const uint8_t myMac[6]) {
+  static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  return std::memcmp(targetMac, myMac, 6) == 0 ||
+         std::memcmp(targetMac, bcast, 6) == 0;
+}
+
 void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len) {
   const uint8_t msgType = lamp_protocol::inspect(data, len);
   if (msgType == lamp_protocol::MSG_HELLO) {
@@ -185,6 +193,109 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, si
 #endif
       controlOpHandler_(op.payload, op.payloadLen, op.sourceMac);
     }
+  } else if (msgType == lamp_protocol::MSG_WISP_HELLO) {
+    // Wisp presence beacon. Parse → dedup → forward to NearbyLamps via a
+    // pending slot (loop drain on Core 1 calls cacheWispHello). Keep
+    // recv-task work to memcpy + dedup so the WiFi task can return
+    // quickly to its next frame.
+    lamp_protocol::ParsedWispHello h;
+    if (!lamp_protocol::parseWispHello(data, len, h)) return;
+    if (!wispHelloDedup_.record(h.sourceMac, lamp_protocol::MSG_WISP_HELLO, h.seq)) return;
+    PendingWispHello slot;
+    std::memcpy(slot.sourceMac, h.sourceMac, 6);
+    slot.wispVersion = h.wispVersion;
+    slot.flags = h.flags;
+    std::memcpy(slot.paletteIdPrefix, h.paletteIdPrefix,
+                lamp_protocol::WISP_HELLO_PALETTE_ID_PREFIX_LEN);
+    std::memcpy(slot.carriedFwChannel, h.carriedFwChannel,
+                lamp_protocol::WISP_HELLO_FW_CHANNEL_LEN);
+    slot.carriedFwVersion = h.carriedFwVersion;
+    postPendingWispHello(slot);
+    // Rebroadcast so wisps in adjacent rooms (no direct line of sight to
+    // this room) still propagate. Same gossip semantics as MSG_HELLO.
+    link_.broadcast(data, len);
+  } else if (msgType == lamp_protocol::MSG_OVERRIDE_COLORS) {
+    lamp_protocol::ParsedOverrideColors p;
+    if (!lamp_protocol::parseOverrideColors(data, len, p)) return;
+    if (!overrideColorsDedup_.record(p.sourceMac,
+                                     lamp_protocol::MSG_OVERRIDE_COLORS,
+                                     p.seq)) return;
+    // OVERRIDE/RESTORE messages do NOT relay (per design: unicast paint,
+    // no gossip). Reach is whatever direct radio delivers — keeps wisp's
+    // paint scoped to "lamps the wisp can hear" without spillover.
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    PendingOverrideColors slot;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    slot.surface = p.surface;
+    slot.sourceKind = p.sourceKind;
+    slot.fadeDurationMs = p.fadeDurationMs;
+    slot.numColors = p.numColors;
+    for (uint8_t i = 0; i < p.numColors; ++i) {
+      slot.colors[i] = Color(p.colors[i][0], p.colors[i][1],
+                             p.colors[i][2], p.colors[i][3]);
+    }
+    postPendingOverrideColors(slot);
+  } else if (msgType == lamp_protocol::MSG_RESTORE_COLORS) {
+    lamp_protocol::ParsedRestoreColors p;
+    if (!lamp_protocol::parseRestoreColors(data, len, p)) return;
+    if (!restoreColorsDedup_.record(p.sourceMac,
+                                    lamp_protocol::MSG_RESTORE_COLORS,
+                                    p.seq)) return;
+    // No relay — see OVERRIDE_COLORS branch.
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    PendingRestoreColors slot;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    slot.surface = p.surface;
+    slot.sourceKind = p.sourceKind;
+    slot.fadeDurationMs = p.fadeDurationMs;
+    postPendingRestoreColors(slot);
+  } else if (msgType == lamp_protocol::MSG_OVERRIDE_BRIGHTNESS) {
+    lamp_protocol::ParsedOverrideBrightness p;
+    if (!lamp_protocol::parseOverrideBrightness(data, len, p)) return;
+    if (!overrideBrightnessDedup_.record(p.sourceMac,
+                                         lamp_protocol::MSG_OVERRIDE_BRIGHTNESS,
+                                         p.seq)) return;
+    // No relay — see OVERRIDE_COLORS branch.
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    // Anti-defeat brightness floor: a peer-swap or random source can't
+    // drag brightness arbitrarily low. Wisp-paired sources bypass the
+    // floor (the wisp owns a lobby "go dark" scenario) — check by
+    // matching sourceMac against the cached MSG_WISP_HELLO sender within
+    // the watchdog window.
+    if (p.brightness < lamp_protocol::kBrightnessOverrideMin) {
+      const auto wisp = nearbyLamps.getWispCache();
+      const uint32_t now = millis();
+      // 60s pairing window — matches the override watchdog. A wisp that
+      // hasn't beaconed in this long loses the floor-bypass; defeat-by-
+      // silent-source is then the same risk as for any other unknown
+      // sender (i.e. dropped).
+      constexpr uint32_t kWispPairingWindowMs = 60000;
+      const bool wispPaired = wisp.present &&
+                              std::memcmp(wisp.mac, p.sourceMac, 6) == 0 &&
+                              (now - wisp.lastHelloMs) < kWispPairingWindowMs;
+      if (!wispPaired) return;  // drop silently — defeat-the-defeat
+    }
+    PendingOverrideBrightness slot;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    slot.surface = p.surface;
+    slot.sourceKind = p.sourceKind;
+    slot.fadeDurationMs = p.fadeDurationMs;
+    slot.brightness = p.brightness;
+    postPendingOverrideBrightness(slot);
+  } else if (msgType == lamp_protocol::MSG_RESTORE_BRIGHTNESS) {
+    lamp_protocol::ParsedRestoreBrightness p;
+    if (!lamp_protocol::parseRestoreBrightness(data, len, p)) return;
+    if (!restoreBrightnessDedup_.record(p.sourceMac,
+                                        lamp_protocol::MSG_RESTORE_BRIGHTNESS,
+                                        p.seq)) return;
+    // No relay — see OVERRIDE_COLORS branch.
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    PendingRestoreBrightness slot;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    slot.surface = p.surface;
+    slot.sourceKind = p.sourceKind;
+    slot.fadeDurationMs = p.fadeDurationMs;
+    postPendingRestoreBrightness(slot);
   }
 }
 

@@ -12,6 +12,7 @@
 #include "espnow_link.hpp"
 #include "lamp_protocol.hpp"
 #include "nearby_lamps.hpp"
+#include "util/color.hpp"
 
 #ifndef LAMP_ESPNOW_CHANNEL
 #define LAMP_ESPNOW_CHANNEL 1
@@ -30,6 +31,69 @@ namespace lamp {
 // during the call.
 using ControlOpHandler = std::function<void(const uint8_t* payload, size_t len,
                                             const uint8_t srcMac[6])>;
+
+// --- Phase C pending-slot payloads --------------------------------------
+//
+// POD-by-construction so PendingTypedSlot<T>'s portMUX-protected memcpy
+// post/drain has well-defined semantics across the WiFi-task → loop-task
+// hand-off. ShowReceiver::handleRecv populates these on the WiFi task
+// (Core 0); standard_lamp's loop drain reads them on Core 1 and
+// dispatches into the ColorOverride / BrightnessOverride / NearbyLamps
+// modules.
+//
+// Colors here use the Color struct directly (4 bytes / pixel — RGBW)
+// since the loop drain hands them to ColorOverride::apply which expects
+// `const Color* colors`.
+
+struct PendingOverrideColors {
+  uint8_t sourceMac[6];
+  lamp_protocol::OverrideSurface surface;
+  lamp_protocol::OverrideSource sourceKind;
+  uint16_t fadeDurationMs;
+  uint8_t numColors;
+  Color colors[lamp_protocol::kMaxOverrideColorsPerFrame];
+};
+
+struct PendingRestoreColors {
+  uint8_t sourceMac[6];
+  lamp_protocol::OverrideSurface surface;
+  lamp_protocol::OverrideSource sourceKind;
+  uint16_t fadeDurationMs;
+};
+
+struct PendingOverrideBrightness {
+  uint8_t sourceMac[6];
+  lamp_protocol::OverrideSurface surface;
+  lamp_protocol::OverrideSource sourceKind;
+  uint16_t fadeDurationMs;
+  uint8_t brightness;
+};
+
+struct PendingRestoreBrightness {
+  uint8_t sourceMac[6];
+  lamp_protocol::OverrideSurface surface;
+  lamp_protocol::OverrideSource sourceKind;
+  uint16_t fadeDurationMs;
+};
+
+struct PendingWispHello {
+  uint8_t sourceMac[6];
+  uint32_t wispVersion;
+  uint8_t flags;
+  char paletteIdPrefix[lamp_protocol::WISP_HELLO_PALETTE_ID_PREFIX_LEN];
+  char carriedFwChannel[lamp_protocol::WISP_HELLO_FW_CHANNEL_LEN];
+  uint32_t carriedFwVersion;
+};
+
+// Forwarders implemented in standard_lamp.cpp. ShowReceiver's WiFi-task
+// recv path calls these — they own posting into the loop-task pending
+// slots so the receiver's handleRecv stays a thin parse-and-route layer
+// with no knowledge of which slot a given message type lands in.
+void postPendingOverrideColors(const PendingOverrideColors& src);
+void postPendingRestoreColors(const PendingRestoreColors& src);
+void postPendingOverrideBrightness(const PendingOverrideBrightness& src);
+void postPendingRestoreBrightness(const PendingRestoreBrightness& src);
+void postPendingWispHello(const PendingWispHello& src);
 
 // Receives HELLO + CONTROL_OP frames over ESP-NOW, and announces this
 // lamp's presence (HELLO) so peers can populate their registry with our
@@ -96,6 +160,14 @@ class ShowReceiver {
 
   lamp_protocol::DedupRing helloDedup_;
   lamp_protocol::DedupRing controlOpDedup_;
+  // Phase C: per-type dedup. Each new MSG_* gets its own ring so a
+  // CONTROL_OP seq doesn't accidentally suppress an OVERRIDE_COLORS seq
+  // from the same sender (seqs are independent per type).
+  lamp_protocol::DedupRing overrideColorsDedup_;
+  lamp_protocol::DedupRing restoreColorsDedup_;
+  lamp_protocol::DedupRing overrideBrightnessDedup_;
+  lamp_protocol::DedupRing restoreBrightnessDedup_;
+  lamp_protocol::DedupRing wispHelloDedup_;
 
   uint32_t lastHelloMs_ = 0;
   uint16_t helloSeq_ = 0;
