@@ -459,24 +459,6 @@ static void applyEffectiveBrightness() {
   if (baseStrip) baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
 }
 
-// Persist current in-memory config to NVS WITHOUT triggering a reboot.
-// Used for small config updates (wifi creds via wifi_op) that need
-// durability but shouldn't disrupt the active BLE session or restart
-// behaviors. Mirrors the settings_blob save path but omits the
-// fadeOutRebootRequested signal.
-static void persistConfigToNvs() {
-  JsonDocument doc = config.asJsonDocument();
-  String json;
-  serializeJson(doc, json);
-  prefs.begin("lamp", false);
-  prefs.putString("cfg", json.c_str());
-  prefs.end();
-#ifdef LAMP_DEBUG
-  Serial.printf("[loop] persistConfigToNvs wrote %u bytes\n",
-                (unsigned)json.length());
-#endif
-}
-
 // Two regimes:
 //   1. BT client connected (the app is the "configurator"): home mode is
 //      forced OFF unless the user is on the Home Mode page, in which case

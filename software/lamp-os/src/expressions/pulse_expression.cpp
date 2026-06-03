@@ -135,7 +135,6 @@ void PulseExpression::draw() {
   }
 
   // Apply pulse effect
-  int pixelsAffected = 0;
   for (int i = 0; i < fb->pixelCount; i++) {
     uint32_t blendFactor = calculateBlendFactor(i);
 
@@ -143,11 +142,8 @@ void PulseExpression::draw() {
       // Blend pulse color with current buffer
       // blendFactor is 0-100 (percentage)
       fb->buffer[i] = fadeLinear(fb->buffer[i], pulseColor, 100, blendFactor);
-      pixelsAffected++;
-
     }
   }
-
 
   // Advance animation frame
   nextFrame();
@@ -164,9 +160,6 @@ void PulseExpression::draw() {
     }
   }
 
-  // Check if animation just completed
-  if (animationState == STOPPED && frame == 0) {  // frame resets to 0 when stopped
-  }
 }
 
 }  // namespace lamp

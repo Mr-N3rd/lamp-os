@@ -62,7 +62,6 @@ void Expression::control() {
   // Pause if an exclusive behavior is running (unless we are exclusive)
   if (shouldPause()) return;
 
-
   // Check for automatic trigger
   if (autoTriggerEnabled && animationState == STOPPED && millis() > nextTriggerMs) {
     trigger();
@@ -97,13 +96,11 @@ Color Expression::getRandomColor() {
 }
 
 void Expression::trigger() {
-
   // Only trigger if this expression should affect this buffer
   // This ensures expressions respect their target configuration
   if (!shouldAffectBuffer()) {
     return;
   }
-
 
   // Start immediately
   onTrigger();            // Expression-specific setup
