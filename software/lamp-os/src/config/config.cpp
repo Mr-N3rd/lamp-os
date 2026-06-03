@@ -262,12 +262,27 @@ void Config::loadDispositionsFromPrefs_() {
   dispositions_.erase(last, dispositions_.end());
 }
 
-void Config::persistDispositions_() {
-  if (!prefs) return;
+bool Config::persistDispositions_() {
+  if (!prefs) return false;
   String out = asDispositionsJson();
-  prefs->begin("lamp", false);
-  prefs->putString("dispositions", out.c_str());
+  // Audit fix: prefs.begin returns false when NVS is full or the partition
+  // is corrupt. A subsequent putString against an unopened handle silently
+  // writes to nothing. Skip the write and let the debouncer keep its dirty
+  // flag so the next flush attempt retries.
+  if (!prefs->begin("lamp", false)) {
+#ifdef LAMP_DEBUG
+    Serial.println("[nvs] prefs.begin failed (dispositions persist)");
+#endif
+    return false;
+  }
+  size_t written = prefs->putString("dispositions", out.c_str());
   prefs->end();
+#ifdef LAMP_DEBUG
+  if (written == 0) {
+    Serial.println("[nvs] dispositions putString wrote 0 bytes");
+  }
+#endif
+  return written > 0;
 }
 
 uint8_t Config::getDisposition(const std::string& peerName) const {
@@ -370,14 +385,19 @@ bool Config::setDispositionsFromJson(const char* json, size_t len) {
 
 void Config::maybeFlushDispositions(uint32_t nowMs) {
   if (!dispositionsDebouncer_.shouldFlush(nowMs)) return;
-  persistDispositions_();
-  dispositionsDebouncer_.clear();
+  // Only clear the debouncer on a successful write; on failure leave it
+  // dirty so the next flush attempt retries (safer default — the user's
+  // slider input has nowhere else to go).
+  if (persistDispositions_()) {
+    dispositionsDebouncer_.clear();
+  }
 }
 
 void Config::flushDispositionsNow() {
   if (!dispositionsDebouncer_.dirty()) return;
-  persistDispositions_();
-  dispositionsDebouncer_.clear();
+  if (persistDispositions_()) {
+    dispositionsDebouncer_.clear();
+  }
 }
 
 JsonDocument Config::asJsonDocument() {

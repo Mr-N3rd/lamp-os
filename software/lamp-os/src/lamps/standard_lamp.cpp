@@ -837,11 +837,28 @@ void loop() {
 #ifdef LAMP_DEBUG
       Serial.println("[loop] settingsBlob: factoryReset sentinel, wiping NVS");
 #endif
-      prefs.begin("lamp", false);
-      prefs.clear();
-      prefs.end();
-      ble_control::notifyStateChange();
-      lamp::fadeOutRebootRequested = true;
+      // Audit fix: guard both prefs.begin AND prefs.clear. If begin returns
+      // false (NVS full / partition corrupt) we must NOT putString/clear
+      // against an unopened handle, and we must NOT flag a reboot — leaving
+      // the lamp running with its previous state is better than rebooting
+      // into an unknown half-cleared state. Same for a clear() that returns
+      // false: skip the reboot, keep current state, log and move on.
+      if (!prefs.begin("lamp", false)) {
+#ifdef LAMP_DEBUG
+        Serial.println("[nvs] prefs.begin failed (factory reset)");
+#endif
+      } else {
+        bool cleared = prefs.clear();
+        prefs.end();
+        if (cleared) {
+          ble_control::notifyStateChange();
+          lamp::fadeOutRebootRequested = true;
+        } else {
+#ifdef LAMP_DEBUG
+          Serial.println("[nvs] prefs.clear failed; skipping reboot flag");
+#endif
+        }
+      }
     } else {
       JsonDocument fullDoc = config.asJsonDocument();
       JsonObject full = fullDoc.as<JsonObject>();
@@ -866,21 +883,30 @@ void loop() {
       String mergedJson;
       serializeJson(fullDoc, mergedJson);
 
-      prefs.begin("lamp", false);
-      size_t written = prefs.putString("cfg", mergedJson.c_str());
-      prefs.end();
-
-      if (written > 0) {
+      // Audit fix: capture prefs.begin() — if it returns false (NVS full or
+      // partition corrupt) putString writes silently to nothing. Skip the
+      // putString and do NOT flag a reboot; the user's settings stay in
+      // RAM and the next save attempt may succeed.
+      if (!prefs.begin("lamp", false)) {
 #ifdef LAMP_DEBUG
-        Serial.printf("[loop] settingsBlob: persisted %u bytes, fading out for reboot\n",
-                      (unsigned)written);
+        Serial.println("[nvs] prefs.begin failed (settings_blob persist)");
 #endif
-        ble_control::notifyStateChange();
-        lamp::fadeOutRebootRequested = true;
       } else {
+        size_t written = prefs.putString("cfg", mergedJson.c_str());
+        prefs.end();
+
+        if (written > 0) {
 #ifdef LAMP_DEBUG
-        Serial.printf("[loop] settingsBlob: putString failed\n");
+          Serial.printf("[loop] settingsBlob: persisted %u bytes, fading out for reboot\n",
+                        (unsigned)written);
 #endif
+          ble_control::notifyStateChange();
+          lamp::fadeOutRebootRequested = true;
+        } else {
+#ifdef LAMP_DEBUG
+          Serial.printf("[loop] settingsBlob: putString failed\n");
+#endif
+        }
       }
     }
     // settings_blob can rewrite any subset of sections; cheapest correct

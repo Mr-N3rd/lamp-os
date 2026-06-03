@@ -208,7 +208,10 @@ class Config {
   std::vector<std::pair<std::string, uint8_t>> dispositions_;
   DispositionDebouncer dispositionsDebouncer_{kDispositionFlushIdleMs};
   void loadDispositionsFromPrefs_();
-  void persistDispositions_();
+  // Returns true when the NVS write succeeded; false if prefs.begin() failed
+  // (NVS full / partition corrupt). Callers should leave the dirty flag set
+  // on failure so the next flush attempt retries.
+  bool persistDispositions_();
 
   // ── Cached JSON per BLE section (audit fix #6) ────────────────────────
   // Defaults: all dirty=true so the first cached() call computes and
