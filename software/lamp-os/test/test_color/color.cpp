@@ -18,6 +18,7 @@
 #include <unity.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace lamp {
@@ -34,6 +35,7 @@ class Color {
 };
 
 Color hexStringToColor(std::string inHexString);
+std::string colorToHexString(Color inColor);
 
 }  // namespace lamp
 
@@ -157,6 +159,37 @@ void test_invalid_hash_at_wrong_position_returns_default() {
   TEST_ASSERT_TRUE(result == lamp::Color());
 }
 
+// ---------------------------------------------------------------------------
+// colorToHexString — audit fix [HIGH]: replaced std::format with snprintf
+// to drop tens of KB of <format>/locale machinery from flash. These pin the
+// exact byte-for-byte output (lowercase, 9 chars including '#') so we don't
+// accidentally regress case, length, or any downstream JSON consumer.
+// ---------------------------------------------------------------------------
+
+void test_color_to_hex_known_value_lowercase() {
+  std::string s = lamp::colorToHexString(lamp::Color(0xFF, 0x00, 0x80, 0xFF));
+  TEST_ASSERT_EQUAL_STRING("#ff0080ff", s.c_str());
+  TEST_ASSERT_EQUAL_UINT32(9, s.size());
+}
+
+void test_color_to_hex_all_zeros() {
+  std::string s = lamp::colorToHexString(lamp::Color(0, 0, 0, 0));
+  TEST_ASSERT_EQUAL_STRING("#00000000", s.c_str());
+  TEST_ASSERT_EQUAL_UINT32(9, s.size());
+}
+
+void test_color_to_hex_all_ff() {
+  std::string s = lamp::colorToHexString(lamp::Color(0xFF, 0xFF, 0xFF, 0xFF));
+  TEST_ASSERT_EQUAL_STRING("#ffffffff", s.c_str());
+}
+
+void test_color_round_trip() {
+  lamp::Color in(0x12, 0x34, 0x56, 0x78);
+  std::string s = lamp::colorToHexString(in);
+  lamp::Color out = lamp::hexStringToColor(s);
+  TEST_ASSERT_TRUE(in == out);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
 
@@ -179,6 +212,11 @@ int main(int, char**) {
   RUN_TEST(test_invalid_hex_single_bad_char_returns_default);
   RUN_TEST(test_invalid_hex_special_chars_returns_default);
   RUN_TEST(test_invalid_hash_at_wrong_position_returns_default);
+
+  RUN_TEST(test_color_to_hex_known_value_lowercase);
+  RUN_TEST(test_color_to_hex_all_zeros);
+  RUN_TEST(test_color_to_hex_all_ff);
+  RUN_TEST(test_color_round_trip);
 
   return UNITY_END();
 }
@@ -230,6 +268,14 @@ Color hexStringToColor(std::string inHexString) {
   output.b = b;
   output.w = w;
   return output;
+}
+
+// Mirror of the production snprintf-based implementation in
+// src/util/color.cpp. 10-byte stack buffer, no std::format, lowercase.
+std::string colorToHexString(Color inColor) {
+  char buf[10];
+  std::snprintf(buf, sizeof(buf), "#%02x%02x%02x%02x", inColor.r, inColor.g, inColor.b, inColor.w);
+  return std::string(buf, 9);
 }
 
 }  // namespace lamp

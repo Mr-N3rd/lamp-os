@@ -2,12 +2,22 @@
 
 #include <cmath>
 #include <cstdint>
-#include <format>
+#include <cstdio>
 #include <string>
 
 namespace lamp {
+// Audit fix [HIGH]: std::format pulled in tens of KB of <format> machinery
+// (locale + facet code) and allocated a std::string per call. Every persist
+// and serialize path that touches a color palette went through here. Replace
+// with snprintf into a 10-byte stack buffer (9 chars + NUL), then construct
+// the returned std::string from exactly 9 chars. Lowercase preserved to
+// match the previous "{:02x}" output byte-for-byte — callers (config.cpp,
+// expression_invocation.cpp, standard_lamp.cpp) serialize this directly
+// into JSON, and hexStringToColor accepts both cases on the way back in.
 std::string colorToHexString(Color inColor) {
-  return std::format("#{:02x}{:02x}{:02x}{:02x}", inColor.r, inColor.g, inColor.b, inColor.w);
+  char buf[10];
+  std::snprintf(buf, sizeof(buf), "#%02x%02x%02x%02x", inColor.r, inColor.g, inColor.b, inColor.w);
+  return std::string(buf, 9);
 };
 
 namespace {
