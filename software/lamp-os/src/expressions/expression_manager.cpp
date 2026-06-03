@@ -125,6 +125,9 @@ void ExpressionManager::clear() {
 bool ExpressionManager::triggerExpression(const std::string& type) {
   bool triggered = false;
   const ExpressionEntry* firstFired = nullptr;
+  // Suppress per-entry cascade callbacks from Expression::trigger() — we
+  // batch a single cascade for the logical trigger after the loop.
+  suppressCascade_ = true;
   for (auto& entry : expressions) {
     if (entry.type == type && entry.expression) {
       entry.expression->trigger();
@@ -132,6 +135,7 @@ bool ExpressionManager::triggerExpression(const std::string& type) {
       if (!firstFired) firstFired = &entry;
     }
   }
+  suppressCascade_ = false;
   // Cascade once per logical trigger, not once per entry — a TARGET_BOTH
   // expression has two entries (shade + base) but should fan out a single
   // invocation that receivers' own managers expand back to both sides.
@@ -142,6 +146,7 @@ bool ExpressionManager::triggerExpression(const std::string& type) {
 bool ExpressionManager::triggerExpression(const std::string& type, ExpressionTarget target) {
   bool triggered = false;
   const ExpressionEntry* firstFired = nullptr;
+  suppressCascade_ = true;
   for (auto& entry : expressions) {
     if (entry.type == type && entry.expression && entry.expression->getTarget() == target) {
       entry.expression->trigger();
@@ -149,13 +154,28 @@ bool ExpressionManager::triggerExpression(const std::string& type, ExpressionTar
       if (!firstFired) firstFired = &entry;
     }
   }
+  suppressCascade_ = false;
   if (firstFired) maybeCascade(*firstFired);
   return triggered;
+}
+
+void ExpressionManager::onExpressionFired(Expression* e) {
+  if (suppressCascade_ || !e) return;
+  for (auto& entry : expressions) {
+    if (entry.expression.get() == e) {
+      maybeCascade(entry);
+      return;
+    }
+  }
 }
 
 bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
   ExpressionTarget invTarget = static_cast<ExpressionTarget>(inv.target);
   bool triggered = false;
+  // Loop-break invariant: remote-arrived invocations MUST NOT re-cascade.
+  // Expression::trigger() now calls onExpressionFired unconditionally, so
+  // we set the suppress flag for the duration of this remote dispatch.
+  suppressCascade_ = true;
   for (auto& entry : expressions) {
     if (entry.type != inv.type || !entry.expression) continue;
     // TARGET_BOTH invocations fire any entry of this type; specific target
@@ -183,8 +203,8 @@ bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv) {
       entry.expression->trigger();
     }
     triggered = true;
-    // Loop-break invariant: NEVER cascade on a remote-triggered invocation.
   }
+  suppressCascade_ = false;
   return triggered;
 }
 

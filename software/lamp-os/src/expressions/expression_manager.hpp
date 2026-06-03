@@ -41,6 +41,11 @@ class ExpressionManager {
   FrameBuffer* shadeBuffer = nullptr;
   FrameBuffer* baseBuffer = nullptr;
   ShowReceiver* showReceiver_ = nullptr;
+  // Set during the manager's own trigger* loops so per-entry Expression::trigger()
+  // callbacks don't fan out a cascade we're already handling explicitly (or
+  // intentionally skipping for remote-arrived invocations). Loop-task only —
+  // no concurrency.
+  bool suppressCascade_ = false;
 
   // Send the cascade fan-out for an expression that just fired locally,
   // if its config opts in via the cascadeEnabled parameter. No-op when
@@ -104,6 +109,15 @@ class ExpressionManager {
    *        the structural loop break that makes flood propagation safe.
    */
   bool triggerInvocation(const ExpressionInvocation& inv);
+
+  /**
+   * @brief Called by Expression::trigger() after onTrigger() runs, regardless
+   *        of how trigger() was reached (auto-interval from control(),
+   *        internal chain triggers, etc.). Looks up the entry by pointer and
+   *        runs the cascade convention. Suppressed when the manager's own
+   *        trigger* loops are running so they can batch cascade themselves.
+   */
+  void onExpressionFired(Expression* e);
 
   std::vector<Color> getExpressionColors(const std::string& type) const;
 
