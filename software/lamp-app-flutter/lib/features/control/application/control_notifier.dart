@@ -12,6 +12,7 @@ import '../../../core/ble/write_coalescer.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../domain/lamp_color.dart';
 import '../domain/sections.dart';
+import '../../social/domain/social_mode.dart';
 import 'advanced_session.dart';
 import 'auth_client.dart';
 import 'control_state.dart';
@@ -324,7 +325,8 @@ class ControlNotifier extends _$ControlNotifier {
   bool _isLampDirty(LampSection a, LampSection b) =>
       a.brightness != b.brightness ||
       a.name != b.name ||
-      a.advancedEnabled != b.advancedEnabled;
+      a.advancedEnabled != b.advancedEnabled ||
+      a.socialMode != b.socialMode;
 
   bool _isBaseDirty(BaseSection a, BaseSection b) =>
       a.ac != b.ac ||
@@ -416,6 +418,7 @@ class ControlNotifier extends _$ControlNotifier {
         'brightness': cur.lamp.brightness,
         'name': cur.lamp.name,
         'advancedEnabled': cur.lamp.advancedEnabled,
+        'socialMode': cur.lamp.socialMode.wire,
         // lamp.password is set by the setup-service apply path; never
         // round-trip it via settingsBlob.
       };
@@ -555,6 +558,7 @@ class ControlNotifier extends _$ControlNotifier {
         name: cur.lamp.name,
         brightness: v,
         advancedEnabled: cur.lamp.advancedEnabled,
+        socialMode: cur.lamp.socialMode,
       ),
     ));
     _brightnessWriter?.schedule(Uint8List.fromList([v]));
@@ -710,6 +714,7 @@ class ControlNotifier extends _$ControlNotifier {
         name: name,
         brightness: cur.lamp.brightness,
         advancedEnabled: cur.lamp.advancedEnabled,
+        socialMode: cur.lamp.socialMode,
       ),
     ));
   }
@@ -722,6 +727,23 @@ class ControlNotifier extends _$ControlNotifier {
         name: cur.lamp.name,
         brightness: cur.lamp.brightness,
         advancedEnabled: v,
+        socialMode: cur.lamp.socialMode,
+      ),
+    ));
+  }
+
+  /// Personality. State-only; rides the global Save → settings_blob path
+  /// (mirrors setLampName / setLampAdvancedEnabled). The lamp picks up
+  /// the new mode after the post-save reboot.
+  Future<void> setLampSocialMode(SocialMode mode) async {
+    final cur = state.value;
+    if (cur == null) return;
+    state = AsyncData(cur.copyWith(
+      lamp: LampSection(
+        name: cur.lamp.name,
+        brightness: cur.lamp.brightness,
+        advancedEnabled: cur.lamp.advancedEnabled,
+        socialMode: mode,
       ),
     ));
   }

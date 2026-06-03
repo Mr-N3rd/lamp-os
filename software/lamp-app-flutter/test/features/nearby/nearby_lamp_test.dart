@@ -4,7 +4,7 @@ import 'package:lamp_app/features/nearby/domain/nearby_lamp.dart';
 void main() {
   group('isFactoryDefault', () {
     NearbyLamp lamp({
-      String name = 'standard',
+      String name = 'stray lamp',
       int baseRgb = 0x300783,
       int shadeRgb = 0x000000,
     }) =>

@@ -28,4 +28,9 @@ abstract class BleUuids {
   // this to (a) force effectiveHomeMode TRUE during BT preview, and
   // (b) route CHAR_BRIGHTNESS writes to home.brightness vs lamp.brightness.
   static const homeModeFocus  = '5f64f4e5-d6d9-4a44-9b3f-3a8d6f7e6b40';
+  // social_dispositions (read + write, auth-gated): JSON map of peer name
+  // to disposition 1..5 (salty..neutral..smitten). Read returns the full
+  // map; write replaces it. Persisted firmware-side in a separate NVS key
+  // so it doesn't bloat CHAR_LAMP_SECTION.
+  static const socialDispositions = '5f64f4e6-d6d9-4a44-9b3f-3a8d6f7e6b40';
 }

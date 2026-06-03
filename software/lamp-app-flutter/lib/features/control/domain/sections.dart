@@ -1,3 +1,4 @@
+import '../../social/domain/social_mode.dart';
 import 'lamp_color.dart';
 
 /// CHAR_LAMP_SECTION payload, see firmware Config::asLampJson.
@@ -6,16 +7,20 @@ class LampSection {
     required this.name,
     required this.brightness,
     required this.advancedEnabled,
+    required this.socialMode,
   });
 
   final String name;
   final int brightness;
   final bool advancedEnabled;
+  final SocialMode socialMode;
 
   factory LampSection.fromJson(Map<String, dynamic> json) => LampSection(
         name: (json['name'] as String?) ?? '',
         brightness: (json['brightness'] as num?)?.toInt() ?? 100,
         advancedEnabled: json['advancedEnabled'] as bool? ?? false,
+        socialMode:
+            SocialMode.fromWire((json['socialMode'] as num?)?.toInt()),
       );
 }
 
