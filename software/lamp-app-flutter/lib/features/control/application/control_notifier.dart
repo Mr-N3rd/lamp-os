@@ -726,6 +726,102 @@ class ControlNotifier extends _$ControlNotifier {
     ));
   }
 
+  /// Change the lamp's auth password. Writes a partial settings_blob with
+  /// just `{lamp: {password: newPassword}}` — same path the onboarding
+  /// claim uses to set the initial password. The lamp drains the write,
+  /// commits the new password to NVS, and reboots; we then reconnect and
+  /// reauth with the new password.
+  ///
+  /// Inventory is updated to the new password BEFORE the BLE write so the
+  /// post-reboot reconnect picks up the new credentials. If the write
+  /// fails (anything other than the expected reboot-disconnect), inventory
+  /// rolls back to the old password.
+  ///
+  /// Mirrors `save()`'s reboot/reconnect cadence (5s delay, then reconnect
+  /// + reauth + reread sections) and drives `lampSaveStatusProvider` so
+  /// the UI shows "Saving changes…" instead of generic "Connecting…".
+  Future<void> setLampPassword(String newPassword) async {
+    final cur = state.value;
+    if (cur == null) return;
+    if (!cur.connected) return;
+
+    final ble = ref.read(bleClientProvider);
+
+    // Snapshot for rollback on real failure.
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final entry = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () =>
+          throw StateError('lamp $_deviceId not in inventory'),
+    );
+    final oldPassword = entry.controlPassword;
+
+    // Update inventory FIRST so the post-reboot reconnect uses the new
+    // credentials. If the write fails (non-reboot error), roll back.
+    await ref
+        .read(inventoryNotifierProvider.notifier)
+        .updatePassword(_deviceId, newPassword);
+
+    final blob = <String, dynamic>{'lamp': {'password': newPassword}};
+    final blobJson = jsonEncode(blob);
+    final pw = oldPassword ?? '';
+    final payload = pw.isEmpty
+        ? Uint8List.fromList([
+            LampCrypto.magicPlaintext,
+            ...utf8.encode(blobJson),
+          ])
+        : await LampCrypto.encryptOp(
+            op: blob,
+            password: pw,
+            saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+            charShortName: 'settingsBlob',
+          );
+
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.settingsBlob,
+        payload,
+        allowLongWrite: true,
+      );
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      final looksLikeReboot =
+          msg.contains('not connected') || msg.contains('disconnect');
+      if (!looksLikeReboot) {
+        // Genuine failure — restore the old credentials so the next
+        // reconnect attempt uses what the firmware still actually has.
+        await ref
+            .read(inventoryNotifierProvider.notifier)
+            .updatePassword(_deviceId, oldPassword);
+        rethrow;
+      }
+    }
+
+    // Reuse the save()-style reconnect cadence: flip the saving banner,
+    // drop state into AsyncLoading, wait for the lamp to come back, reauth
+    // with the new password (already in inventory).
+    ref.read(lampSaveStatusProvider(_deviceId).notifier).start();
+    state = const AsyncLoading<ControlState>();
+    Future<void>.delayed(const Duration(seconds: 5), () async {
+      if (!ref.mounted) return;
+      try {
+        await ble.connect(_deviceId);
+        await AuthClient(ble: ble).authenticate(
+            deviceId: _deviceId, password: newPassword);
+        final fresh = await _readSections(ble);
+        if (!ref.mounted) return;
+        _original = fresh;
+        state = AsyncData(fresh);
+        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
+      } catch (e, st) {
+        if (ref.mounted) state = AsyncError(e, st);
+        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
+      }
+    });
+  }
+
   Future<void> setHomeSsid(String ssid) async {
     final cur = state.value;
     if (cur == null) return;

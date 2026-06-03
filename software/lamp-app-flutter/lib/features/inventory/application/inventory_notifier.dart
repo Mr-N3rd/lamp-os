@@ -57,4 +57,17 @@ class InventoryNotifier extends _$InventoryNotifier {
     }).toList();
     await _persist(updated);
   }
+
+  /// Set the auth password the app uses to authenticate with this lamp.
+  /// Called by ControlNotifier.setLampPassword right before pushing the
+  /// new password to the firmware, so the post-reboot reconnect uses the
+  /// new value. Passing null clears it (matches the factory-fresh state).
+  Future<void> updatePassword(String id, String? password) async {
+    final current = state.value ?? const [];
+    final updated = current.map((l) {
+      if (l.id != id) return l;
+      return l.copyWith(controlPassword: password);
+    }).toList();
+    await _persist(updated);
+  }
 }
