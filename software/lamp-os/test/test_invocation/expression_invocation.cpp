@@ -22,8 +22,16 @@ namespace lamp {
 constexpr const char* kParamCascadeEnabled = "cascadeEnabled";
 constexpr const char* kParamCascadeStaggerMs = "cascadeStaggerMs";
 
+// Mirrors the production ceiling. A remote ESP-NOW peer can send any uint32_t
+// `delayMs`; an unbounded value would pin a pendingTriggers slot for ~49 days.
+// 10 s comfortably exceeds typical cascade staggers (<2 s) while keeping a
+// full queue self-clearing in seconds, not weeks.
+constexpr uint32_t kMaxDelayMs = 10000;
+
 std::map<std::string, uint32_t> parametersWithoutCascadeKeys(
     const std::map<std::string, uint32_t>& parameters);
+
+uint32_t clampDelayMs(uint32_t v);
 
 }  // namespace lamp
 
@@ -80,6 +88,22 @@ void test_strip_does_not_mutate_input() {
   TEST_ASSERT_EQUAL(1, (int)in["cascadeEnabled"]);
 }
 
+void test_clamp_delay_passes_under_limit() {
+  TEST_ASSERT_EQUAL_UINT32(5000u, lamp::clampDelayMs(5000u));
+}
+
+void test_clamp_delay_caps_at_ceiling() {
+  TEST_ASSERT_EQUAL_UINT32(lamp::kMaxDelayMs, lamp::clampDelayMs(60000u));
+}
+
+void test_clamp_delay_handles_max_uint32() {
+  TEST_ASSERT_EQUAL_UINT32(lamp::kMaxDelayMs, lamp::clampDelayMs(0xFFFFFFFFu));
+}
+
+void test_clamp_delay_passes_zero() {
+  TEST_ASSERT_EQUAL_UINT32(0u, lamp::clampDelayMs(0u));
+}
+
 // Re-implementation under test, kept here in the test file to match the
 // existing native-env convention (test/gradient.cpp re-declares Color the
 // same way). Production code under src/expressions/expression_invocation.cpp
@@ -96,6 +120,10 @@ std::map<std::string, uint32_t> parametersWithoutCascadeKeys(
   }
   return out;
 }
+
+uint32_t clampDelayMs(uint32_t v) {
+  return v > kMaxDelayMs ? kMaxDelayMs : v;
+}
 }  // namespace lamp
 
 int main() {
@@ -106,5 +134,9 @@ int main() {
   RUN_TEST(test_strip_is_noop_when_no_cascade_keys);
   RUN_TEST(test_strip_handles_empty_map);
   RUN_TEST(test_strip_does_not_mutate_input);
+  RUN_TEST(test_clamp_delay_passes_under_limit);
+  RUN_TEST(test_clamp_delay_caps_at_ceiling);
+  RUN_TEST(test_clamp_delay_handles_max_uint32);
+  RUN_TEST(test_clamp_delay_passes_zero);
   return UNITY_END();
 }

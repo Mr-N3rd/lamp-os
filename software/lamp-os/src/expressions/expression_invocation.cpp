@@ -15,6 +15,10 @@ std::map<std::string, uint32_t> parametersWithoutCascadeKeys(
   return out;
 }
 
+uint32_t clampDelayMs(uint32_t v) {
+  return v > kMaxDelayMs ? kMaxDelayMs : v;
+}
+
 void serializeInvocation(const ExpressionInvocation& inv, std::string& out) {
   JsonDocument doc;
   doc["char"] = "triggerExpression";
@@ -62,7 +66,9 @@ bool parseInvocation(JsonObjectConst doc, ExpressionInvocation& out) {
   const uint32_t t = doc["target"] | 3;
   out.target = (t >= 1 && t <= 3) ? static_cast<uint8_t>(t) : 3;
 
-  out.delayMs = doc["delayMs"] | 0;
+  // delayMs from a remote peer is untrusted: an unbounded value would hold
+  // a pendingTriggers slot for ~49 days. Clamp to kMaxDelayMs (see header).
+  out.delayMs = clampDelayMs(doc["delayMs"] | 0u);
 
   out.colors.clear();
   JsonArrayConst colors = doc["colors"].as<JsonArrayConst>();

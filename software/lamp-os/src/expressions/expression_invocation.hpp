@@ -36,6 +36,18 @@ struct ExpressionInvocation {
 constexpr const char* kParamCascadeEnabled = "cascadeEnabled";
 constexpr const char* kParamCascadeStaggerMs = "cascadeStaggerMs";
 
+// Upper bound (ms) we'll accept for a remote-triggered `delayMs`. ESP-NOW
+// peers are untrusted: an unclamped uint32_t can schedule a fire ~49 days
+// out, which holds a pendingTriggers slot indefinitely — 16 such payloads
+// from a rogue peer would wedge the queue. 10 s comfortably exceeds typical
+// cascade staggers (<2 s) while keeping a full queue self-clearing in
+// seconds, not weeks. Applied in parseInvocation via clampDelayMs().
+constexpr uint32_t kMaxDelayMs = 10000;
+
+// Clamp `v` to [0, kMaxDelayMs]. Pure; safe to call on attacker-controlled
+// values. Exposed for native unit testing.
+uint32_t clampDelayMs(uint32_t v);
+
 // Build a copy of `parameters` with the cascade-control keys removed.
 // Used by ExpressionManager when serializing an invocation for the wire —
 // receivers should never see the cascade keys, both to keep the message
