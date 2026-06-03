@@ -358,6 +358,103 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
   // reboot whose UX over the grid needs more thought. Follow-up plan.
 }
 
+// Origin transport for the unified cascade-receive router. The two paths
+// differ only in (a) how `srcMac` is acquired and (b) where the "is this
+// for us / should we forward" decision is taken. See applyRemoteOpRouted.
+enum class RemoteOpTransport { BLE, EspNow };
+
+// Unified cascade-receive router. Single place where the BLE remoteOp drain
+// and the ESP-NOW CONTROL_OP receive path converge — both used to duplicate
+// the self-vs-broadcast logic, the ApplyX dispatch, and the forwarding
+// policy. Audit MEDIUM finding (two parallel cascade-receive paths).
+//
+// Inputs:
+//   `payloadJson`  : NUL-terminated JSON. For BLE this is the raw GATT
+//                    write payload; for ESP-NOW it's the CONTROL_OP payload
+//                    that ShowReceiver already passed through MAC + dedup
+//                    filtering on the WiFi task.
+//   `srcMac`       : Sender's MAC. For ESP-NOW this is the original CONTROL_OP
+//                    `sourceMac`. For BLE there is no real network source —
+//                    the caller passes selfMac so app-driven rapid triggers
+//                    coalesce against each other on the receive side.
+//   `origin`       : Selects the small bit of asymmetry between the two
+//                    transports (see comments below). Everything else —
+//                    JSON dispatch (`applyRemoteOpLocal`), RecentCascade
+//                    dedup + suppressCascade_ invariant (both internal to
+//                    ExpressionManager and consulted via triggerInvocation),
+//                    delayed-trigger queue, settings-not-forwarded policy —
+//                    is shared.
+//
+// What still differs between BLE and EspNow, handled here:
+//   - For BLE the payload arrives wrapped with a top-level `targetMac`
+//     ("broadcast" | "AA:BB:..."). The router strips it, decides self /
+//     broadcast / unicast, applies locally when self-or-broadcast, and
+//     forwards over ESP-NOW (broadcast or unicast) when not-self.
+//   - For EspNow the addressed-to-us check (`forUs`) and the once-only
+//     grid rebroadcast already happened on the WiFi task inside
+//     ShowReceiver::handleRecv (kept there for latency: rebroadcast doesn't
+//     wait on the loop drain). By the time the slot is drained the payload
+//     is unconditionally for-us, so the router just applies locally.
+//
+// settings forwarding is still intentionally deferred — same comment as in
+// applyRemoteOpLocal. Preserving prior behavior; not in scope to fix here.
+static void applyRemoteOpRouted(const char* payloadJson, size_t len,
+                                const uint8_t srcMac[6],
+                                RemoteOpTransport origin) {
+  if (origin == RemoteOpTransport::EspNow) {
+    // ShowReceiver::handleRecv (WiFi task) already gated on targetMac == myMac
+    // || broadcast, and already rebroadcast once for grid relay. Nothing for
+    // the router to decide — just dispatch locally on Core 1.
+    applyRemoteOpLocal(payloadJson, len, srcMac);
+    return;
+  }
+
+  // BLE origin. The CHAR_REMOTE_OP drain handed us a payload that may carry a
+  // top-level `targetMac` field selecting self / broadcast / a specific peer.
+  JsonDocument doc;
+  if (deserializeJson(doc, payloadJson, len) != DeserializationError::Ok) return;
+
+  const char* tgtStr = doc["targetMac"].as<const char*>();
+  uint8_t targetMac[6] = {0};
+  bool isBroadcast = false;
+  bool isSelf = false;
+  if (tgtStr) {
+    if (strcmp(tgtStr, "broadcast") == 0) {
+      memset(targetMac, 0xFF, 6);
+      isBroadcast = true;
+    } else if (sscanf(tgtStr, "%02hhX:%02hhX:%02hhX:%02hhX:%02hhX:%02hhX",
+                      &targetMac[0], &targetMac[1], &targetMac[2],
+                      &targetMac[3], &targetMac[4], &targetMac[5]) == 6) {
+      uint8_t myMac[6];
+      showReceiver.getMyMac(myMac);
+      isSelf = (memcmp(targetMac, myMac, 6) == 0);
+    }
+  }
+
+  // Strip targetMac before applying/forwarding — applyRemoteOpLocal and the
+  // CONTROL_OP payload both expect the unwrapped op shape.
+  doc.remove("targetMac");
+  std::string payload;
+  serializeJson(doc, payload);
+
+  if (isSelf || isBroadcast) {
+    // applyRemoteOpLocal's srcMac is the *original* sender for the cascade
+    // coalesce. For BLE-initiated ops the "sender" is this lamp's own app
+    // session — `srcMac` was already populated with selfMac by the caller.
+    applyRemoteOpLocal(payload.data(), payload.size(), srcMac);
+  }
+  if (!isSelf) {
+    // Forward over ESP-NOW. broadcast => fan out to all peers; unicast =>
+    // targets the specific MAC. ShowReceiver::sendControlOp also records
+    // its own seq into controlOpDedup_ so the rebroadcast we'll get back
+    // doesn't loop in as an "apply locally".
+    showReceiver.sendControlOp(
+        targetMac,
+        reinterpret_cast<const uint8_t*>(payload.data()),
+        payload.size());
+  }
+}
+
 // Forward decl — defined later, alongside effectiveBrightness which
 // shares the same gate. initBehaviors uses it to seed compositor.begin.
 static bool calculateEffectiveHomeMode();
@@ -957,7 +1054,7 @@ void loop() {
   }
 
   // Drain inbound ESP-NOW CONTROL_OP (deferred from ShowReceiver's WiFi
-  // task) — JSON parse + local dispatch.
+  // task) — JSON parse + local dispatch via the unified cascade router.
   if (pendingInboundOpJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
     uint8_t srcMac[6];
@@ -965,60 +1062,22 @@ void loop() {
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain inboundOp len=%u\n", (unsigned)len);
 #endif
-    applyRemoteOpLocal(buf, len, srcMac);
+    applyRemoteOpRouted(buf, len, srcMac, RemoteOpTransport::EspNow);
   }
 
-  // Drain BLE CHAR_REMOTE_OP writes: either apply locally (targetMac is
-  // self or "broadcast") or forward over ESP-NOW to the addressed peer.
+  // Drain BLE CHAR_REMOTE_OP writes through the same router — it decides
+  // apply-locally / forward / both from the payload's targetMac field.
+  // BLE has no real network source MAC; pass selfMac so app-driven rapid
+  // triggers coalesce against each other on the receive side.
   if (pendingRemoteOpJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
     uint16_t len = pendingRemoteOpJson.drain(pendingMux, buf);
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain remoteOp len=%u\n", (unsigned)len);
 #endif
-
-    JsonDocument doc;
-    if (deserializeJson(doc, buf, len) == DeserializationError::Ok) {
-      const char* tgtStr = doc["targetMac"].as<const char*>();
-      uint8_t targetMac[6] = {0};
-      bool isBroadcast = false;
-      bool isSelf = false;
-      if (tgtStr) {
-        if (strcmp(tgtStr, "broadcast") == 0) {
-          memset(targetMac, 0xFF, 6);
-          isBroadcast = true;
-        } else if (sscanf(tgtStr, "%02hhX:%02hhX:%02hhX:%02hhX:%02hhX:%02hhX",
-                          &targetMac[0], &targetMac[1], &targetMac[2],
-                          &targetMac[3], &targetMac[4], &targetMac[5]) == 6) {
-          uint8_t myMac[6];
-          showReceiver.getMyMac(myMac);
-          isSelf = (memcmp(targetMac, myMac, 6) == 0);
-        }
-      }
-
-      // Strip targetMac before forwarding/applying — the payload should be
-      // the same shape applyRemoteOpLocal expects.
-      doc.remove("targetMac");
-      std::string payload;
-      serializeJson(doc, payload);
-
-      if (isSelf || isBroadcast) {
-        // BLE-initiated remoteOp applied locally — the "sender" is this
-        // lamp's own app session. Use myMac_ so app-driven rapid triggers
-        // coalesce against each other on the receive side.
-        uint8_t selfMac[6];
-        showReceiver.getMyMac(selfMac);
-        applyRemoteOpLocal(payload.data(), payload.size(), selfMac);
-      }
-      if (!isSelf) {
-        // Forward over the grid. For broadcast this also bounces to all
-        // peers; for unicast it targets the specific MAC.
-        showReceiver.sendControlOp(
-            targetMac,
-            reinterpret_cast<const uint8_t*>(payload.data()),
-            payload.size());
-      }
-    }
+    uint8_t selfMac[6];
+    showReceiver.getMyMac(selfMac);
+    applyRemoteOpRouted(buf, len, selfMac, RemoteOpTransport::BLE);
   }
 
   // Fire any delayed triggerExpression invocations whose deadline has passed.
