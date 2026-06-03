@@ -603,10 +603,12 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
       c->setValue("");
       return;
     }
-    JsonDocument doc = s_config->asJsonDocument();
-    String json;
-    serializeJson(doc, json);
-    c->setValue(json.c_str());
+    // Audit fix #6/#7: use the cached blob instead of re-serialising the
+    // entire config on every read. The cache is rebuilt + pushed from
+    // ble_control::tick() on Core 1; the value NimBLE returns from this
+    // onRead is typically its own internal buffer copy, but we defensively
+    // setValue() here in case a read arrives before the first tick push.
+    c->setValue(s_config->settingsBlobJsonCached());
   }
 
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
@@ -656,6 +658,18 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
 // characteristics so each stays well under MTU and can grow independently.
 // ---------------------------------------------------------------------------
 
+// Audit fix #6/#7: the section onRead callbacks used to call asXJson() on
+// every BLE read, which (a) re-serialised a fresh JsonDocument on Core 0
+// and (b) walked config.base.colors / knockoutPixels / expressions while
+// Core 1's loop drain could be reallocating the same vectors. The fix is
+// the per-section JSON cache on Config: Core 1 rebuilds the cached string
+// inside ble_control::tick() after any mutation, then pushes the bytes
+// into the NimBLE characteristic via setValue() (NimBLE copies into its
+// own internal buffer). After the push, subsequent GATT reads return
+// NimBLE's copy without re-entering this callback at all — so these
+// onRead bodies are now defensive backstops only, used if a read sneaks
+// in before the first tick push (e.g. during ble_control::start() between
+// service-create and first loop iteration).
 class LampSectionCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     // asLampJson() embeds `lamp.password` when one is set — same auth gate
@@ -665,45 +679,87 @@ class LampSectionCallback : public NimBLECharacteristicCallbacks {
       c->setValue("");
       return;
     }
-    c->setValue(s_config->asLampJson().c_str());
+    c->setValue(s_config->lampSectionJsonCached());
   }
 };
 
 class BaseSectionCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->asBaseJson().c_str());
+    c->setValue(s_config->baseSectionJsonCached());
   }
 };
 
 class ShadeSectionCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->asShadeJson().c_str());
+    c->setValue(s_config->shadeSectionJsonCached());
   }
 };
 
 class ExprSectionCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->asExpressionsJson().c_str());
+    c->setValue(s_config->expressionsSectionJsonCached());
   }
 };
 
 class HomeSectionCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->asHomeModeJson().c_str());
+    c->setValue(s_config->homeSectionJsonCached());
   }
 };
 
-static void notifySection(NimBLECharacteristic* c, const String& json) {
+static void notifySection(NimBLECharacteristic* c, const std::string& json) {
   if (!c) return;
-  c->setValue(json.c_str());
+  c->setValue(json);
   c->notify();
 }
 
-void notifyLampSection()        { notifySection(s_lampSectionChar,  s_config->asLampJson());        }
-void notifyBaseSection()        { notifySection(s_baseSectionChar,  s_config->asBaseJson());        }
-void notifyShadeSection()       { notifySection(s_shadeSectionChar, s_config->asShadeJson());       }
-void notifyExpressionsSection() { notifySection(s_exprSectionChar,  s_config->asExpressionsJson()); }
-void notifyHomeModeSection()    { notifySection(s_homeSectionChar,  s_config->asHomeModeJson());    }
+// Notify helpers — push the cached section JSON to subscribers. These
+// implicitly refresh the cache if dirty (cached accessor rebuilds on
+// demand), so a caller that mutates config + immediately calls notify*
+// always sends the post-mutation value.
+void notifyLampSection()        { notifySection(s_lampSectionChar,  s_config->lampSectionJsonCached());        }
+void notifyBaseSection()        { notifySection(s_baseSectionChar,  s_config->baseSectionJsonCached());        }
+void notifyShadeSection()       { notifySection(s_shadeSectionChar, s_config->shadeSectionJsonCached());       }
+void notifyExpressionsSection() { notifySection(s_exprSectionChar,  s_config->expressionsSectionJsonCached()); }
+void notifyHomeModeSection()    { notifySection(s_homeSectionChar,  s_config->homeSectionJsonCached());        }
+
+// Audit fix #6/#7: per-loop housekeeping on Core 1. For each section
+// whose cache is dirty, rebuild the cached JSON (cheap because it just
+// runs the existing asXJson() builder once) and push to the
+// corresponding NimBLE characteristic via setValue() so subsequent BLE
+// reads on Core 0 are served from NimBLE's own internal buffer copy
+// without re-touching Config.
+//
+// Cheap when nothing is dirty: six bool checks. Hot path runs ~once per
+// loop iteration; mutation-to-push latency is ~1 loop tick (≤ 5 ms in
+// practice).
+//
+// Requires ble_control::tick() to be invoked from the main loop on
+// Core 1. See standard_lamp.cpp::loop().
+void tick() {
+  if (!s_running || !s_config) return;
+  if (s_config->lampSectionDirty() && s_lampSectionChar) {
+    s_lampSectionChar->setValue(s_config->lampSectionJsonCached());
+  }
+  if (s_config->baseSectionDirty() && s_baseSectionChar) {
+    s_baseSectionChar->setValue(s_config->baseSectionJsonCached());
+  }
+  if (s_config->shadeSectionDirty() && s_shadeSectionChar) {
+    s_shadeSectionChar->setValue(s_config->shadeSectionJsonCached());
+  }
+  if (s_config->expressionsSectionDirty() && s_exprSectionChar) {
+    s_exprSectionChar->setValue(s_config->expressionsSectionJsonCached());
+  }
+  if (s_config->homeSectionDirty() && s_homeSectionChar) {
+    s_homeSectionChar->setValue(s_config->homeSectionJsonCached());
+  }
+  // settingsBlob has no read characteristic of its own (CHAR_SETTINGS_BLOB
+  // is write-only; the read path was split into per-section chars). Its
+  // cached accessor is still consumed by SettingsBlobCallback::onRead as
+  // a defensive backstop — left dirty here so the next read triggers a
+  // single rebuild rather than a per-tick rebuild for a value nobody is
+  // currently asking for.
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -794,27 +850,29 @@ void start(lamp::Config* config, Preferences* prefs) {
   s_lampSectionChar = s_service->createCharacteristic(
       CHAR_LAMP_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_lampSectionChar->setCallbacks(new LampSectionCallback());
-  s_lampSectionChar->setValue(s_config->asLampJson().c_str());
+  // Seed via cached accessor: builds the cache once, then NimBLE owns the
+  // copy. Subsequent reads served from NimBLE's buffer without re-walking.
+  s_lampSectionChar->setValue(s_config->lampSectionJsonCached());
 
   s_baseSectionChar = s_service->createCharacteristic(
       CHAR_BASE_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_baseSectionChar->setCallbacks(new BaseSectionCallback());
-  s_baseSectionChar->setValue(s_config->asBaseJson().c_str());
+  s_baseSectionChar->setValue(s_config->baseSectionJsonCached());
 
   s_shadeSectionChar = s_service->createCharacteristic(
       CHAR_SHADE_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_shadeSectionChar->setCallbacks(new ShadeSectionCallback());
-  s_shadeSectionChar->setValue(s_config->asShadeJson().c_str());
+  s_shadeSectionChar->setValue(s_config->shadeSectionJsonCached());
 
   s_exprSectionChar = s_service->createCharacteristic(
       CHAR_EXPR_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_exprSectionChar->setCallbacks(new ExprSectionCallback());
-  s_exprSectionChar->setValue(s_config->asExpressionsJson().c_str());
+  s_exprSectionChar->setValue(s_config->expressionsSectionJsonCached());
 
   s_homeSectionChar = s_service->createCharacteristic(
       CHAR_HOME_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_homeSectionChar->setCallbacks(new HomeSectionCallback());
-  s_homeSectionChar->setValue(s_config->asHomeModeJson().c_str());
+  s_homeSectionChar->setValue(s_config->homeSectionJsonCached());
 
   s_nearbyLampsChar = s_service->createCharacteristic(
       CHAR_NEARBY_LAMPS, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);

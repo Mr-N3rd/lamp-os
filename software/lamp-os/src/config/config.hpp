@@ -90,11 +90,68 @@ class Config {
   // Per-section serializers — each returns a String of just the JSON for
   // that section. Used by the split CHAR_*_SECTION characteristics so each
   // stays well under MTU.
+  //
+  // Audit fix #6: these build a fresh JsonDocument and walk vectors on
+  // every call. The BLE onRead path now uses the *Cached() accessors
+  // below which only rebuild when the corresponding section is dirty.
+  // The raw builders remain for callers that genuinely need a fresh
+  // String (initial seed in ble_control::start, etc.).
   String asLampJson();
   String asBaseJson();
   String asShadeJson();
   String asExpressionsJson();
   String asHomeModeJson();
+
+  // ── Per-section JSON cache (audit fix #6) ─────────────────────────────
+  //
+  // Each section keeps a cached std::string of its serialised JSON plus
+  // a dirty flag. The CHAR_*_SECTION read path on Core 0 just hands
+  // back the cached string via c->setValue(...); NimBLE copies the
+  // bytes into its own internal value buffer, so a subsequent GATT
+  // read returns NimBLE's copy without re-touching Config at all.
+  //
+  // Invalidation is the responsibility of mutation paths on Core 1 —
+  // call invalidateXSection() AFTER mutating any field that feeds
+  // asXJson(). The cache rebuilds lazily inside xSectionJsonCached()
+  // the next time it's read.
+  //
+  // Thread safety: only safe to call from Core 1. The BLE onRead
+  // callback on Core 0 SHOULD NOT call these directly — instead Core 1
+  // proactively rebuilds + pushes via ble_control::tick(), and onRead
+  // becomes a defensive no-op (NimBLE serves its own buffer).
+  //
+  // settingsBlobJsonCached unions all five sections (it's the body of
+  // the full-config read path); any section invalidate also marks the
+  // settings blob dirty.
+  const std::string& lampSectionJsonCached();
+  const std::string& baseSectionJsonCached();
+  const std::string& shadeSectionJsonCached();
+  const std::string& expressionsSectionJsonCached();
+  const std::string& homeSectionJsonCached();
+  const std::string& settingsBlobJsonCached();
+
+  // Mark a section's cache dirty. Cheap — just a bool flip. Call
+  // immediately AFTER mutating any field that contributes to the
+  // section's JSON shape.
+  void invalidateLampSection();
+  void invalidateBaseSection();
+  void invalidateShadeSection();
+  void invalidateExpressionsSection();
+  void invalidateHomeSection();
+  // Convenience: invalidate every section + the settings blob. Used by
+  // bulk-write paths (settings_blob drain).
+  void invalidateAllSections();
+
+  // Per-section dirty inspector — true iff the cache would rebuild on
+  // the next *SectionJsonCached() call. Used by ble_control::tick()
+  // to decide whether to push to the corresponding NimBLE
+  // characteristic this iteration.
+  bool lampSectionDirty() const { return lampSectionDirty_; }
+  bool baseSectionDirty() const { return baseSectionDirty_; }
+  bool shadeSectionDirty() const { return shadeSectionDirty_; }
+  bool expressionsSectionDirty() const { return expressionsSectionDirty_; }
+  bool homeSectionDirty() const { return homeSectionDirty_; }
+  bool settingsBlobDirty() const { return settingsBlobDirty_; }
 
   // Per-peer social disposition (1=salty .. 3=neutral .. 5=smitten). Lives
   // in a SEPARATE NVS key ("dispositions") from the main config blob so the
@@ -144,6 +201,23 @@ class Config {
   DispositionDebouncer dispositionsDebouncer_{kDispositionFlushIdleMs};
   void loadDispositionsFromPrefs_();
   void persistDispositions_();
+
+  // ── Cached JSON per BLE section (audit fix #6) ────────────────────────
+  // Defaults: all dirty=true so the first cached() call computes and
+  // populates the string. After that, mutations on Core 1 must call
+  // invalidateXSection() before reading the cached value again.
+  std::string lampSectionJson_;
+  std::string baseSectionJson_;
+  std::string shadeSectionJson_;
+  std::string expressionsSectionJson_;
+  std::string homeSectionJson_;
+  std::string settingsBlobJson_;
+  bool lampSectionDirty_ = true;
+  bool baseSectionDirty_ = true;
+  bool shadeSectionDirty_ = true;
+  bool expressionsSectionDirty_ = true;
+  bool homeSectionDirty_ = true;
+  bool settingsBlobDirty_ = true;
 };
 }  // namespace lamp
 

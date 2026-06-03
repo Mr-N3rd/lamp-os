@@ -82,6 +82,22 @@ void stop();
 bool isRunning();
 
 /**
+ * @brief Per-loop housekeeping on Core 1. For each section whose JSON
+ *        cache (on Config) is dirty, rebuild it and push the bytes into
+ *        the corresponding NimBLE characteristic via setValue() — so
+ *        Core 0 BLE reads are served from NimBLE's own internal buffer
+ *        without re-walking config vectors on the hot path.
+ *
+ *        Cheap when nothing is dirty: six bool checks. Should be called
+ *        once per main-loop iteration from standard_lamp.cpp::loop().
+ *
+ *        Audit fix #6/#7: closes the cross-core race between BLE GATT
+ *        reads on Core 0 and config-mutating loop drains on Core 1, and
+ *        eliminates the per-read JSON re-serialisation cost.
+ */
+void tick();
+
+/**
  * @brief Send a state-change notification to all subscribed clients.
  */
 void notifyStateChange();

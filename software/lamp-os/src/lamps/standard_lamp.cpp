@@ -649,6 +649,10 @@ void loop() {
         lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
     if (baseStrip)  baseStrip->setBrightness(
         lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    // Invalidate both — brightness can land in either section depending
+    // on whether the app is on the Home Mode page. Two bools is cheap.
+    config.invalidateLampSection();
+    config.invalidateHomeSection();
   }
 
   if (pendingShadeColorsJson.valid) {
@@ -685,6 +689,7 @@ void loop() {
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+    config.invalidateShadeSection();
   }
 
   if (pendingBaseColorsJson.valid) {
@@ -721,6 +726,7 @@ void loop() {
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
+    config.invalidateBaseSection();
   }
 
   if (pendingKnockout.valid) {
@@ -736,6 +742,7 @@ void loop() {
     if (pixel < config.base.px && brightness <= 100) {
       baseKnockoutBehavior.knockoutPixels[pixel] = brightness;
       config.base.knockoutPixels[pixel] = brightness;
+      config.invalidateBaseSection();
     }
   }
 
@@ -811,6 +818,7 @@ void loop() {
         }
       }
     }
+    config.invalidateExpressionsSection();
   }
 
   // settings_blob drain — runs AFTER expressionOp drain so that any
@@ -893,6 +901,10 @@ void loop() {
 #endif
       }
     }
+    // settings_blob can rewrite any subset of sections; cheapest correct
+    // path is to invalidate all and let ble_control::tick() rebuild only
+    // what gets actually read on the next BLE round trip.
+    config.invalidateAllSections();
   }
 
   // Disposition map writes — drained AFTER settings_blob so both writers
@@ -1076,6 +1088,10 @@ void loop() {
 
   wifi::tick();
   showReceiver.tick();
+  // Rebuild + push any dirty section JSON to its NimBLE characteristic
+  // so onRead callbacks (Core 0) hand back NimBLE's already-buffered
+  // bytes without walking config vectors. Cheap when nothing's dirty.
+  ble_control::tick();
 
   compositor.tick();
 

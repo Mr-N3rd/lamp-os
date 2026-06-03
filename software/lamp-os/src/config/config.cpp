@@ -460,4 +460,107 @@ String Config::asHomeModeJson() {
   return out;
 }
 
+// ── Per-section JSON cache (audit fix #6) ────────────────────────────────
+//
+// Each accessor:
+//   - If the section is clean, returns the existing cached std::string ref
+//     in O(1) — no JsonDocument allocation, no vector walk.
+//   - If dirty, calls the existing asXJson() builder (which itself builds
+//     a JsonDocument + walks colors/knockoutPixels/etc.), copies into the
+//     member std::string, clears the dirty flag.
+//
+// Thread safety: see config.hpp — only call from Core 1. The BLE onRead
+// callbacks on Core 0 hand back the already-pushed string from NimBLE's
+// internal buffer (ble_control::tick on Core 1 pushes after rebuild).
+
+const std::string& Config::lampSectionJsonCached() {
+  if (lampSectionDirty_) {
+    String s = asLampJson();
+    lampSectionJson_.assign(s.c_str(), s.length());
+    lampSectionDirty_ = false;
+  }
+  return lampSectionJson_;
+}
+
+const std::string& Config::baseSectionJsonCached() {
+  if (baseSectionDirty_) {
+    String s = asBaseJson();
+    baseSectionJson_.assign(s.c_str(), s.length());
+    baseSectionDirty_ = false;
+  }
+  return baseSectionJson_;
+}
+
+const std::string& Config::shadeSectionJsonCached() {
+  if (shadeSectionDirty_) {
+    String s = asShadeJson();
+    shadeSectionJson_.assign(s.c_str(), s.length());
+    shadeSectionDirty_ = false;
+  }
+  return shadeSectionJson_;
+}
+
+const std::string& Config::expressionsSectionJsonCached() {
+  if (expressionsSectionDirty_) {
+    String s = asExpressionsJson();
+    expressionsSectionJson_.assign(s.c_str(), s.length());
+    expressionsSectionDirty_ = false;
+  }
+  return expressionsSectionJson_;
+}
+
+const std::string& Config::homeSectionJsonCached() {
+  if (homeSectionDirty_) {
+    String s = asHomeModeJson();
+    homeSectionJson_.assign(s.c_str(), s.length());
+    homeSectionDirty_ = false;
+  }
+  return homeSectionJson_;
+}
+
+const std::string& Config::settingsBlobJsonCached() {
+  if (settingsBlobDirty_) {
+    JsonDocument doc = asJsonDocument();
+    String s;
+    serializeJson(doc, s);
+    settingsBlobJson_.assign(s.c_str(), s.length());
+    settingsBlobDirty_ = false;
+  }
+  return settingsBlobJson_;
+}
+
+void Config::invalidateLampSection() {
+  lampSectionDirty_ = true;
+  settingsBlobDirty_ = true;
+}
+
+void Config::invalidateBaseSection() {
+  baseSectionDirty_ = true;
+  settingsBlobDirty_ = true;
+}
+
+void Config::invalidateShadeSection() {
+  shadeSectionDirty_ = true;
+  settingsBlobDirty_ = true;
+}
+
+void Config::invalidateExpressionsSection() {
+  expressionsSectionDirty_ = true;
+  settingsBlobDirty_ = true;
+}
+
+void Config::invalidateHomeSection() {
+  homeSectionDirty_ = true;
+  settingsBlobDirty_ = true;
+}
+
+void Config::invalidateAllSections() {
+  lampSectionDirty_ = true;
+  baseSectionDirty_ = true;
+  shadeSectionDirty_ = true;
+  expressionsSectionDirty_ = true;
+  homeSectionDirty_ = true;
+  settingsBlobDirty_ = true;
+}
+
 }  // namespace lamp
