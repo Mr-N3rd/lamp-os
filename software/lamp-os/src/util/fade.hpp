@@ -2,7 +2,6 @@
 #define LAMP_UTIL_FADE_H
 
 #include <cstdint>
-#include <vector>
 
 #include "./color.hpp"
 
