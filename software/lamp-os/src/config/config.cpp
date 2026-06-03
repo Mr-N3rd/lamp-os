@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "util/color.hpp"
+#include "version.hpp"
 
 namespace lamp {
 
@@ -475,6 +476,11 @@ String Config::asLampJson() {
   }
   doc["advancedEnabled"] = lamp.advancedEnabled;
   doc["socialMode"] = static_cast<uint8_t>(lamp.socialMode);
+  // Firmware identity (packed semver + release channel string). Constant
+  // at boot, so no extra invalidation hook is needed — the existing lamp
+  // section cache picks these up the first time it's built.
+  doc["fwVersion"] = FIRMWARE_VERSION;
+  doc["fwChannel"] = FIRMWARE_CHANNEL_STR;
   String out;
   serializeJson(doc, out);
   return out;

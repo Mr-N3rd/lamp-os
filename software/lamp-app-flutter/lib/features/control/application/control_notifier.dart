@@ -581,6 +581,8 @@ class ControlNotifier extends _$ControlNotifier {
         brightness: v,
         advancedEnabled: cur.lamp.advancedEnabled,
         socialMode: cur.lamp.socialMode,
+        fwVersion: cur.lamp.fwVersion,
+        fwChannel: cur.lamp.fwChannel,
       ),
     ));
     _brightnessWriter?.schedule(Uint8List.fromList([v]));
@@ -737,6 +739,8 @@ class ControlNotifier extends _$ControlNotifier {
         brightness: cur.lamp.brightness,
         advancedEnabled: cur.lamp.advancedEnabled,
         socialMode: cur.lamp.socialMode,
+        fwVersion: cur.lamp.fwVersion,
+        fwChannel: cur.lamp.fwChannel,
       ),
     ));
   }
@@ -750,6 +754,8 @@ class ControlNotifier extends _$ControlNotifier {
         brightness: cur.lamp.brightness,
         advancedEnabled: v,
         socialMode: cur.lamp.socialMode,
+        fwVersion: cur.lamp.fwVersion,
+        fwChannel: cur.lamp.fwChannel,
       ),
     ));
   }
@@ -766,6 +772,8 @@ class ControlNotifier extends _$ControlNotifier {
         brightness: cur.lamp.brightness,
         advancedEnabled: cur.lamp.advancedEnabled,
         socialMode: mode,
+        fwVersion: cur.lamp.fwVersion,
+        fwChannel: cur.lamp.fwChannel,
       ),
     ));
   }

@@ -29,7 +29,18 @@ Future<void> seedControlBle(
   String homeSsid = '',
   int homeBrightness = 60,
   String expressionsJson = '[]',
+  // Optional firmware identity fields (lamp section). Default null so
+  // existing tests that don't care about the Info-tab version display
+  // keep their previous, narrower CHAR_LAMP_SECTION shape.
+  int? fwVersion,
+  String? fwChannel,
 }) async {
+  // Build the firmware identity JSON tail only when both fields are set.
+  // Either both should be present (post-Phase-C firmware) or both absent
+  // (legacy firmware). Mixed states aren't a real-lamp scenario.
+  final fwTail = (fwVersion != null && fwChannel != null)
+      ? ',"fwVersion":$fwVersion,"fwChannel":"$fwChannel"'
+      : '';
   await ble.connect(deviceId);
   await ble.write(
       deviceId,
@@ -37,7 +48,7 @@ Future<void> seedControlBle(
       BleUuids.lampSection,
       Uint8List.fromList(utf8.encode(
         '{"name":"$name","brightness":$brightness,'
-        '"advancedEnabled":$advancedEnabled}',
+        '"advancedEnabled":$advancedEnabled$fwTail}',
       )));
   await ble.write(
       deviceId,
