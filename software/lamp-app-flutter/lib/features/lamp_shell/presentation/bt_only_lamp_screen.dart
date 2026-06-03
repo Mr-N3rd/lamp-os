@@ -2,10 +2,13 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../inventory/application/inventory_notifier.dart';
+import '../../nearby/application/nearby_lamps_notifier.dart';
 
 /// Full-screen replacement for the old in-control banner. Shown when the
 /// user taps a lamp from "My lamps" whose latest BLE advertisement reports
@@ -24,17 +27,47 @@ import '../../inventory/application/inventory_notifier.dart';
 ///   2. Get app + mesh features — flash the latest firmware via
 ///      `https://update.lamplit.ca`. The URL is tappable — opens the
 ///      site in the system browser.
-class BtOnlyLampScreen extends ConsumerWidget {
+class BtOnlyLampScreen extends ConsumerStatefulWidget {
   const BtOnlyLampScreen({super.key, required this.lampId});
 
   final String lampId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<BtOnlyLampScreen> createState() => _BtOnlyLampScreenState();
+}
+
+class _BtOnlyLampScreenState extends ConsumerState<BtOnlyLampScreen> {
+  /// One-shot: once we've routed the user out on a mesh-capable adv,
+  /// don't fire again (the rebuild during teardown can re-evaluate the
+  /// select() and we'd otherwise schedule a second pushReplacement).
+  bool _routedOut = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final lampId = widget.lampId;
     final inventory =
         ref.watch(inventoryNotifierProvider).value ?? const [];
     final lamp = inventory.firstWhereOrNull((l) => l.id == lampId);
     final name = lamp?.name ?? lampId;
+
+    // Auto-recovery: if a fresh adv reports `isMesh: true`, the lamp is
+    // mesh-capable after all (the previous adv was stale or the lamp
+    // just came online with new firmware). Bounce to ControlScreen so
+    // the user isn't trapped on a screen that no longer applies.
+    final isMesh = ref.watch(nearbyLampsNotifierProvider.select(
+      (list) => list.firstWhereOrNull((l) => l.id == lampId)?.isMesh,
+    ));
+    if (!_routedOut && isMesh == true) {
+      _routedOut = true;
+      final router = GoRouter.maybeOf(context);
+      if (router != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          router.pushReplacement(AppRoutes.control(lampId));
+        });
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(title: Text(name)),
       body: SafeArea(

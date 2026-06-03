@@ -4,20 +4,20 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/core/ble/ble_scanner.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
-import 'package:lamp_app/core/widgets/info_panel.dart';
 import 'package:lamp_app/features/control/presentation/control_screen.dart';
 import 'package:lamp_app/features/control/presentation/widgets/base_card.dart';
 import 'package:lamp_app/features/control/presentation/widgets/brightness_card.dart';
-import 'package:lamp_app/features/control/presentation/widgets/bt_only_info_pane.dart';
 import 'package:lamp_app/features/control/presentation/widgets/connecting_view.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
+import 'package:lamp_app/features/lamp_shell/presentation/bt_only_lamp_screen.dart';
 import 'package:lamp_app/features/nearby/application/nearby_lamps_notifier.dart';
 import 'package:lamp_app/features/nearby/domain/nearby_lamp.dart';
 
@@ -104,7 +104,16 @@ void main() {
         reason: 'Brightness must be visually below the base card');
   });
 
-  testWidgets('BtOnlyInfoPane renders when active lamp is off-mesh',
+  // ---------------------------------------------------------------------------
+  // Defense-in-depth redirect: a stale `isMesh: false` adv in the cache must
+  // NOT yank a user out of ControlScreen when the BLE connection actually
+  // succeeded. The cached adv is older than the connection-success signal
+  // we just got, so the connection wins. (Previously the redirect fired
+  // unconditionally on `isMesh: false`, trapping users on BtOnlyLampScreen
+  // for a lamp that was clearly working.)
+  // ---------------------------------------------------------------------------
+  testWidgets(
+      'ControlScreen stays put when isMesh false but connection succeeded',
       (tester) async {
     final c = await _withLamp();
     addTearDown(c.dispose);
@@ -120,43 +129,42 @@ void main() {
         isMesh: false,
       ),
     ];
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: c,
-      child: const MaterialApp(
-        home: Scaffold(body: ControlScreen(lampId: _devId)),
-      ),
-    ));
-    await _pumpToData(tester);
-    expect(find.byType(BtOnlyInfoPane), findsOneWidget);
-    expect(find.byType(InfoPanel), findsOneWidget);
-  });
 
-  testWidgets('BtOnlyInfoPane hides when active lamp is on-mesh',
-      (tester) async {
-    final c = await _withLamp();
-    addTearDown(c.dispose);
-    c.read(nearbyLampsNotifierProvider.notifier).state = [
-      const NearbyLamp(
-        id: _devId,
-        name: 'jacko',
-        rssi: -50,
-        serviceUuids: [],
-        baseRgb: 0,
-        shadeRgb: 0,
-        lastSeenEpochMs: 0,
-        isMesh: true,
-      ),
-    ];
+    // Use a real GoRouter with both routes so we can detect whether the
+    // defense-in-depth redirect fires. If it does, the location flips to
+    // the BT-only route; if it stays put, we render the control surface.
+    // The Scaffold wrapper supplies the Material ancestor InkWell-based
+    // cards inside ControlScreen rely on.
+    final router = GoRouter(
+      initialLocation: '/lamp/$_devId/control',
+      routes: [
+        GoRoute(
+          path: '/lamp/:id/control',
+          builder: (_, state) => Scaffold(
+            body: ControlScreen(lampId: state.pathParameters['id']!),
+          ),
+        ),
+        GoRoute(
+          path: '/lamp/:id/bt-only',
+          builder: (_, state) =>
+              BtOnlyLampScreen(lampId: state.pathParameters['id']!),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
     await tester.pumpWidget(UncontrolledProviderScope(
       container: c,
-      child: const MaterialApp(
-        home: Scaffold(body: ControlScreen(lampId: _devId)),
-      ),
+      child: MaterialApp.router(routerConfig: router),
     ));
     await _pumpToData(tester);
-    // BtOnlyInfoPane is still mounted but renders SizedBox.shrink — the
-    // assertion is on InfoPanel absence, since that's what actually paints.
-    expect(find.byType(InfoPanel), findsNothing);
+
+    expect(find.byType(BrightnessCard), findsOneWidget,
+        reason: 'control surface mounted — connection succeeded');
+    expect(find.byType(BtOnlyLampScreen), findsNothing,
+        reason: 'no redirect to BT-only despite stale isMesh: false adv');
+    expect(router.routerDelegate.currentConfiguration.uri.toString(),
+        '/lamp/$_devId/control');
   });
 
   // ---------------------------------------------------------------------------
