@@ -28,18 +28,23 @@ static void recvTrampoline(const esp_now_recv_info_t* info,
 bool MeshLink::begin() {
   s_instance = this;
 
-  // Order matters: STA mode + disconnect to claim the radio, THEN pin the
-  // channel, THEN init ESP-NOW. Mirrors lamp-os's wifi::begin() flow.
-  // Note we do NOT call WiFi.begin(ssid, pass) here — Phase A is listen-only
-  // and we just need the radio on the right channel.
+  // Order matters: STA mode → disconnect from any AP but KEEP RADIO ON →
+  // pin channel → init ESP-NOW. ESP-NOW only works while the WiFi radio
+  // is powered. Calling WiFi.disconnect(true, true) was a bug — the
+  // second arg is `wifioff` and turning it on shuts the radio down,
+  // which silently broke recv (no frames seen, MAC reads as 00:00:..).
+  // Use disconnect(false, false) — clear the AP context, keep radio up.
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true, true);
+  WiFi.disconnect(false, false);
   WiFi.setSleep(false);
 
-  // The Xiao ESP32-C6 has an external antenna pin; matches artnet-repeater's
-  // setup. If wisp ever moves to a board without this pin the call becomes a
-  // no-op since WIFI_ANT_CONFIG won't be defined.
-#ifdef WIFI_ANT_CONFIG
+  // Xiao ESP32-C6 external antenna select. The arduino-esp32 v3.x C6
+  // variant declares `static const uint8_t WIFI_ANT_CONFIG = 14;` as a
+  // C++ constant, NOT a #define — so #ifdef misses it. Check the board
+  // macro directly. ARDUINO_XIAO_ESP32C6 comes from the variant boards.txt.
+  // Without this the wisp falls back to the internal antenna and signal
+  // is too weak to reach lamps in another room.
+#if defined(ARDUINO_XIAO_ESP32C6) || defined(WIFI_ANT_CONFIG)
   pinMode(WIFI_ANT_CONFIG, OUTPUT);
   digitalWrite(WIFI_ANT_CONFIG, HIGH);
 #endif
