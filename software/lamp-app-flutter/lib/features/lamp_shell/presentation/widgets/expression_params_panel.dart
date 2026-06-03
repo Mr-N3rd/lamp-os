@@ -35,10 +35,13 @@ class ExpressionParamsPanel extends StatelessWidget {
   /// parent can drive a notifier update.
   final ValueChanged<Map<String, int>> onChanged;
 
-  /// When false, advanced controls (currently: mesh cascade toggle +
-  /// delay slider) stay hidden. The parameter is still preserved in the
-  /// underlying map — hiding the UI doesn't clear cascadeEnabled /
-  /// cascadeStaggerMs values that were saved earlier.
+  /// Gates *discovery* of advanced controls (currently: mesh cascade
+  /// toggle + delay slider). Once an advanced setting is actively set on
+  /// the expression (e.g. `cascadeEnabled == 1`), the controls stay
+  /// visible so the user can edit or disable them without re-doing the
+  /// 5-tap unlock — advanced mode is the gate to *find* the setting, not
+  /// to *keep* it editable. Hidden state still preserves saved values so
+  /// the firmware behaviour persists.
   final bool advancedMode;
 
   int _get(String key, int fallback) => parameters[key] ?? fallback;
@@ -66,7 +69,11 @@ class ExpressionParamsPanel extends StatelessWidget {
       'pulse' => _PulseParams(
           pulseSpeed: _get('pulseSpeed', 3),
           onPulseSpeed: (v) => _set('pulseSpeed', v),
-          showCascade: advancedMode,
+          // Show cascade controls when advanced mode is unlocked OR when
+          // cascade is already enabled on this expression — once set, the
+          // toggle stays reachable for editing/disabling without re-doing
+          // the 5-tap unlock.
+          showCascade: advancedMode || _get('cascadeEnabled', 0) != 0,
           cascadeEnabled: _get('cascadeEnabled', 0) != 0,
           cascadeStaggerMs: _get('cascadeStaggerMs', 0),
           onCascadeEnabled: (v) => _set('cascadeEnabled', v ? 1 : 0),
@@ -85,7 +92,11 @@ class ExpressionParamsPanel extends StatelessWidget {
           durMax: _get('durationMax', 3),
           onRange: (lo, hi) =>
               _setBoth('durationMin', lo, 'durationMax', hi),
-          showCascade: advancedMode,
+          // Show cascade controls when advanced mode is unlocked OR when
+          // cascade is already enabled on this expression — once set, the
+          // toggle stays reachable for editing/disabling without re-doing
+          // the 5-tap unlock.
+          showCascade: advancedMode || _get('cascadeEnabled', 0) != 0,
           cascadeEnabled: _get('cascadeEnabled', 0) != 0,
           cascadeStaggerMs: _get('cascadeStaggerMs', 0),
           onCascadeEnabled: (v) => _set('cascadeEnabled', v ? 1 : 0),
