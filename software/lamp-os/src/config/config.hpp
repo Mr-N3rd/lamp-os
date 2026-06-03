@@ -4,8 +4,9 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 
-#include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "./config_types.hpp"
 
@@ -167,15 +168,16 @@ class Config {
   // after touching the slider (the BLE disconnect path forces a flush).
   static constexpr uint32_t kDispositionFlushIdleMs = 5000;
 
-  // Returns kDispositionDefault when the peer isn't in the map.
+  // Returns kDispositionDefault when the peer isn't in the store.
   uint8_t getDisposition(const std::string& peerName) const;
   // Clamps `value` to [1,5]. Marks the debouncer dirty — the actual NVS
   // write happens later via maybeFlushDispositions() or
-  // flushDispositionsNow(). Evicts oldest-updated entry if at
-  // kDispositionsMax (keyed by name; we don't track update timestamps —
-  // eviction is "first by std::map iteration order" which is
-  // alphabetical-by-name; fine for an at-capacity scenario that shouldn't
-  // be reached in practice).
+  // flushDispositionsNow(). Evicts the lowest-by-name entry if at
+  // kDispositionsMax and the name is new. (Historical note: this used to
+  // be a std::map; eviction was "first by iteration order" which is
+  // alphabetical-by-name. The sorted-vector replacement preserves the
+  // same policy — entries[0] is the lowest-by-name. Fine for an
+  // at-capacity scenario that shouldn't be reached in practice.)
   void setDisposition(const std::string& peerName, uint8_t value);
   // Full JSON serialization for the CHAR_SOCIAL_DISPOSITIONS read path.
   String asDispositionsJson() const;
@@ -197,7 +199,13 @@ class Config {
   void flushDispositionsNow();
 
  private:
-  std::map<std::string, uint8_t> dispositions_;
+  // Audit fix [MEDIUM]: sorted vector instead of std::map. Saves ~1.5 KB
+  // at full capacity (100 entries) by dropping red-black-tree node overhead
+  // (~32 B per node + pointer chasing) for contiguous storage. Lookups use
+  // std::lower_bound; mutators preserve sort order. Invariant: entries are
+  // ALWAYS sorted by name (lexicographic) — every mutation site must
+  // preserve this so getDisposition's binary search stays correct.
+  std::vector<std::pair<std::string, uint8_t>> dispositions_;
   DispositionDebouncer dispositionsDebouncer_{kDispositionFlushIdleMs};
   void loadDispositionsFromPrefs_();
   void persistDispositions_();
