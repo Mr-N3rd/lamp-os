@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <array>
-#include <map>
 #include <string>
 #include <unordered_set>
 
@@ -85,10 +84,77 @@ static volatile bool         s_homeModePageActive = false;
 bool isClientConnected()   { return s_clientConnected;   }
 bool isHomeModePageActive() { return s_homeModePageActive; }
 
-// Per-connection auth state.  Key = connection handle, value = authed.
-static std::map<uint16_t, bool> s_connAuth;
-// Per-connection crypto state (nonce replay window). Lazy-inserted on first use.
-static std::map<uint16_t, lamp::crypto::PerConnState> s_connCrypto;
+// Per-connection state. NimBLE caps simultaneous connections at
+// CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3, so a fixed-size array beats the
+// red-black-tree overhead of std::map for 1-3 entries (audit fix: saves
+// ~200 B per active conn and avoids heap fragmentation on the BLE hot path).
+// Linear search over 3 entries is ~3 comparisons — cheaper than a RB-tree
+// lookup, and touched on every encrypted BLE write.
+//
+//   handle == kUnusedHandle → slot is free
+//   authed                  → set true on plaintext auth success or after
+//                             a successful GCM decrypt (GCM tag IS auth)
+//   crypto                  → per-connection nonce replay window, lazy-init
+//                             on first ciphertext write
+struct ConnSlot {
+  uint16_t                    handle;
+  bool                        authed;
+  lamp::crypto::PerConnState  crypto;
+};
+static constexpr uint16_t kUnusedHandle = 0xFFFF;
+static constexpr size_t   kMaxConns     = 3;
+static std::array<ConnSlot, kMaxConns> s_conn{{
+  {kUnusedHandle, false, {}},
+  {kUnusedHandle, false, {}},
+  {kUnusedHandle, false, {}},
+}};
+
+// Find the slot owned by [handle], or nullptr if none. Linear scan over
+// kMaxConns (=3) entries. static so the compiler can inline it into every
+// BLE callback below — this is on the per-write hot path.
+static ConnSlot* findSlot(uint16_t handle) {
+  for (auto& s : s_conn) {
+    if (s.handle == handle) return &s;
+  }
+  return nullptr;
+}
+
+// Find the slot for [handle], allocating the first unused slot if there's
+// no match. Returns nullptr only if all 3 slots are taken by other handles
+// (shouldn't happen given NimBLE's connection cap, but defensive). Newly
+// allocated slots have authed=false and an empty crypto state.
+static ConnSlot* findOrAllocSlot(uint16_t handle) {
+  ConnSlot* freeSlot = nullptr;
+  for (auto& s : s_conn) {
+    if (s.handle == handle) return &s;
+    if (!freeSlot && s.handle == kUnusedHandle) freeSlot = &s;
+  }
+  if (freeSlot) {
+    freeSlot->handle = handle;
+    freeSlot->authed = false;
+    freeSlot->crypto = lamp::crypto::PerConnState{};
+  }
+  return freeSlot;
+}
+
+// Release the slot owned by [handle] back to the pool. Mirrors the previous
+// std::map::erase semantics — no-op if [handle] isn't tracked.
+static void freeSlot(uint16_t handle) {
+  if (auto* s = findSlot(handle)) {
+    s->handle = kUnusedHandle;
+    s->authed = false;
+    s->crypto = lamp::crypto::PerConnState{};
+  }
+}
+
+// Reset every slot — used on stop() to mirror std::map::clear().
+static void clearAllSlots() {
+  for (auto& s : s_conn) {
+    s.handle = kUnusedHandle;
+    s.authed = false;
+    s.crypto = lamp::crypto::PerConnState{};
+  }
+}
 
 // Target MTU requested on every new connection
 static constexpr uint16_t TARGET_MTU = 512;
@@ -99,8 +165,8 @@ static constexpr uint16_t TARGET_MTU = 512;
 
 static bool isAuthed(uint16_t connHandle) {
   if (s_config->lamp.password.empty()) return true;  // No password — open access
-  auto it = s_connAuth.find(connHandle);
-  return it != s_connAuth.end() && it->second;
+  const ConnSlot* s = findSlot(connHandle);
+  return s && s->authed;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,12 +223,13 @@ static bool decodeIncomingOp(const std::string& raw,
   if (n == 0) return false;
 
   if (lamp::crypto::magicByte(p, n) == lamp::crypto::MAGIC_CIPHERTEXT) {
-    auto& conn = s_connCrypto[handle];
+    ConnSlot* slot = findOrAllocSlot(handle);
+    if (!slot) return false;  // all slots taken — shouldn't happen w/ NimBLE cap
     if (!lamp::crypto::decryptOp(p, n, charUuidLE16, charShortName,
-                                 s_config->lamp.password, conn, outJson)) {
+                                 s_config->lamp.password, slot->crypto, outJson)) {
       return false;
     }
-    s_connAuth[handle] = true;  // GCM tag IS auth
+    slot->authed = true;  // GCM tag IS auth
     authed = true;
     return true;
   }
@@ -181,7 +248,11 @@ static bool decodeIncomingOp(const std::string& raw,
 class ControlServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, NimBLEConnInfo& connInfo) override {
     uint16_t handle = connInfo.getConnHandle();
-    s_connAuth[handle] = false;
+    // Allocate the per-conn slot up front so plaintext auth attempts (which
+    // assign authed=true on accept) have a place to land. If allocation
+    // fails (all 3 slots taken — defensive), the connection simply stays
+    // unauthed; isAuthed() returns false and all writes are rejected.
+    findOrAllocSlot(handle);
 
     server->setDataLen(handle, 251);
     NimBLEDevice::setMTU(TARGET_MTU);
@@ -215,8 +286,7 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
 
   void onDisconnect(NimBLEServer* server, NimBLEConnInfo& connInfo, int reason) override {
     uint16_t handle = connInfo.getConnHandle();
-    s_connAuth.erase(handle);
-    s_connCrypto.erase(handle);
+    freeSlot(handle);
 
     // Resume the central scan now that the phone is gone.
     lamp::scanPausedForGattClient = false;
@@ -253,7 +323,7 @@ class AuthCallback : public NimBLECharacteristicCallbacks {
     bool authed = false;
     if (!decodeIncomingOp(raw, handle, uuid.data(), "auth", body, authed)) return;
     if (authed) {
-      // Ciphertext path already set s_connAuth — nothing more to do.
+      // Ciphertext path already marked the slot authed — nothing more to do.
 #ifdef LAMP_DEBUG
       Serial.printf("[ble_control] Auth via ciphertext handle=%u OK\n", handle);
 #endif
@@ -261,7 +331,9 @@ class AuthCallback : public NimBLECharacteristicCallbacks {
     }
     // Plaintext path: compare the decoded body against the lamp password.
     const bool accepted = (body == s_config->lamp.password);
-    s_connAuth[handle] = accepted;
+    if (auto* slot = findOrAllocSlot(handle)) {
+      slot->authed = accepted;
+    }
 #ifdef LAMP_DEBUG
     Serial.printf("[ble_control] Auth attempt handle=%u %s\n",
                   handle, accepted ? "ACCEPTED" : "REJECTED");
@@ -941,8 +1013,7 @@ void stop() {
 
   s_server  = nullptr;
   s_running = false;
-  s_connAuth.clear();
-  s_connCrypto.clear();
+  clearAllSlots();
 
 #ifdef LAMP_DEBUG
   Serial.printf("[ble_control] GATT control service stopped\n");
