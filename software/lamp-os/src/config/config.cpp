@@ -55,6 +55,14 @@ Config::Config(Preferences* inPrefs) {
     lamp.password = password;
   }
   lamp.advancedEnabled = lampNode["advancedEnabled"] | false;
+  // SocialMode persists as uint8_t (0=Introvert, 1=Ambivert, 2=Extrovert).
+  // Out-of-range values fall back to Ambivert so a corrupt or future-versioned
+  // payload doesn't strand the lamp in an unknown personality.
+  {
+    uint32_t modeRaw = lampNode["socialMode"] | 1;
+    if (modeRaw > 2) modeRaw = 1;
+    lamp.socialMode = static_cast<SocialMode>(modeRaw);
+  }
 
   JsonObject baseNode = doc["base"];
   base.px = baseNode["px"] | 36;
@@ -196,7 +204,86 @@ Config::Config(Preferences* inPrefs) {
   if (base.ac >= base.colors.size()) {
     base.ac = 0;
   }
+
+  // Per-peer dispositions live in a separate NVS key — loaded last so the
+  // main blob's prefs->begin/end pair above doesn't conflict.
+  loadDispositionsFromPrefs_();
 };
+
+void Config::loadDispositionsFromPrefs_() {
+  if (!prefs) return;
+  prefs->begin("lamp", true);
+  String json = prefs->getString("dispositions", "{}");
+  prefs->end();
+
+  JsonDocument doc;
+  if (deserializeJson(doc, json) != DeserializationError::Ok) return;
+
+  for (JsonPair kv : doc.as<JsonObject>()) {
+    const std::string name(kv.key().c_str());
+    uint32_t v = kv.value() | (uint32_t)kDispositionDefault;
+    if (v < 1) v = 1;
+    if (v > 5) v = 5;
+    dispositions_[name] = static_cast<uint8_t>(v);
+    if (dispositions_.size() >= kDispositionsMax) break;
+  }
+}
+
+void Config::persistDispositions_() {
+  if (!prefs) return;
+  String out = asDispositionsJson();
+  prefs->begin("lamp", false);
+  prefs->putString("dispositions", out.c_str());
+  prefs->end();
+}
+
+uint8_t Config::getDisposition(const std::string& peerName) const {
+  auto it = dispositions_.find(peerName);
+  if (it == dispositions_.end()) return kDispositionDefault;
+  return it->second;
+}
+
+void Config::setDisposition(const std::string& peerName, uint8_t value) {
+  if (peerName.empty()) return;
+  if (value < 1) value = 1;
+  if (value > 5) value = 5;
+  if (dispositions_.size() >= kDispositionsMax &&
+      dispositions_.find(peerName) == dispositions_.end()) {
+    // Evict the first-by-name entry. Disposition tracking is best-effort
+    // at the cap; users typically have <100 paired lamps.
+    dispositions_.erase(dispositions_.begin());
+  }
+  dispositions_[peerName] = value;
+  persistDispositions_();
+}
+
+String Config::asDispositionsJson() const {
+  JsonDocument doc;
+  for (const auto& kv : dispositions_) {
+    doc[kv.first.c_str()] = kv.second;
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+bool Config::setDispositionsFromJson(const char* json, size_t len) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len) != DeserializationError::Ok) {
+    return false;
+  }
+  if (!doc.is<JsonObject>()) return false;
+  dispositions_.clear();
+  for (JsonPair kv : doc.as<JsonObject>()) {
+    if (dispositions_.size() >= kDispositionsMax) break;
+    uint32_t v = kv.value() | (uint32_t)kDispositionDefault;
+    if (v < 1) v = 1;
+    if (v > 5) v = 5;
+    dispositions_[std::string(kv.key().c_str())] = static_cast<uint8_t>(v);
+  }
+  persistDispositions_();
+  return true;
+}
 
 JsonDocument Config::asJsonDocument() {
   JsonDocument doc;
@@ -208,6 +295,7 @@ JsonDocument Config::asJsonDocument() {
     lampNode["password"] = lamp.password;
   }
   lampNode["advancedEnabled"] = lamp.advancedEnabled;
+  lampNode["socialMode"] = static_cast<uint8_t>(lamp.socialMode);
   JsonObject baseNode = doc["base"].to<JsonObject>();
   baseNode["px"] = base.px;
   baseNode["ac"] = base.ac;
@@ -271,6 +359,7 @@ String Config::asLampJson() {
     doc["password"] = lamp.password;
   }
   doc["advancedEnabled"] = lamp.advancedEnabled;
+  doc["socialMode"] = static_cast<uint8_t>(lamp.socialMode);
   String out;
   serializeJson(doc, out);
   return out;

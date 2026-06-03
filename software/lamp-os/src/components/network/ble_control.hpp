@@ -66,6 +66,12 @@ constexpr const char* CHAR_REMOTE_OP       = "5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b
 // home.ssid + wifi::homeSsidVisible(). Cleared automatically on BT
 // disconnect.
 constexpr const char* CHAR_HOME_MODE_FOCUS = "5f64f4e5-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// social_dispositions (read + write, encrypted): JSON map of peer name to
+// disposition 1..5 (salty .. neutral .. smitten). Read returns the full
+// map; write replaces it. Auth-gated like the other write characteristics.
+// Stored separately from the main config blob in NVS namespace "lamp",
+// key "dispositions" — survives reboots, doesn't bloat CHAR_LAMP_SECTION.
+constexpr const char* CHAR_SOCIAL_DISPOSITIONS = "5f64f4e6-d6d9-4a44-9b3f-3a8d6f7e6b40";
 
 /**
  * @brief Start the BLE GATT control service.

@@ -462,6 +462,29 @@ class NearbyLampsCallback : public NimBLECharacteristicCallbacks {
   }
 };
 
+// Social dispositions — read returns the full per-peer map; write replaces
+// it. Auth-gated on both directions: even though the disposition values
+// aren't sensitive (they're not credentials), exposing the friendship map
+// to an unauthenticated scanner would leak the lamp's peer relationships.
+class SocialDispositionsCallback : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    if (!isAuthed(connInfo.getConnHandle())) {
+      c->setValue("");
+      return;
+    }
+    c->setValue(s_config->asDispositionsJson().c_str());
+  }
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    if (!isAuthed(connInfo.getConnHandle())) return;
+    std::string val = c->getValue();
+#ifdef LAMP_DEBUG
+    Serial.printf("[ble_control] WRITE socialDispositions len=%u\n",
+                  (unsigned)val.size());
+#endif
+    s_config->setDispositionsFromJson(val.data(), val.size());
+  }
+};
+
 void notifyNearbyLamps() {
   if (!s_nearbyLampsChar) return;
   auto json = buildNearbyLampsJson();
@@ -782,6 +805,13 @@ void start(lamp::Config* config, Preferences* prefs) {
       CHAR_NEARBY_LAMPS, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_nearbyLampsChar->setCallbacks(new NearbyLampsCallback());
   s_nearbyLampsChar->setValue(buildNearbyLampsJson());
+
+  // Social dispositions — read + write, both auth-gated. Initial seed
+  // shows whatever was loaded from NVS at boot.
+  s_service->createCharacteristic(
+      CHAR_SOCIAL_DISPOSITIONS,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks(new SocialDispositionsCallback());
 
   // App-layer crypto protects forwarded credentials; no link-layer bonding.
   s_service->createCharacteristic(CHAR_REMOTE_OP,

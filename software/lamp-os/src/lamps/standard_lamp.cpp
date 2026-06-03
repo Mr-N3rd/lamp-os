@@ -264,6 +264,11 @@ static bool calculateEffectiveHomeMode();
 
 void initBehaviors() {
   shadeSocialBehavior = lamp::SocialBehavior(&shade, 1200);
+  // Live config pointer so SocialBehavior::control reads the current
+  // socialMode each tick (user can change personality at runtime; the
+  // change rides through settings_blob save + reboot, but the wiring
+  // is per-instance regardless).
+  shadeSocialBehavior.setConfig(&config);
   // Pause social greetings when the lamp is in home mode — home mode is
   // the user's "I'm home, calm down" mode. Compositor gates this via
   // the homeMode flag, kept in sync by reapplyHomeModeState().
