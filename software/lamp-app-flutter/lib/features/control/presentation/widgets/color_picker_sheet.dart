@@ -223,7 +223,7 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
                   const Spacer(),
                   FilledButton(
                     onPressed: () => Navigator.pop(context, _current),
-                    child: const Text('Save'),
+                    child: const Text('Done'),
                   ),
                 ],
               ),
