@@ -46,6 +46,17 @@ static constexpr uint32_t SCAN_STALENESS_MS = 90 * 1000;
 // between responsiveness and ESP-NOW receive uptime.
 static constexpr uint32_t BACKGROUND_SCAN_INTERVAL_MS = 60 * 1000;
 
+// How long to dwell in FAILED before letting the state machine return to
+// IDLE so future background scans can be attempted. Without this, a single
+// transient `WiFi.scanNetworks()` failure leaves the wifi module stuck in
+// FAILED until reboot — and historically also stranded the radio on
+// whatever channel the scanner had last hopped to, silently killing
+// ESP-NOW recv (HELLO / CONTROL_OP / OVERRIDE / EVENT / WISP_HELLO all
+// missed). 5 min is long enough not to thrash, short enough that
+// home-presence detection comes back without manual intervention.
+static constexpr uint32_t FAILED_RETRY_MS = 5 * 60 * 1000;
+static uint32_t s_failedSinceMs = 0;
+
 static void setState(State next) {
   if (s_state == next) return;
   s_state = next;
@@ -181,8 +192,24 @@ void tick() {
       setState(IDLE);
     } else if (n == WIFI_SCAN_FAILED) {
       s_lastError = "scan";
+      // The scanner can leave the radio on the last-hopped channel; re-pin
+      // to LAMP_ESPNOW_CHANNEL so ESP-NOW recv still works in FAILED.
+      // Symmetry with the success branch above. Before this re-pin, a
+      // failed scan silently broke ALL mesh recv on this lamp until
+      // reboot (observed on melonie 2026-06-03 — 2 of 21 MSG_EVENT
+      // broadcasts received during a cascade test).
+      esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+      s_failedSinceMs = millis();
       setState(FAILED);
     }
+  }
+
+  // FAILED → IDLE recovery so a transient scan failure doesn't permanently
+  // disable home-presence detection. The channel re-pin in the FAILED
+  // branch above keeps mesh recv alive in the meantime.
+  if (s_state == FAILED && millis() - s_failedSinceMs > FAILED_RETRY_MS) {
+    s_lastError.clear();
+    setState(IDLE);
   }
 
   // 2. Periodic background scan for home-presence detection. Only when
