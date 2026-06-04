@@ -31,7 +31,13 @@ namespace lamp_protocol {
 // (compare-then-evict-oldest) is what this test pins.
 class DedupRing {
  public:
-  static constexpr size_t CAPACITY = 32;
+  // Mirror of the production CAPACITY. v0x03 mesh-deploy lock-in bumped
+  // this from 32 → 64 because at 20-50 lamps each gossiping every unique
+  // (sourceMac, seq), the 32-slot ring wrapped fast enough that a
+  // late-arriving relayed copy could re-fire a receiver. The static_assert
+  // pinning the production-side value lives in test_protocol_v2.
+  // why: matches production lock-in per validated plan §"Layer 2".
+  static constexpr size_t CAPACITY = 64;
 
   bool record(const uint8_t mac[6], uint8_t msgType, uint16_t seq) {
     for (size_t i = 0; i < CAPACITY; i++) {
@@ -142,6 +148,33 @@ void test_full_ring_evicts_oldest_first() {
   TEST_ASSERT_TRUE(ring.record(kMacA, 0x02, 1));
 }
 
+void test_full_ring_at_64_distinct_entries_all_record_then_evict_oldest() {
+  // v0x03 lock-in boundary test: at the new CAPACITY=64, inserting 64
+  // distinct entries must ALL return true (none evicted yet). A 65th
+  // distinct insert evicts the oldest, allowing it to look new again.
+  // This is the headroom argument for going 32→64: at 20-50 lamps with
+  // per-msgType dedup, we want the ring big enough that a late-arriving
+  // gossip copy (the one we relay through Commit E) still hits the dedup
+  // before the slot rotates.
+  // why: pins behavior at the new capacity boundary per validated plan §"Layer 2".
+  lamp_protocol::DedupRing ring;
+
+  // All 64 inserts must succeed.
+  for (uint16_t s = 0; s < 64; ++s) {
+    TEST_ASSERT_TRUE(ring.record(kMacA, 0x30, s));  // 0x30 = MSG_EVENT
+  }
+  // Oldest (seq=0) is still present at this point.
+  TEST_ASSERT_FALSE(ring.record(kMacA, 0x30, 0));
+
+  // Insert the 65th distinct entry — evicts seq=0 (oldest by insertion order,
+  // head=0 after the fill loop wraps once).
+  TEST_ASSERT_TRUE(ring.record(kMacA, 0x30, 64));
+
+  // seq=0 now looks new again (was evicted). seq=63 still in-ring.
+  TEST_ASSERT_TRUE(ring.record(kMacA, 0x30, 0));
+  TEST_ASSERT_FALSE(ring.record(kMacA, 0x30, 63));
+}
+
 void test_empty_ring_does_not_match_zero_mac() {
   // Entry default-constructs with used=false. A record() lookup must
   // NOT match a default (zeroed) slot — otherwise a frame from mac
@@ -165,6 +198,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_different_msgtype_is_independent);
   RUN_TEST(test_different_mac_is_independent);
   RUN_TEST(test_full_ring_evicts_oldest_first);
+  RUN_TEST(test_full_ring_at_64_distinct_entries_all_record_then_evict_oldest);
   RUN_TEST(test_empty_ring_does_not_match_zero_mac);
 
   return UNITY_END();

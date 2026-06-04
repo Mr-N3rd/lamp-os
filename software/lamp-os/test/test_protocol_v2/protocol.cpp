@@ -32,6 +32,17 @@ static_assert(lp::PROTOCOL_VERSION == 0x03,
               "Bumping this constant in production requires re-flashing all "
               "lamps + wisp before redeploy — inspect() rejects mismatches.");
 
+// v0x03 lock-in pin: DedupRing capacity grew 32 → 64 because at 20-50 lamps
+// each gossiping (sourceMac, seq) the 32-slot ring wrapped fast enough that
+// a late-arriving gossip copy could re-fire a receiver. Pinning here forces
+// any future shrink to come with an explicit "we re-validated this against
+// fleet size N" answer. The data-behavior tests for the new boundary live
+// in test_dedup_ring (against an inline mirror that's also pinned to 64).
+// why: pins the DedupRing capacity lock-in per validated plan §"Layer 2".
+static_assert(lp::DedupRing::CAPACITY == 64,
+              "DedupRing::CAPACITY lock-in for v0x03 (32→64 for 20-50 lamp "
+              "fleet headroom). Shrinking risks re-firing late gossip copies.");
+
 static const uint8_t kSrcMac[6]    = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15};
 static const uint8_t kTargetMac[6] = {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5};
 

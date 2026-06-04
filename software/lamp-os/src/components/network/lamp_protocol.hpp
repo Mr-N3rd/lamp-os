@@ -751,7 +751,17 @@ inline bool parseEvent(const uint8_t* data, size_t len, ParsedEvent& out) {
 // network calls, no logging. See audit finding #7 / Stability #3.
 class DedupRing {
  public:
-  static constexpr size_t CAPACITY = 32;
+  // v0x03 mesh-deploy lock-in: bumped from 32 to 64. At 20-50 lamps each
+  // gossiping every unique (sourceMac, seq), the 32-slot ring wrapped
+  // fast enough that a late-arriving relayed copy could re-fire a
+  // receiver — specifically a problem now that MSG_EVENT itself gains
+  // gossip-relay (Commit E). 64 slots give sufficient headroom: at 50
+  // lamps emitting one cascade each within a small window, we still hold
+  // ~24 unique (mac, seq) entries past the ring's age horizon. Per-msgType
+  // dedup (ShowReceiver has separate rings per message type) means EVENT
+  // entries never get evicted by HELLO traffic etc.
+  // why: scale-fix per validated plan §"Layer 2".
+  static constexpr size_t CAPACITY = 64;
 
   // Returns true if (mac, msgType, seq) is new (and records it); false if seen.
   bool record(const uint8_t mac[6], uint8_t msgType, uint16_t seq) {
