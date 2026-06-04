@@ -57,16 +57,27 @@ Four behavioral tiers, each with its own crypto posture, reach, and lifetime:
 
 | Tier | Reach | Crypto | Lifetime | Examples |
 |---|---|---|---|---|
-| **Presence** | Broadcast every 2s | Plaintext | None — pure state report | `MSG_HELLO`, `MSG_WISP_HELLO` |
+| **Presence** | Broadcast (lamp: 5s, wisp: 2s) | Plaintext | None — pure state report | `MSG_HELLO`, `MSG_WISP_HELLO` |
 | **Authenticated commands** | Unicast (or broadcast) | AES-GCM with target's password OR plaintext JSON | NVS-writable; can mutate config | `MSG_CONTROL_OP` |
 | **Transient overrides** | Unicast (broadcast for restore) | Plaintext | RAM-only; watchdog-released after 60s | `MSG_OVERRIDE_COLORS/RESTORE_COLORS`, `MSG_OVERRIDE_BRIGHTNESS/RESTORE_BRIGHTNESS` |
 | **Event broadcasts** | Broadcast, no relay | Plaintext | Fire-and-forget | `MSG_EVENT` |
 
-**Relay policy:**
-- **HELLO** + **WISP_HELLO**: gossip rebroadcast (extends mesh reach beyond direct radio).
-- **CONTROL_OP**: gossip rebroadcast (unconditional after the FLAG_LOCAL_ONLY retirement in cascade migration).
-- **OVERRIDE_*** + **RESTORE_***: never relay. Reach is whatever direct radio delivers.
-- **EVENT**: never relays by design (sender emits twice with ~20ms jitter for loss resilience).
+**Relay policy** (v0x03):
+
+| msgType | Reach | Relay? | Storm bound |
+|---|---|---|---|
+| `MSG_HELLO` (0x01) | broadcast | yes — gossip-rebroadcast on first sight | `helloDedup_` 64-slot ring per (sourceMac, seq) |
+| `MSG_CONTROL_OP` (0x03) | unicast or broadcast | yes — unconditional after FLAG_LOCAL_ONLY retirement | `controlOpDedup_` 64-slot ring |
+| `MSG_WISP_HELLO` (0x20) | broadcast | yes — gossip-rebroadcast | `wispHelloDedup_` 64-slot ring |
+| `MSG_OVERRIDE_COLORS` (0x21) | unicast | **no** — single-hop, addressedToUs filter | n/a (no relay) |
+| `MSG_RESTORE_COLORS` (0x22) | unicast or broadcast | **no** — single-hop | n/a |
+| `MSG_OVERRIDE_BRIGHTNESS` (0x23) | unicast | **no** — single-hop | n/a |
+| `MSG_RESTORE_BRIGHTNESS` (0x24) | unicast or broadcast | **no** — single-hop | n/a |
+| `MSG_EVENT` (0x30) | broadcast | **yes** — gossip-rebroadcast as of v0x03 (was no) | `eventDedup_` 64-slot ring |
+
+Relay rule: every lamp that successfully parses + dedup-records a relayable frame AND is not the originator (self-MAC drop) rebroadcasts the frame verbatim before any application-level filtering. Per-message-type `DedupRing` instances (64-slot, separate per msgType) bound the storm to ≤ N relays per cascade in an N-lamp mesh.
+
+`OVERRIDE_*` / `RESTORE_*` deliberately stay single-hop. They're unicast by design (wisp paint uses `esp_now_send(targetMac, ...)` with 802.11 driver-level retries; per-link reliability is already strong). Gossip-relay would amplify airtime without obvious benefit because non-addressed receivers drop after the relay step anyway.
 
 ## ESP-NOW message catalog
 
@@ -76,11 +87,16 @@ Every frame starts with the same 6-byte header:
 [MAGIC_0='L'(1)] [MAGIC_1='M'(1)] [PROTOCOL_VERSION(1)] [msgType(1)] [seq(2 LE)]
 ```
 
-`PROTOCOL_VERSION` is currently `0x02`. The `msgType` high bit (`0x80`) is reserved for future protocol use (previously held `FLAG_LOCAL_ONLY` for the cascade-locality hack; retired when cascade migrated to MSG_EVENT).
+`PROTOCOL_VERSION` is currently `0x03` (bumped from 0x02 in the 2026-06 mesh-deploy lock-in: MSG_EVENT now gossip-relays, DedupRing capacity is 64, HELLO interval is 5s). `inspect()` rejects on version mismatch, so a v0x02 lamp in a v0x03 mesh silently stops receiving frames — loud, diagnosable failure by design. All lamps + wisp must re-flash before redeploy.
+
+**Reserved bits** (must be 0; receivers reject any frame that sets them):
+
+- `kReservedMsgTypeHighBit = 0x80` on the `msgType` byte (`data[3]`). Previously held `FLAG_LOCAL_ONLY` for the cascade-locality hack; retired when cascade migrated to MSG_EVENT. `inspect()` no longer masks the bit, so any future reuse surfaces as an unknown msgType.
+- `kStaggerCountReservedHighBit = 0x80` on the `numStaggerEntries` byte (`data[13]` of MSG_EVENT, v0x03 addition). Plausible future use: a scope flag on stagger semantics. `parseEvent` rejects any frame that sets it.
 
 ### Tier 1 — Presence
 
-**`MSG_HELLO` (0x01)** — Lamp presence beacon. Broadcast by every lamp every 2 s.
+**`MSG_HELLO` (0x01)** — Lamp presence beacon. Broadcast by every lamp every 5 s (v0x03; was 2s). Pruned from `nearbyLamps` after 120 s of silence.
 ```
 header(6) + sourceMac(6) + shade[4 RGBW] + base[4 RGBW] +
 firmwareVersion(4 LE) + nameLen(1) + name[0..32]
@@ -181,18 +197,24 @@ staggerEntries[].delayMs: clamped to kMaxDelayMs = 10000 on receive.
 
 **Stagger semantics:** the sender pre-computes per-peer delays, sorted by RSSI descending (strongest signal first → physically closest → fires earliest in the wave). Each peer's `delayMs = (position + 1) × cascadeStaggerMs`. The `(position + 1)` offset means the closest peer fires `cascadeStaggerMs` after the sender, not at the same instant — without the offset, a 2-lamp mesh would fire simultaneously regardless of `cascadeStaggerMs` and the "wave from the trigger source outward" UX is lost.
 
-**Receiver flow** (in order, early-out at any step):
-1. Dedup by `sourceMac + seq` via `eventDedup_` ring.
+**Receiver flow** (v0x03, in order, early-out at any step):
+1. Dedup by `sourceMac + seq` via `eventDedup_` ring (64-slot in v0x03).
 2. Drop if `sourceMac == myMac` (own broadcast).
-3. Drop if `eventKind` unknown.
-4. Cheap byte-scan the payload for `"type":"..."` (no JsonDocument yet) — used as the `recentCascades_` dedup key.
-5. Check `recentCascades_` dedup.
-6. Look up own MAC in `staggerEntries`; if found use its `delayMs`, otherwise tail-fire at `numStaggerEntries × 50ms`.
-7. Full `parseInvocation` and `triggerInvocation(suppressCascade=true)` with `fireAtMs = millis() + clampedDelayMs`.
+3. **Gossip-relay**: `link_.broadcast(data, len)`. Verbatim rebroadcast. Runs BEFORE the eventKind filter so unknown-but-well-formed kinds still propagate through the mesh — forward-compat for future EventKind additions.
+4. Drop if `eventKind` unknown (today: anything other than `ExpressionTriggered`).
+5. Cheap byte-scan the payload for `"type":"..."` (no JsonDocument yet) — used as the `recentCascades_` dedup key.
+6. Check `recentCascades_` dedup.
+7. Look up own MAC in `staggerEntries`; if found use its `delayMs`, otherwise tail-fire at `numStaggerEntries × 50ms`.
+8. Full `parseInvocation` and `triggerInvocation(suppressCascade=true)` with `fireAtMs = millis() + clampedDelayMs`.
 
 **Cascade is sender-authoritative.** Receivers fire whatever the sender announces — the wire payload carries the full invocation (`type`, `target`, `colors`, `parameters`) and a fresh transient Expression is built directly from it. The receiver's local expression config (its own `expressions` vector, including its own `cascadeEnabled` setting for the same type) is intentionally irrelevant. This matches the pre-C.3 CONTROL_OP cascade model and was briefly broken by a receiver-side `cascadeEnabled` gate introduced in `cb7e6fd` and removed 2026-06-03.
 
-**Reliability:** sender emits MSG_EVENT twice back-to-back (no inter-send delay). ESP-NOW broadcasts have no link-layer ACK, so the duplicate is best-effort insurance against a single dropped frame from RF contention (BLE adv burst, brief channel noise). Receivers' DedupRing collapses by `(sourceMac, seq)` so dispatch only fires once. Earlier revisions used a 20 ms `delay()` between sends to spread the two copies across separate RF transient windows; that delay was dropped 2026-06-03 because it stalled the sender's Core 1 render pipeline (sender's own LEDs visibly lagged receivers'). Back-to-back loses the across-window spread but keeps the two-TX-attempts resilience without blocking.
+**Reliability strategy (v0x03):**
+1. **Sender emits MSG_EVENT twice back-to-back** (no inter-send delay) inside `ExpressionManager::maybeCascade`. ESP-NOW broadcasts have no link-layer ACK, so the duplicate is best-effort insurance against a single dropped frame from RF contention (BLE adv burst, brief channel noise). Earlier revisions used a 20 ms `delay()` between sends to spread the two copies across separate RF transient windows; that delay was dropped 2026-06-03 because it stalled the sender's Core 1 render pipeline (sender's own LEDs visibly lagged receivers'). Back-to-back loses the across-window spread but keeps the two-TX-attempts resilience without blocking.
+2. **Gossip-relay through the mesh** (v0x03 addition). Every lamp that receives a MSG_EVENT for the first time and isn't the originator rebroadcasts it. A BLE-coex'd originator (IDF #14904 SW-coex packet loss) no longer single-points the cascade: any peer that hears one of the two original broadcasts amplifies into the rest of the mesh. Storm bounded by the per-msgType DedupRing (64 slots, separate per type).
+3. **HW coex** at the radio layer (Espressif IDF flag, see `software/lamp-os/platformio.ini`). HW coex avoids the SW-coex starvation that caused the underlying 22% baseline reliability.
+
+The DedupRing collapses by `(sourceMac, seq)` so dispatch only fires once per cascade per receiver regardless of how many gossip copies arrive.
 
 ## BLE GATT characteristics (lamp ↔ phone)
 

@@ -273,12 +273,45 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
     // The cascade originator is firing on its own clock already; no need
     // to round-trip through the wire.
     if (std::memcmp(ev.sourceMac, myMac_, 6) == 0) return;
-    // We don't relay MSG_EVENT. The single broadcast (×2 back-to-back for
-    // reliability) reaches everyone in radio range simultaneously; relaying
-    // would amplify into a storm proportional to peer count.
+    // v0x03 lock-in: gossip-relay MSG_EVENT.
     //
+    // Old semantics (pre-v0x03): MSG_EVENT was single-hop. The cascade
+    // originator's broadcast (×2 back-to-back) reached whatever was in
+    // direct radio range, full stop. When the originator was BLE-coex'd
+    // — common case: the app was open on the triggerer's phone — IDF
+    // #14904's SW-coex packet loss dropped reliability to ~22% in the
+    // field. No relay meant no other lamp could help.
+    //
+    // New semantics: every lamp that successfully receives a MSG_EVENT
+    // for the first time (dedup gate above) AND isn't the originator
+    // (self-MAC gate above) rebroadcasts the frame verbatim. Three things
+    // bound the storm:
+    //   1. eventDedup_.record() (64-slot ring per the v0x03 capacity bump)
+    //      collapses any (sourceMac, seq) we've already seen. Total
+    //      airborne copies per cascade ≤ N + 1 in an N-lamp mesh, not
+    //      N² — each lamp emits at most one relay.
+    //   2. The self-MAC gate at line 275 prevents the originator from
+    //      re-firing its own gossip. The originator only emits its
+    //      explicit broadcast pair from ExpressionManager::maybeCascade.
+    //   3. Reach saturates at the dedup horizon: a frame arriving on
+    //      lamp X after X already relayed it gets dropped before re-relay.
+    //
+    // Why BEFORE the eventKind filter below: forward-compat. If a future
+    // EventKind (0x02..0xFF) ships on a newer fleet member, v0x03 lamps
+    // still relay it (helping its propagation) while individually dropping
+    // it from local application. That keeps the mesh from being a
+    // single-version straightjacket — unknown-but-well-formed events still
+    // hitchhike through the grid.
+    //
+    // The mode change from "best-effort sender re-emit" to "gossip-cascade
+    // through all peers" is the primary cascade-reliability fix in the
+    // production lock-in. Combined with HW coex (Commit F), targeted ≥90%
+    // cascade reception on a 2-lamp BT-connected source.
+    // why: cascade reliability fix per validated plan §"Layer 1".
+    link_.broadcast(data, len);
     // Built-in event kinds: today only ExpressionTriggered. Drop unknown
     // kinds silently (forward-compat with user-defined kinds in 0x10+).
+    // NOTE: this filter runs AFTER the gossip-relay above — see rationale.
     if (ev.eventKind != lamp_protocol::EventKind::ExpressionTriggered) return;
     // Look up our own MAC in the stagger entries. If present, take the
     // supplied delayMs; if absent (sender's peer list was truncated past
