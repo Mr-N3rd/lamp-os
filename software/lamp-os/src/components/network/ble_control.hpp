@@ -138,4 +138,19 @@ bool isHomeModePageActive();
  */
 bool isScanPaused();
 
+/**
+ * @brief Record that a BLE-originated write just landed. Stamps an
+ *        internal lastWrite timestamp that tick() compares against
+ *        kBleIdleThresholdMs to decide whether to widen the conn-params
+ *        interval. Cheap: a single millis() store. Call at the top of
+ *        any onWrite handler that processes app-originated traffic
+ *        (BrightnessCallback, BaseKnockoutCallback, HomeModeFocusCallback,
+ *        SocialDispositionsCallback, SettingsBlobCallback, AuthCallback,
+ *        and WriteRouter::onWrite via a forward-decl in write_router.hpp).
+ *        Reads are decidedly NOT activity for this purpose — pure-read
+ *        traffic doesn't generate the BLE coex pressure we're trying to
+ *        get out of the way of.
+ */
+void markActivity();
+
 }  // namespace ble_control

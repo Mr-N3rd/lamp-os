@@ -88,6 +88,44 @@ static volatile bool         s_homeModePageActive = false;
 // from the scan callback (also Core 0 today, but treat as cross-task).
 static volatile bool         s_scanPausedForGattClient = false;
 
+// Adaptive BLE connection interval — keep the link snappy (15-30 ms) while
+// the app is actively driving writes, then widen to 100-200 ms during idle
+// stretches to free up airtime for ESP-NOW mesh recv. IDF #14904 SW coex
+// starves ESP-NOW recv during BLE radio activity; widening the interval
+// reduces BLE radio time per second by ~5×. The originator lamp (the one
+// the user has the app pointed at when triggering a cascade) is the
+// bottleneck for mesh reliability in venue deployments, so this matters
+// most exactly on the lamp the user is interacting with.
+//
+// markBleActivity() is called at the top of every onWrite handler — any
+// write from the app counts as activity. tick() (Core 1, ~5 ms cadence)
+// checks if we've crossed the idle threshold and requests a new conn
+// interval. NimBLE's updateConnParams is async — iOS may decline or take
+// a connection event or two to apply — but we only request on state
+// transitions so traffic is minimal.
+//
+// volatile because s_lastBleWriteMs is written from BLE host task (Core 0)
+// and read by tick() (Core 1). uint32_t reads/writes are atomic on the
+// ESP32 32-bit core, so no portMUX is needed.
+static volatile uint32_t     s_lastBleWriteMs   = 0;
+static          uint16_t     s_currentConnHandle = 0xFFFF;
+static          bool         s_connParamsTight  = false;
+
+static constexpr uint32_t kBleIdleThresholdMs = 2000;  // 2s of no writes → widen
+static constexpr uint16_t kTightMinUnits = 12;   //  15.0 ms (units of 1.25 ms)
+static constexpr uint16_t kTightMaxUnits = 24;   //  30.0 ms
+static constexpr uint16_t kWideMinUnits  = 80;   // 100.0 ms — idle setting
+static constexpr uint16_t kWideMaxUnits  = 160;  // 200.0 ms
+static constexpr uint16_t kSupervisionTimeoutUnits = 400;  // 4.0 s (units of 10 ms)
+
+// Public: WriteRouter::onWrite calls this too (forward-declared in
+// write_router.hpp to avoid a ble_control.hpp ↔ write_router.hpp include
+// cycle). Anything else in the codebase that processes a BLE-originated
+// write can call this to keep the link snappy.
+void markActivity() {
+  s_lastBleWriteMs = millis();
+}
+
 bool isClientConnected()   { return s_clientConnected;   }
 bool isHomeModePageActive() { return s_homeModePageActive; }
 bool isScanPaused()        { return s_scanPausedForGattClient; }
@@ -272,7 +310,14 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     // backpressure that made continuous slider drags lag.
     //   minInterval = 12 (15.0 ms), maxInterval = 24 (30.0 ms),
     //   latency = 0, supervision timeout = 400 (4.0 s).
-    server->updateConnParams(handle, 12, 24, 0, 400);
+    server->updateConnParams(handle, kTightMinUnits, kTightMaxUnits, 0,
+                             kSupervisionTimeoutUnits);
+    // Seed adaptive widening state — see comments at s_lastBleWriteMs decl.
+    // Connect-time grace period: treat connect as "fresh activity" so we
+    // don't widen for 2s while the app finishes its initial reads.
+    s_currentConnHandle = handle;
+    s_connParamsTight   = true;
+    s_lastBleWriteMs    = millis();
 
     s_scanPausedForGattClient = true;
     NimBLEDevice::getScan()->stop();
@@ -302,6 +347,10 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
 
     s_clientConnected = false;
     s_homeModePageActive = false;
+    // Clear adaptive-conn-params state. Next connect re-seeds it; tick()
+    // is a no-op when s_currentConnHandle is INVALID.
+    s_currentConnHandle = 0xFFFF;
+    s_connParamsTight   = false;
     // Recompute effective home mode — gate switches back to presence-based.
     postPendingApplyEffectiveBrightness();
     // Audit fix #5: phone walked away — force-commit any pending
@@ -323,6 +372,7 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
 
 class AuthCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
     static const auto uuid = uuidSaltLE(CHAR_AUTH);
     const uint16_t handle = connInfo.getConnHandle();
     const std::string raw = c->getValue();
@@ -355,6 +405,7 @@ class AuthCallback : public NimBLECharacteristicCallbacks {
 
 class BrightnessCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
     if (!isAuthed(connInfo.getConnHandle())) return;
     std::string val = c->getValue();
     if (val.empty()) return;
@@ -393,6 +444,7 @@ class BrightnessCallback : public NimBLECharacteristicCallbacks {
 
 class HomeModeFocusCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
     if (!isAuthed(connInfo.getConnHandle())) return;
     std::string val = c->getValue();
     if (val.empty()) return;
@@ -407,6 +459,7 @@ class HomeModeFocusCallback : public NimBLECharacteristicCallbacks {
 
 class BaseKnockoutCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
     if (!isAuthed(connInfo.getConnHandle())) return;
     std::string val = c->getValue();
     if (val.size() < 2) return;
@@ -492,6 +545,7 @@ class SocialDispositionsCallback : public NimBLECharacteristicCallbacks {
     c->setValue(s_config->asDispositionsJson().c_str());
   }
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
     if (!isAuthed(connInfo.getConnHandle())) return;
     std::string val = c->getValue();
     if (val.size() > MAX_PENDING_OP_JSON) return;
@@ -609,6 +663,7 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
   }
 
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
     static const auto uuid = uuidSaltLE(CHAR_SETTINGS_BLOB);
     const uint16_t handle = connInfo.getConnHandle();
     const std::string raw = c->getValue();
@@ -753,9 +808,43 @@ void tick() {
   // settingsBlob has no read characteristic of its own (CHAR_SETTINGS_BLOB
   // is write-only; the read path was split into per-section chars). Its
   // cached accessor is still consumed by SettingsBlobCallback::onRead as
-  // a defensive backstop — left dirty here so the next read triggers a
+  // a defensive backstop — left cached so the next read triggers a
   // single rebuild rather than a per-tick rebuild for a value nobody is
   // currently asking for.
+
+  // ── Adaptive BLE connection interval ──────────────────────────────────
+  // See block comment at s_lastBleWriteMs declaration for the why.
+  //
+  // Two transitions:
+  //   TIGHT → WIDE  : connected AND no writes for kBleIdleThresholdMs
+  //   WIDE  → TIGHT : connected AND a write just landed (sinceLastWrite=0)
+  //
+  // updateConnParams is requested only on state change so the L2CAP
+  // ConnParamUpdateRequest doesn't churn the link. iOS as central usually
+  // honours both intervals; the peer ultimately picks the actual value
+  // inside the requested [min, max] window.
+  if (s_clientConnected && s_currentConnHandle != 0xFFFF && s_server) {
+    const uint32_t now = millis();
+    const uint32_t sinceLastWrite = now - s_lastBleWriteMs;
+    if (s_connParamsTight && sinceLastWrite > kBleIdleThresholdMs) {
+      s_server->updateConnParams(s_currentConnHandle,
+                                 kWideMinUnits, kWideMaxUnits, 0,
+                                 kSupervisionTimeoutUnits);
+      s_connParamsTight = false;
+#ifdef LAMP_DEBUG
+      Serial.printf("[ble_control] conn params → WIDE (100-200 ms) "
+                    "idle=%u ms\n", (unsigned)sinceLastWrite);
+#endif
+    } else if (!s_connParamsTight && sinceLastWrite < kBleIdleThresholdMs) {
+      s_server->updateConnParams(s_currentConnHandle,
+                                 kTightMinUnits, kTightMaxUnits, 0,
+                                 kSupervisionTimeoutUnits);
+      s_connParamsTight = true;
+#ifdef LAMP_DEBUG
+      Serial.printf("[ble_control] conn params → TIGHT (15-30 ms) — activity\n");
+#endif
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
