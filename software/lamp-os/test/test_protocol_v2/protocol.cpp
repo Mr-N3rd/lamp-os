@@ -20,6 +20,18 @@ void tearDown(void) {}
 
 namespace lp = lamp_protocol;
 
+// v0x03 lock-in pin: the production lock-in for the 20-50 lamp deployment
+// bumps PROTOCOL_VERSION from 0x02 to 0x03. This static_assert is the
+// "compile fails loudly if the wire-format-locking ever silently regresses"
+// guard. If a future change wants to retire/bump 0x03, it has to update
+// THIS line — which forces a thoughtful answer to "have we re-flashed all
+// peers?" since inspect() rejects mismatched-version frames.
+// why: pins the protocol-version lock-in per validated plan §"Layer 4".
+static_assert(lp::PROTOCOL_VERSION == 0x03,
+              "PROTOCOL_VERSION lock-in for v0x03 (mesh-deploy lock-in). "
+              "Bumping this constant in production requires re-flashing all "
+              "lamps + wisp before redeploy — inspect() rejects mismatches.");
+
 static const uint8_t kSrcMac[6]    = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15};
 static const uint8_t kTargetMac[6] = {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5};
 

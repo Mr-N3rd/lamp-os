@@ -38,11 +38,17 @@ namespace lamp_protocol {
 constexpr uint8_t MAGIC_0 = 'L';
 constexpr uint8_t MAGIC_1 = 'M';
 // Phase A bumped this from 0x01 to 0x02 to add `firmwareVersion` to the HELLO
-// fixed prefix. The bump is a one-way break: a v0x01 lamp on the mesh will
-// drop v0x02 frames (and vice versa), so all peers must be re-flashed before
-// they re-discover each other. Spec'd as acceptable in
-// docs/superpowers/specs/2026-06-03-wisp-design.md.
-constexpr uint8_t PROTOCOL_VERSION = 0x02;
+// fixed prefix. The 2026-06 mesh-deploy lock-in bumped it again to 0x03 to
+// mark the v0x03 semantic shift: MSG_EVENT is now gossip-relayed (was single-
+// hop), the per-msgType DedupRing capacity grew 32→64, the high bit on
+// numStaggerEntries is now reserved (kStaggerCountReservedHighBit), and
+// LAMP_HELLO_INTERVAL_MS is 5000 (was 2000). The bump is a one-way break:
+// a v0x02 lamp on the mesh will drop v0x03 frames (and vice versa) because
+// inspect() rejects mismatched versions — all peers MUST be re-flashed
+// before they re-discover each other. Loud, diagnosable failure is by design.
+// why: pins the wire-format lock-in for 20-50 lamp production deploy per
+// validated plan §"Layer 4". See test_protocol_v2 static_assert.
+constexpr uint8_t PROTOCOL_VERSION = 0x03;
 
 enum MsgType : uint8_t {
   MSG_HELLO               = 0x01,
