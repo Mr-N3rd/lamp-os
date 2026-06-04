@@ -34,6 +34,23 @@ static void recvTrampoline(const esp_now_recv_info_t* info, const uint8_t* data,
   EspNowLink::s_recv(info->src_addr, data, static_cast<size_t>(len), rssi);
 }
 
+// TX-completion diagnostic. Fires on the WiFi task after the radio either
+// emits the frame or declines (queue full, driver error, no peer, etc.).
+// Added 2026-06-03 to diagnose cascade reception silence — log the actual
+// PHY result so we can tell whether broadcasts physically left the radio.
+static void sendTrampoline(const esp_now_send_info_t* /*info*/,
+                           esp_now_send_status_t status) {
+#ifdef LAMP_DEBUG
+  // TX diagnostic — only log failures. We already verified earlier in the
+  // 2026-06-04 session that all sends succeed at PHY layer; logging every
+  // OK floods serial and corrupts other logs. Keep the FAIL log so a real
+  // TX failure still surfaces.
+  if (status != ESP_NOW_SEND_SUCCESS) {
+    Serial.println("[espnow.tx] FAIL");
+  }
+#endif
+}
+
 bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
   s_recv = recv;
 
@@ -50,6 +67,7 @@ bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
   }
 
   esp_now_register_recv_cb(recvTrampoline);
+  esp_now_register_send_cb(sendTrampoline);
 
   esp_now_peer_info_t peer = {};
   std::memset(&peer, 0, sizeof(peer));
