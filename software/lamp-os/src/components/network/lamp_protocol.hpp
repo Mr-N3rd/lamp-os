@@ -65,6 +65,16 @@ enum MsgType : uint8_t {
 // reuse will surface immediately as an unrecognised msgType byte.
 constexpr uint8_t kReservedMsgTypeHighBit = 0x80;
 
+// v0x03 mesh-deploy lock-in: parallel reservation of the high bit on the
+// numStaggerEntries field (data[13] of MSG_EVENT). Plausible future use:
+// a "scope flag" on the stagger semantics (e.g., room-scope vs. fleet-
+// scope cascades, or "broadcast-everyone-fires-tail-jittered" vs the
+// current "fires per its delayMs"). parseEvent rejects any frame that
+// sets this bit so a future receiver gains an unambiguous escape hatch:
+// v0x03 peers loudly drop the frame, not silently reinterpret it.
+// why: forward-compat reservation per validated plan §"Layer 3".
+constexpr uint8_t kStaggerCountReservedHighBit = 0x80;
+
 // Phase C single-source-of-truth caps.
 constexpr size_t kMaxOverrideColorsPerFrame = 8;   // ESP-NOW 250-byte cap math
 constexpr size_t kMaxStaggerEntries         = 12;  // ESP-NOW 250-byte cap math
@@ -708,6 +718,13 @@ inline bool parseRestoreBrightness(const uint8_t* data, size_t len,
 inline bool parseEvent(const uint8_t* data, size_t len, ParsedEvent& out) {
   if (inspect(data, len) != MSG_EVENT) return false;
   if (len < EVENT_FIXED_SIZE) return false;
+  // v0x03 lock-in: reject if the reserved high bit on numStaggerEntries is
+  // set. EXPLICIT check (not relying on the > kMaxStaggerEntries clamp
+  // below to catch it incidentally) so a future refactor that masks low
+  // bits first can't silently start accepting the bit. See
+  // kStaggerCountReservedHighBit declaration for the rationale.
+  // why: forward-compat reservation per validated plan §"Layer 3".
+  if (data[13] & kStaggerCountReservedHighBit) return false;
   const uint8_t numStaggerEntries = data[13];
   if (numStaggerEntries > kMaxStaggerEntries) return false;
   const size_t staggerBytes =

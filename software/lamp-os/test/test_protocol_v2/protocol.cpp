@@ -435,6 +435,48 @@ void test_event_builder_rejects_payload_over_dynamic_budget() {
                      static_cast<uint16_t>(tooBig.size())));
 }
 
+// v0x03 lock-in: high bit on numStaggerEntries (data[13]) is reserved for
+// a future "scope flag" on the stagger semantics (e.g., room-scope vs.
+// fleet-scope cascades). Today's receivers must REJECT any frame that
+// sets it, so a future receiver can use the bit unambiguously: a v0x03
+// peer dropping the frame is loud, diagnosable forward-compat behavior,
+// not a silent reinterpretation. Mirrors the kReservedMsgTypeHighBit
+// pattern on data[3].
+// why: forward-compat reservation per validated plan §"Layer 3".
+void test_event_parse_rejects_frame_with_stagger_count_high_bit_set() {
+  uint8_t buf[lp::EVENT_MAX_SIZE];
+  const size_t n = lp::buildEvent(buf, sizeof(buf), /*seq=*/1, kSrcMac,
+                                  /*eventKind=*/static_cast<uint8_t>(lp::EventKind::ExpressionTriggered),
+                                  /*staggerMacs=*/nullptr,
+                                  /*staggerDelays=*/nullptr,
+                                  /*numStaggerEntries=*/0,
+                                  /*payload=*/nullptr, /*payloadLen=*/0);
+  TEST_ASSERT_GREATER_THAN_UINT32(0, n);
+
+  // Sanity: pristine frame parses cleanly.
+  lp::ParsedEvent out;
+  TEST_ASSERT_TRUE(lp::parseEvent(buf, n, out));
+
+  // Flip the reserved high bit on data[13] (numStaggerEntries field).
+  // Even though the low bits still encode 0 (a legitimate count), the
+  // explicit reservation must reject the frame. Without the guard, the
+  // pre-existing `numStaggerEntries > kMaxStaggerEntries` check would
+  // ALSO catch 0x80 (= 128) as out-of-range — but that's the wrong
+  // failure path. We want the reservation to be the EXPLICIT contract,
+  // so a future code-shape that masks first (e.g., `data[13] & 0x7F`)
+  // doesn't silently accept the frame.
+  buf[13] |= lp::kStaggerCountReservedHighBit;
+  TEST_ASSERT_FALSE(lp::parseEvent(buf, n, out));
+}
+
+// Mirror the kReservedMsgTypeHighBit constant pattern: any future revival
+// of the bit needs an explicit code update. Pinning the value here means
+// the test compiles only if the constant exists with the documented value.
+// why: pins the reserved-bit constant per validated plan §"Layer 3".
+static_assert(lp::kStaggerCountReservedHighBit == 0x80,
+              "kStaggerCountReservedHighBit lock-in: reserves the high bit "
+              "on numStaggerEntries (data[13]) for future protocol use.");
+
 void test_inspect_no_longer_masks_high_bit() {
   // C.3 retired FLAG_LOCAL_ONLY. inspect() now returns data[3] verbatim,
   // so a frame with the high bit set on the msgType byte (a hypothetical
@@ -491,6 +533,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_event_dynamic_payload_budget_clamps_over_kmax);
   RUN_TEST(test_event_builder_accepts_226_byte_payload_with_one_stagger);
   RUN_TEST(test_event_builder_rejects_payload_over_dynamic_budget);
+
+  RUN_TEST(test_event_parse_rejects_frame_with_stagger_count_high_bit_set);
 
   RUN_TEST(test_inspect_no_longer_masks_high_bit);
 
