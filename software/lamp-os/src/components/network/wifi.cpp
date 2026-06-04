@@ -24,6 +24,7 @@ static std::vector<std::string> s_recentSsids;         // persistent presence ca
 static uint32_t s_lastScanCompleteMs = 0;
 static uint32_t s_lastBackgroundScanMs = 0;
 static StateChangeCallback s_cb = nullptr;
+static HomeModeEnabledGetter s_homeModeEnabledGetter = nullptr;
 
 // Guards s_scanResults + s_recentSsids + s_lastScanCompleteMs against
 // concurrent access. Writer: Core 1 wifi::tick() (scan-complete drain
@@ -74,6 +75,14 @@ void begin() {
   WiFi.disconnect(true, true);   // wipe any stale SDK creds from a previous boot
   WiFi.mode(WIFI_STA);            // enable STA so scanNetworks works
   esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  // Don't run the first periodic scan at boot. The boot-time WiFi stack
+  // is fragile (just came up from WiFi.disconnect+WIFI_STA), and a failed
+  // scan in this window strands the radio off LAMP_ESPNOW_CHANNEL —
+  // observed 2026-06-04 on jacko, killed mesh recv entirely. Seed
+  // s_lastBackgroundScanMs with the current millis() so the first
+  // periodic scan fires BACKGROUND_SCAN_INTERVAL_MS *after* boot, when
+  // the WiFi stack has settled.
+  s_lastBackgroundScanMs = millis();
 }
 
 void forget() {
@@ -98,6 +107,12 @@ void startScan() {
   // — scans only fire when BT is disconnected, but a scan started just
   // before a reconnect can spill ~5s into the BT session.
   Serial.println("[wifi] scan started");
+  // Trace which gate fired this scan (added 2026-06-04 for scan-storm
+  // diagnosis). lastBgMs is updated by the periodic gate immediately
+  // before this call, so if it's "now-ish" the caller is the periodic
+  // path; if much older, the caller was external (e.g. BLE op:scan).
+  Serial.printf("[wifi.sched] startScan() entry: lastBgMs=%u now=%u\n",
+                (unsigned)s_lastBackgroundScanMs, (unsigned)millis());
 #endif
   // Steal the existing results buffer, free OUTSIDE the critical section.
   std::vector<ScanResult> drop;
@@ -121,6 +136,10 @@ std::vector<ScanResult> consumeScanResults() {
 }
 
 void setStateChangeCallback(StateChangeCallback cb) { s_cb = cb; }
+
+void setHomeModeEnabledGetter(HomeModeEnabledGetter fn) {
+  s_homeModeEnabledGetter = fn;
+}
 
 bool homeSsidVisible(const std::string& ssid) {
   if (ssid.empty()) return false;
@@ -212,15 +231,27 @@ void tick() {
     setState(IDLE);
   }
 
-  // 2. Periodic background scan for home-presence detection. Only when
-  //    no BT client is connected — scanning during a BT session would
-  //    stress the shared radio and risk LINK_SUPERVISION_TIMEOUT drops.
-  //    On boot, s_lastBackgroundScanMs == 0 so the first scan fires
-  //    immediately (after BT settles).
-  if (s_state == IDLE && !ble_control::isClientConnected()) {
+  // 2. Periodic background scan for home-presence detection. Gated on:
+  //    - no BT client connected (scanning during a BT session stresses
+  //      the shared radio)
+  //    - home-mode is enabled in config (otherwise scan results have no
+  //      consumer; no point spending radio time on them)
+  //    - BACKGROUND_SCAN_INTERVAL_MS elapsed since the last scan
+  //
+  //    The first periodic scan fires BACKGROUND_SCAN_INTERVAL_MS after
+  //    boot, not at boot — see wifi::begin() for the rationale (boot-
+  //    time scan failures stranded the radio off LAMP_ESPNOW_CHANNEL).
+  const bool homeModeEnabled =
+      s_homeModeEnabledGetter && s_homeModeEnabledGetter();
+  if (s_state == IDLE && !ble_control::isClientConnected() && homeModeEnabled) {
     const uint32_t now = millis();
-    if (s_lastBackgroundScanMs == 0 ||
-        now - s_lastBackgroundScanMs > BACKGROUND_SCAN_INTERVAL_MS) {
+    const uint32_t elapsed = now - s_lastBackgroundScanMs;
+    if (elapsed > BACKGROUND_SCAN_INTERVAL_MS) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[wifi.sched] scan DECIDED elapsed=%u lastBgMs=%u now=%u\n",
+                    (unsigned)elapsed,
+                    (unsigned)s_lastBackgroundScanMs, (unsigned)now);
+#endif
       s_lastBackgroundScanMs = now;
       startScan();
     }

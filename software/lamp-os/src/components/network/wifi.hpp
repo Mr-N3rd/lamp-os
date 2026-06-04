@@ -29,6 +29,16 @@ std::vector<ScanResult> consumeScanResults();  // drains; used by the UI notify
 using StateChangeCallback = void (*)();
 void setStateChangeCallback(StateChangeCallback cb);
 
+// Caller registers a getter for "is home-mode currently enabled in config".
+// wifi.cpp uses it to gate periodic background scans — when home-mode is off
+// there's no consumer for the scan results, so we save the radio time
+// (and avoid the boot-time scan failures that were stranding the radio off
+// LAMP_ESPNOW_CHANNEL on 2026-06-04). Returning false (or registering no
+// getter at all) disables periodic scans entirely; on-demand scans via
+// startScan() still work.
+using HomeModeEnabledGetter = bool (*)();
+void setHomeModeEnabledGetter(HomeModeEnabledGetter fn);
+
 void tick();
 
 // Home-presence detection. The lamp periodically scans (when no BT client

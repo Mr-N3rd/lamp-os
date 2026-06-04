@@ -88,7 +88,21 @@ bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
 
 bool EspNowLink::broadcast(const uint8_t* data, size_t len) {
   static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-  return esp_now_send(bcast, data, len) == ESP_OK;
+  const esp_err_t err = esp_now_send(bcast, data, len);
+#ifdef LAMP_DEBUG
+  // Submission diagnostic (added 2026-06-04 to chase asymmetric recv:
+  // wisp HELLOs arriving on meloni while jacko's MSG_EVENT broadcasts
+  // don't, despite zero PHY-layer FAILs on the send callback). If
+  // esp_now_send returns anything other than ESP_OK the frame never
+  // hits the driver queue, the send callback never fires, and callers
+  // (broadcastRaw, maybeCascade) currently discard this return value —
+  // so the silent drop is invisible without this log.
+  if (err != ESP_OK) {
+    Serial.printf("[espnow.tx] submit FAIL err=%d (0x%x) len=%u\n",
+                  (int)err, (unsigned)err, (unsigned)len);
+  }
+#endif
+  return err == ESP_OK;
 }
 
 void EspNowLink::getMac(uint8_t out[6]) {

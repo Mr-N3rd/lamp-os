@@ -760,6 +760,7 @@ void setup() {
 
   wifi::begin();
   wifi::setStateChangeCallback(onWifiStateChanged);
+  wifi::setHomeModeEnabledGetter([]() { return config.homeMode.enabled; });
 
   bt.begin(config.lamp.name, config.base.colors[config.base.ac], config.shade.colors[0]);
   bt.activateGattServices(&config, &prefs);

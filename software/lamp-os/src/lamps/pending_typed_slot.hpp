@@ -27,6 +27,7 @@
 // PendingWispHello, etc.) are all POD-by-construction.
 
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
+#include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <portmacro.h>
 #endif
@@ -40,9 +41,23 @@ struct PendingTypedSlot {
 
   bool post(portMUX_TYPE& mux, const T& src) {
     portENTER_CRITICAL(&mux);
+#ifdef LAMP_DEBUG
+    const bool overwriting = valid;
+#endif
     payload = src;
     valid = true;
     portEXIT_CRITICAL(&mux);
+#ifdef LAMP_DEBUG
+    // Overwrite diagnostic — fires when a new post() lands on a still-valid
+    // slot, meaning the previous event will be silently lost. Added
+    // 2026-06-04 to measure how often this happens in practice during
+    // rapid cascade triggers. sizeof(T) discriminates which slot
+    // (PendingEvent ≈ 244, PendingWispHello small, etc.) without needing
+    // a per-slot tag parameter that would touch every forwarder.
+    if (overwriting) {
+      Serial.printf("[slot.overwrite] size=%u\n", (unsigned)sizeof(T));
+    }
+#endif
     return true;
   }
 
