@@ -41,6 +41,12 @@ class WispConfig {
   // setWifi op stubs. Not consumed this phase — STA bring-up wiring lands in a
   // later task. Exposed now so the dispatcher doesn't have to grow its own
   // storage layer when setWifi arrives.
+  //
+  // SECURITY: stored in plaintext NVS. ESP32 NVS is not encrypted by default;
+  // anyone with flash-dump access can read these. Phase D stubs STA bring-up,
+  // so this is unused for now — revisit before shipping WiFi setup to
+  // production. Options when we get there: enable NVS encryption (esp_partition
+  // + esp_secure_boot) or move credentials to a separate encrypted partition.
   const String& wifiSsid() const { return wifiSsid_; }
   const String& wifiPw() const { return wifiPw_; }
   bool hasWifi() const { return wifiSsid_.length() > 0; }

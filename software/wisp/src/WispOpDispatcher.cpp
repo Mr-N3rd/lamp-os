@@ -48,10 +48,9 @@ DispatchResult WispOpDispatcher::dispatch(const uint8_t* payload, size_t len) {
       return DispatchResult::Malformed;
     }
     const int zoneId = doc["zoneId"].as<int>();
-    if (zoneId < 0) {
-      Serial.printf("[wisp.op] setZone rejects negative zoneId=%d\n", zoneId);
-      return DispatchResult::Malformed;
-    }
+    // Negative-zoneId rejection lives in WispConfig::setSelectedZone — the
+    // storage layer owns that invariant, so the dispatcher doesn't duplicate
+    // the check here.
     Serial.printf("[wisp.op] setZone zoneId=%d\n", zoneId);
     config_.setSelectedZone(zoneId);
     return DispatchResult::AppliedZoneChange;

@@ -44,7 +44,10 @@ wisp::WispOpDispatcher wispOpDispatcher(wispConfig);
 // reach us multiple times by design (sender + 1-hop relays). The 64-slot
 // portMUX-guarded ring keyed on (sourceMac, msgType, seq) drops the
 // re-arrivals before they hit the dispatcher.
-lamp_protocol::DedupRing controlOpDedup_;
+// Single-purpose ring (CONTROL_OP only) — no need to shard per-msgType like
+// ShowReceiver on the lamp side, which juggles HELLO/CONTROL_OP/OVERRIDE/EVENT
+// through one queue.
+lamp_protocol::DedupRing controlOpDedup;
 
 // --- ZoneSelector --------------------------------------------------------
 // Process-local zone-selection state. Only `currentZone` is persistent (and
@@ -66,6 +69,9 @@ const char* zoneSourceName(ZoneSource s) {
 // rotating zone ids.
 constexpr size_t kMaxObservedZones = 16;
 
+// THREADING: all access must occur on the loop task. observe() may be invoked
+// from auroraClient.loop() OR drainPendingWispOp — both run on loop. Never
+// wire a recv-task call site without adding a portMUX.
 struct ZoneSelector {
   int        currentZone = -1;
   ZoneSource source = ZoneSource::None;
@@ -115,17 +121,14 @@ portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
 // slot size means a worst-case op fits without allocating.
 uint8_t pendingWispOpBuf[lamp_protocol::CONTROL_MAX_PAYLOAD] = {0};
 uint16_t pendingWispOpLen = 0;
-uint8_t pendingWispOpSourceMac[6] = {0};
 bool pendingWispOpValid = false;
 
 // Recv-task safe: bounded memcpy + flag flip under portMUX. No heap, no
 // logging. If a previous op is still pending (drain hasn't run yet) the new
 // one wins — single-slot semantics, latest intent matters most.
-void postPendingWispOp(const uint8_t srcMac[6], const uint8_t* payload,
-                       uint16_t payloadLen) {
+void postPendingWispOp(const uint8_t* payload, uint16_t payloadLen) {
   if (payloadLen > lamp_protocol::CONTROL_MAX_PAYLOAD) return;
   portENTER_CRITICAL(&pendingMux);
-  std::memcpy(pendingWispOpSourceMac, srcMac, 6);
   std::memcpy(pendingWispOpBuf, payload, payloadLen);
   pendingWispOpLen = payloadLen;
   pendingWispOpValid = true;
@@ -133,15 +136,13 @@ void postPendingWispOp(const uint8_t srcMac[6], const uint8_t* payload,
 }
 
 // Loop-task: copy out under portMUX, then dispatch on a local buffer so the
-// portMUX critical section stays short. Returns true if a payload was drained.
+// portMUX critical section stays short.
 void drainPendingWispOp() {
   uint8_t localBuf[lamp_protocol::CONTROL_MAX_PAYLOAD];
   uint16_t localLen = 0;
-  uint8_t localMac[6];
   bool have = false;
   portENTER_CRITICAL(&pendingMux);
   if (pendingWispOpValid) {
-    std::memcpy(localMac, pendingWispOpSourceMac, 6);
     std::memcpy(localBuf, pendingWispOpBuf, pendingWispOpLen);
     localLen = pendingWispOpLen;
     pendingWispOpValid = false;
@@ -199,11 +200,11 @@ void onMeshPacket(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len) {
     if (!lamp_protocol::parseControlOp(data, len, op)) return;
     // Dedup BEFORE post: a gossip-relayed duplicate must not displace a
     // pending fresh op. Per-msgType ring keyed on sourceMac+seq.
-    if (!controlOpDedup_.record(op.sourceMac, lamp_protocol::MSG_CONTROL_OP,
-                                op.seq)) {
+    if (!controlOpDedup.record(op.sourceMac, lamp_protocol::MSG_CONTROL_OP,
+                               op.seq)) {
       return;
     }
-    postPendingWispOp(op.sourceMac, op.payload, op.payloadLen);
+    postPendingWispOp(op.payload, op.payloadLen);
     return;
   }
 }
