@@ -18,7 +18,39 @@
 #define LAMP_ESPNOW_CHANNEL 1
 #endif
 
-#define LAMP_HELLO_INTERVAL_MS 2000
+// v0x03 mesh-deploy lock-in: bumped from 2000 → 5000 ms to reduce baseline
+// HELLO mesh traffic by ~60% for the 20-50 lamp deployment. HELLO + its
+// gossip-relay across N lamps was the largest source of channel use; at
+// 50 lamps × 2s × 1 gossip-relay/peer = ~50 broadcasts/s on the channel
+// before any other traffic. Bumping to 5s drops that to ~20/s, leaving
+// substantially more airtime for MSG_EVENT cascades (which now also
+// gossip-relay per Commit E) and the OVERRIDE/RESTORE family.
+//
+// Sanity-checked against existing presence semantics:
+//   - LAMP_PRUNE_TIME_MS = 120000 (nearby_lamps.hpp:16): we prune a peer
+//     if we don't hear from them for 120s. 5s HELLO is well within that
+//     window (24 emits before prune); even a 50% packet loss leaves
+//     plenty of headroom to keep the roster populated.
+//   - Home-presence UX updates within ~10s of boot at 5s — acceptable
+//     since the Flutter app already polls + the BLE notification on
+//     CHAR_NEARBY_LAMPS fires whenever the roster mutates.
+//   - Cascade-stagger ordering depends on RSSI from recent HELLOs; the
+//     sender's stagger plan is freshest right after a HELLO, but it
+//     degrades gracefully: stale RSSI is "good enough" for ordering and
+//     missing peers tail-fire (show_receiver.cpp::handleRecv MSG_EVENT
+//     branch).
+// why: scale-fix per validated plan §"Layer 2".
+#define LAMP_HELLO_INTERVAL_MS 5000
+
+// Compile-time pin so a future change has to explicitly update this line —
+// the new interval is a calibrated trade-off (see comment above) and a
+// drift back to 2s would re-introduce the airtime pressure the v0x03
+// lock-in addresses.
+// why: prevents silent regression of the airtime budget.
+static_assert(LAMP_HELLO_INTERVAL_MS == 5000,
+              "LAMP_HELLO_INTERVAL_MS lock-in for v0x03 (5s baseline). "
+              "Bumping back below 5000 must come with a re-validation "
+              "against fleet-size airtime budget.");
 
 namespace lamp {
 
