@@ -118,7 +118,8 @@ lamp::PendingTypedSlot<lamp::PendingWispHello>          pendingWispHello;
 // MSG_EVENT slot — ShowReceiver's WiFi recv path resolves the per-peer
 // delayMs from the stagger list, memcpys the payload here, and the Core 1
 // drain hands off to expressionManager.tryHandleExpressionEvent which does
-// the JSON peek + config check + (optional pendingTriggers enqueue).
+// the JSON peek + RecentCascade dedup + (optional pendingTriggers enqueue).
+// No local-config consult: cascade is sender-authoritative.
 lamp::PendingTypedSlot<lamp::PendingEvent>              pendingEvent;
 portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -1239,8 +1240,9 @@ void loop() {
   }
   // MSG_EVENT drain. The recv side already resolved our delayMs from the
   // stagger entries list and copied the payload bytes into the slot;
-  // tryHandleExpressionEvent does the (cheap-peek → config check →
-  // RecentCascade dedup → full parse → trigger) dance on Core 1.
+  // tryHandleExpressionEvent does the (cheap-peek → RecentCascade dedup →
+  // full parse → trigger) dance on Core 1. No local-config consult —
+  // cascade is sender-authoritative.
   {
     lamp::PendingEvent cmd;
     if (pendingEvent.drain(pendingMux, cmd)) {

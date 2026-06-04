@@ -89,13 +89,17 @@ struct PendingWispHello {
 // stagger-list lookup (own MAC → delayMs) and memcpys the result here;
 // the Core 1 drain calls ExpressionManager::tryHandleExpressionEvent
 // which does the expensive JSON parse + cascade-config check + dedup +
-// trigger. EVENT_MAX_PAYLOAD caps the payload at 138 bytes so the slot
-// is POD with a fixed-size buffer (no heap).
+// trigger. Buffer sized to maxEventPayloadFor(0) = 234 — the absolute
+// best-case payload when no stagger entries ride the wire. Lower
+// stagger counts on small meshes get larger payloads, and the slot has
+// to hold whatever the parser accepted (otherwise we'd silently drop
+// frames at the recv-side memcpy boundary — the bug glitchy hit in the
+// field on 2026-06-03 before this slot was widened).
 struct PendingEvent {
   uint8_t  sourceMac[6];
   uint16_t delayMs;          // already resolved by recv-side stagger lookup
   uint16_t payloadLen;
-  uint8_t  payload[lamp_protocol::EVENT_MAX_PAYLOAD];
+  uint8_t  payload[lamp_protocol::maxEventPayloadFor(0)];
 };
 
 // Forwarders implemented in standard_lamp.cpp. ShowReceiver's WiFi-task
@@ -146,8 +150,8 @@ class ShowReceiver {
   bool broadcastRaw(const uint8_t* data, size_t len);
 
   // Allocate the next outbound event sequence number. The cascade path
-  // emits two copies of the same MSG_EVENT (~20 ms jitter) for broadcast-
-  // loss resilience; both share the same seq so receivers' eventDedup_
+  // emits two back-to-back copies of the same MSG_EVENT for broadcast-loss
+  // resilience; both share the same seq so receivers' eventDedup_
   // collapses the second copy after applying the first.
   uint16_t nextEventSeq();
 

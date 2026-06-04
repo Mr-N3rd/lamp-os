@@ -263,19 +263,19 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
   } else if (msgType == lamp_protocol::MSG_EVENT) {
     lamp_protocol::ParsedEvent ev;
     if (!lamp_protocol::parseEvent(data, len, ev)) return;
-    // Dedup by (sourceMac, seq). The cascade sender intentionally emits
-    // two copies of the same MSG_EVENT (~20 ms jitter) for broadcast-loss
-    // resilience; both share the same seq so the second copy collapses
-    // here. Also collapses any future relay (we don't relay MSG_EVENT
-    // today, but a peer's stack might).
+    // Dedup by (sourceMac, seq). The cascade sender emits two back-to-back
+    // copies of MSG_EVENT for broadcast-loss resilience (ESP-NOW broadcasts
+    // are not link-layer ACK'd); both share the same seq so the second
+    // copy collapses here. Also collapses any future relay (we don't relay
+    // MSG_EVENT today, but a peer's stack might).
     if (!eventDedup_.record(ev.sourceMac, lamp_protocol::MSG_EVENT, ev.seq)) return;
     // Drop our own broadcast — would otherwise re-trigger us locally.
     // The cascade originator is firing on its own clock already; no need
     // to round-trip through the wire.
     if (std::memcmp(ev.sourceMac, myMac_, 6) == 0) return;
-    // We don't relay MSG_EVENT. The single broadcast (x2 for reliability)
-    // reaches everyone in radio range simultaneously; relaying would
-    // amplify into a storm proportional to peer count.
+    // We don't relay MSG_EVENT. The single broadcast (×2 back-to-back for
+    // reliability) reaches everyone in radio range simultaneously; relaying
+    // would amplify into a storm proportional to peer count.
     //
     // Built-in event kinds: today only ExpressionTriggered. Drop unknown
     // kinds silently (forward-compat with user-defined kinds in 0x10+).
@@ -296,11 +296,12 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
         break;
       }
     }
-    // Payload is already capped at EVENT_MAX_PAYLOAD by the parser; the
-    // PendingEvent.payload buffer is sized to match exactly so this memcpy
-    // can never overrun. Defensive check anyway in case the cap shifts in
-    // the future without this slot tracking the move.
-    if (ev.payloadLen > lamp_protocol::EVENT_MAX_PAYLOAD) return;
+    // Payload is already capped at maxEventPayloadFor(numStaggerEntries)
+    // by the parser; the PendingEvent.payload buffer is sized to the
+    // zero-stagger best case so this memcpy can never overrun for any
+    // valid frame. Defensive check anyway so a future protocol drift
+    // can't silently overflow the slot.
+    if (ev.payloadLen > lamp_protocol::maxEventPayloadFor(ev.numStaggerEntries)) return;
     PendingEvent slot;
     std::memcpy(slot.sourceMac, ev.sourceMac, 6);
     slot.delayMs = delayMs;

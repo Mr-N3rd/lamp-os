@@ -179,19 +179,20 @@ numStaggerEntries: capped at 12 (kMaxStaggerEntries).
 staggerEntries[].delayMs: clamped to kMaxDelayMs = 10000 on receive.
 ```
 
-**Stagger semantics:** the sender pre-computes per-peer delays, sorted by RSSI descending (strongest signal first → physically closest → fires earliest in the wave). Each peer's `delayMs = position × cascadeStaggerMs`.
+**Stagger semantics:** the sender pre-computes per-peer delays, sorted by RSSI descending (strongest signal first → physically closest → fires earliest in the wave). Each peer's `delayMs = (position + 1) × cascadeStaggerMs`. The `(position + 1)` offset means the closest peer fires `cascadeStaggerMs` after the sender, not at the same instant — without the offset, a 2-lamp mesh would fire simultaneously regardless of `cascadeStaggerMs` and the "wave from the trigger source outward" UX is lost.
 
 **Receiver flow** (in order, early-out at any step):
 1. Dedup by `sourceMac + seq` via `eventDedup_` ring.
 2. Drop if `sourceMac == myMac` (own broadcast).
 3. Drop if `eventKind` unknown.
-4. Cheap byte-scan the payload for `"type":"..."` (no JsonDocument yet).
-5. Check `config.<type>.cascadeEnabled` — drop if not opted in.
-6. Check `recentCascades_` dedup.
-7. Look up own MAC in `staggerEntries`; if found use its `delayMs`, otherwise tail-fire at `numStaggerEntries × 50ms`.
-8. Full `parseInvocation` and `triggerInvocation(suppressCascade=true)` with `fireAtMs = millis() + clampedDelayMs`.
+4. Cheap byte-scan the payload for `"type":"..."` (no JsonDocument yet) — used as the `recentCascades_` dedup key.
+5. Check `recentCascades_` dedup.
+6. Look up own MAC in `staggerEntries`; if found use its `delayMs`, otherwise tail-fire at `numStaggerEntries × 50ms`.
+7. Full `parseInvocation` and `triggerInvocation(suppressCascade=true)` with `fireAtMs = millis() + clampedDelayMs`.
 
-**Reliability:** sender emits MSG_EVENT twice with ~20 ms jitter. Receivers' DedupRing collapses duplicates. Same total wire cost as a 2-peer unicast cascade today, much better delivery rate.
+**Cascade is sender-authoritative.** Receivers fire whatever the sender announces — the wire payload carries the full invocation (`type`, `target`, `colors`, `parameters`) and a fresh transient Expression is built directly from it. The receiver's local expression config (its own `expressions` vector, including its own `cascadeEnabled` setting for the same type) is intentionally irrelevant. This matches the pre-C.3 CONTROL_OP cascade model and was briefly broken by a receiver-side `cascadeEnabled` gate introduced in `cb7e6fd` and removed 2026-06-03.
+
+**Reliability:** sender emits MSG_EVENT twice back-to-back (no inter-send delay). ESP-NOW broadcasts have no link-layer ACK, so the duplicate is best-effort insurance against a single dropped frame from RF contention (BLE adv burst, brief channel noise). Receivers' DedupRing collapses by `(sourceMac, seq)` so dispatch only fires once. Earlier revisions used a 20 ms `delay()` between sends to spread the two copies across separate RF transient windows; that delay was dropped 2026-06-03 because it stalled the sender's Core 1 render pipeline (sender's own LEDs visibly lagged receivers'). Back-to-back loses the across-window spread but keeps the two-TX-attempts resilience without blocking.
 
 ## BLE GATT characteristics (lamp ↔ phone)
 
@@ -255,7 +256,8 @@ lamp A                       mesh                            lamp B (in range)
   │                            │                              │── parse MSG_EVENT
   │                            │                              │── dedup + drop own
   │                            │                              │── peek "type" in JSON
-  │                            │                              │── consult cascadeEnabled
+  │                            │                              │   (dedup key only —
+  │                            │                              │    no local-config consult)
   │                            │                              │── lookup own MAC in
   │                            │                              │   staggerEntries
   │                            │                              │   → index 0, delay=0

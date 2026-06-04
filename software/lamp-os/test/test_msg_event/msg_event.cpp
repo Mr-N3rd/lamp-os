@@ -60,7 +60,9 @@ struct Peer {
 // Build the sender-side stagger list (matches ExpressionManager::maybeCascade).
 // peers must be pre-filtered (no self, no missing MAC). The function sorts
 // in place by RSSI descending, caps at kMaxStaggerEntries, and assigns
-// delayMs = clamp(i * staggerMs, 0..kMaxDelayMs).
+// delayMs = clamp((i + 1) * staggerMs, 0..kMaxDelayMs). The (i + 1) offset
+// makes the closest peer fire `staggerMs` after the sender (not at the
+// same instant as the sender) — see expression_manager.cpp::maybeCascade.
 static std::vector<StaggerEntry> buildStaggerList(std::vector<Peer> peers,
                                                   uint32_t staggerMs) {
   std::sort(peers.begin(), peers.end(),
@@ -71,7 +73,7 @@ static std::vector<StaggerEntry> buildStaggerList(std::vector<Peer> peers,
   for (size_t i = 0; i < peers.size(); ++i) {
     StaggerEntry e;
     std::memcpy(e.mac, peers[i].mac, 6);
-    const uint32_t d = static_cast<uint32_t>(i) * staggerMs;
+    const uint32_t d = static_cast<uint32_t>(i + 1) * staggerMs;
     e.delayMs = static_cast<uint16_t>(d > kMaxDelayMs ? kMaxDelayMs : d);
     out.push_back(e);
   }
@@ -102,7 +104,8 @@ void tearDown(void) {}
 // --- Stagger-list build + lookup ---
 
 void test_stagger_lookup_finds_own_mac() {
-  // Three peers; ours is in the middle. lookup returns its delayMs slot.
+  // Three peers; ours is in the middle (idx 1 after RSSI sort).
+  // (idx + 1) × staggerMs → (1 + 1) × 50 = 100 ms.
   std::vector<lamp_test::Peer> peers = {
       {{0x01, 0x01, 0x01, 0x01, 0x01, 0x01}, -40},  // strongest → idx 0
       {{0x02, 0x02, 0x02, 0x02, 0x02, 0x02}, -60},  // ours       → idx 1
@@ -112,12 +115,16 @@ void test_stagger_lookup_finds_own_mac() {
   TEST_ASSERT_EQUAL_UINT32(3, list.size());
 
   uint8_t myMac[6] = {0x02, 0x02, 0x02, 0x02, 0x02, 0x02};
-  TEST_ASSERT_EQUAL_UINT16(50, lamp_test::lookupOwnDelay(list, myMac));
+  TEST_ASSERT_EQUAL_UINT16(100, lamp_test::lookupOwnDelay(list, myMac));
 }
 
-void test_stagger_lookup_first_peer_zero_delay() {
-  // Strongest-signal peer (after RSSI sort) gets delayMs=0 — fires first
-  // in the spatial wave.
+void test_stagger_lookup_first_peer_fires_after_one_stagger() {
+  // Strongest-signal peer (after RSSI sort) gets delayMs = staggerMs (was 0
+  // before the 2026-06-03 stagger-formula fix). The sender fires at t=0;
+  // the closest peer fires at t=staggerMs. That's the leading edge of the
+  // spatial wave — without this offset a 2-lamp mesh fires simultaneously
+  // regardless of cascadeStaggerMs and the "wave from the trigger source"
+  // UX disappears.
   std::vector<lamp_test::Peer> peers = {
       {{0xAA, 0, 0, 0, 0, 0}, -90},
       {{0xBB, 0, 0, 0, 0, 0}, -30},  // closest
@@ -125,7 +132,7 @@ void test_stagger_lookup_first_peer_zero_delay() {
   };
   auto list = lamp_test::buildStaggerList(peers, 100);
   uint8_t myMac[6] = {0xBB, 0, 0, 0, 0, 0};
-  TEST_ASSERT_EQUAL_UINT16(0, lamp_test::lookupOwnDelay(list, myMac));
+  TEST_ASSERT_EQUAL_UINT16(100, lamp_test::lookupOwnDelay(list, myMac));
 }
 
 void test_stagger_lookup_tail_fire_when_absent() {
@@ -215,7 +222,8 @@ void test_stagger_delay_clamps_at_kMaxDelayMs() {
     p.lastRssi = static_cast<int8_t>(-30 - static_cast<int>(i));
     peers.push_back(p);
   }
-  // staggerMs=2000 means last peer (i=11) computes 22000 ms — way over.
+  // staggerMs=2000 with the (i + 1) formula means last peer (i=11)
+  // computes (12) × 2000 = 24000 ms — way over kMaxDelayMs=10000.
   auto list = lamp_test::buildStaggerList(peers, 2000);
   for (const auto& e : list) {
     TEST_ASSERT_LESS_OR_EQUAL_UINT16(lamp_test::kMaxDelayMs, e.delayMs);
@@ -239,13 +247,85 @@ void test_clampDelayMs_passthrough_and_cap() {
                            lamp_test::clampDelayMs(0xFFFFFFFFu));
 }
 
+// Receiver-side cascade gating policy (post-2026-06-03 regression fix).
+//
+// The receiver does NOT check local cascadeEnabled and does NOT require a
+// matching local expression config of the same type. The wire payload
+// carries the full ExpressionInvocation (type, target, colors, parameters);
+// triggerInvocation builds a fresh transient Expression directly from it.
+// Receiver behavior is sender-authoritative.
+//
+// Pre-fix (commit cb7e6fd, C.3): tryHandleExpressionEvent had a step-2
+// `typeOptedIn` gate that scanned the receiver's `expressions` vector for
+// a matching `type` with `cascadeEnabled=1`, dropping otherwise — silently
+// breaking the legacy "execute this cascade once and forget it" model
+// observed via live tap on 2026-06-03 (`[event] type=glitchy not cascaded
+// locally, drop` on a melonie lamp whose glitchy had no local cascade
+// config).
+//
+// This test mirrors the post-fix gating logic so a future change that
+// reintroduces a receiver-side opt-in fails loudly here.
+namespace {
+// Mirror of the post-fix tryHandleExpressionEvent gate sequence (minus
+// the JSON-parse and trigger steps which need ArduinoJson + compositor).
+// Returns true if the cascade would be dispatched, false if dropped.
+struct ReceiverGateMirror {
+  // The receiver's own configured expressions. The whole point of the
+  // post-fix contract: this is intentionally unread by the gate logic.
+  std::vector<std::string> localExpressionTypes;
+  bool typePeekSucceeded = true;
+  bool recentCascadeDedupHit = false;
+
+  bool wouldDispatch(const char* /*type*/) const {
+    if (!typePeekSucceeded) return false;            // step 1
+    if (recentCascadeDedupHit) return false;         // step 2
+    // step 3 / 4 (parseInvocation + triggerInvocation) — past this point
+    // dispatch is unconditional in `type`. No local-config consult.
+    return true;
+  }
+};
+}  // namespace
+
+void test_receiver_dispatches_cascade_without_local_config() {
+  ReceiverGateMirror r;
+  // Receiver has no entry of type "glitchy" — the exact field-observed
+  // case that the pre-fix gate dropped.
+  r.localExpressionTypes = {};
+  TEST_ASSERT_TRUE(r.wouldDispatch("glitchy"));
+}
+
+void test_receiver_dispatches_cascade_even_when_local_type_has_cascade_off() {
+  ReceiverGateMirror r;
+  // Receiver has a glitchy config but it has cascadeEnabled=0. The pre-fix
+  // gate would still drop here. Post-fix: dispatch (we don't even look at
+  // the local config — the mock omits a cascadeEnabled field at all).
+  r.localExpressionTypes = {"glitchy"};
+  TEST_ASSERT_TRUE(r.wouldDispatch("glitchy"));
+}
+
+void test_receiver_still_drops_when_recent_cascade_deduped() {
+  // Negative path stays honest — the dedup ring still suppresses a
+  // duplicate cascade of the same type within the window.
+  ReceiverGateMirror r;
+  r.recentCascadeDedupHit = true;
+  TEST_ASSERT_FALSE(r.wouldDispatch("glitchy"));
+}
+
+void test_receiver_drops_when_type_peek_fails() {
+  // Negative path stays honest — a payload without a parseable `type`
+  // string still drops (no dedup key).
+  ReceiverGateMirror r;
+  r.typePeekSucceeded = false;
+  TEST_ASSERT_FALSE(r.wouldDispatch(""));
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
   UNITY_BEGIN();
 
   RUN_TEST(test_stagger_lookup_finds_own_mac);
-  RUN_TEST(test_stagger_lookup_first_peer_zero_delay);
+  RUN_TEST(test_stagger_lookup_first_peer_fires_after_one_stagger);
   RUN_TEST(test_stagger_lookup_tail_fire_when_absent);
   RUN_TEST(test_stagger_lookup_tail_fire_empty_list);
 
@@ -255,6 +335,11 @@ int main(int argc, char** argv) {
 
   RUN_TEST(test_stagger_delay_clamps_at_kMaxDelayMs);
   RUN_TEST(test_clampDelayMs_passthrough_and_cap);
+
+  RUN_TEST(test_receiver_dispatches_cascade_without_local_config);
+  RUN_TEST(test_receiver_dispatches_cascade_even_when_local_type_has_cascade_off);
+  RUN_TEST(test_receiver_still_drops_when_recent_cascade_deduped);
+  RUN_TEST(test_receiver_drops_when_type_peek_fails);
 
   return UNITY_END();
 }

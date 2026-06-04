@@ -166,20 +166,13 @@ void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
 
   std::string json;
   serializeInvocation(inv, json);
-  if (json.size() > lamp_protocol::EVENT_MAX_PAYLOAD) {
-#ifdef LAMP_DEBUG
-    Serial.printf("[cascade] %s: payload %u > max %u, dropping\n",
-                  entry.config.type.c_str(),
-                  (unsigned)json.size(),
-                  (unsigned)lamp_protocol::EVENT_MAX_PAYLOAD);
-#endif
-    return;
-  }
 
-  // Build the RSSI-sorted stagger list. Take a snapshot, filter out self +
-  // peers with no MAC, sort by lastRssi descending (strongest signal =
-  // physically closest → fires earliest in the wave), cap at
-  // kMaxStaggerEntries so the wire frame stays bounded.
+  // Build the RSSI-sorted stagger list FIRST — the payload budget depends
+  // on how many stagger entries actually ride the wire (small meshes have
+  // more headroom). Take a snapshot, filter out self + peers with no MAC,
+  // sort by lastRssi descending (strongest signal = physically closest →
+  // fires earliest in the wave), cap at kMaxStaggerEntries so the wire
+  // frame stays bounded.
   auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
   uint8_t myMac[6];
   showReceiver_->getMyMac(myMac);
@@ -199,32 +192,67 @@ void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
   if (targets.size() > lamp_protocol::kMaxStaggerEntries) {
     targets.resize(lamp_protocol::kMaxStaggerEntries);
   }
-  // Pack the wire-shape arrays. Each per-peer delay = i * staggerMs,
+  const uint8_t numStagger = static_cast<uint8_t>(targets.size());
+
+  // Dynamic payload budget against the actual stagger count. 2-lamp meshes
+  // get ~226 B of headroom; fully-populated (12-peer) meshes get the
+  // worst-case 138. Without this, the static 138 cap dropped any glitchy
+  // cascade (~151 B real payload) even on a 1-peer mesh — silent failure
+  // observed in the field, see live trace 2026-06-03.
+  const size_t maxPayload = lamp_protocol::maxEventPayloadFor(numStagger);
+  if (json.size() > maxPayload) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: payload %u > max %u (peers=%u), dropping\n",
+                  entry.config.type.c_str(),
+                  (unsigned)json.size(),
+                  (unsigned)maxPayload,
+                  (unsigned)numStagger);
+#endif
+    return;
+  }
+
+  // Pack the wire-shape arrays. Each per-peer delay = (i + 1) * staggerMs,
   // clamped to kMaxDelayMs defensively. i fits in uint8_t (we capped at 12).
+  //
+  // The (i + 1) offset means the closest peer (i=0) fires staggerMs AFTER
+  // the sender — not at the same instant. Without the offset, a 2-lamp
+  // mesh fires both lamps simultaneously regardless of staggerMs, which
+  // defeats the "wave from the trigger source outward" UX intent.
+  // Observed 2026-06-03: with staggerMs=800 and 1 peer, melonie fired
+  // at t=0 alongside jacko instead of at t=800ms.
   uint8_t staggerMacs[lamp_protocol::kMaxStaggerEntries * 6];
   uint16_t staggerDelays[lamp_protocol::kMaxStaggerEntries];
-  const uint8_t numStagger = static_cast<uint8_t>(targets.size());
   for (uint8_t i = 0; i < numStagger; ++i) {
     std::memcpy(&staggerMacs[i * 6], targets[i].mac, 6);
-    const uint32_t d = static_cast<uint32_t>(i) * staggerMs;
+    const uint32_t d = static_cast<uint32_t>(i + 1) * staggerMs;
     staggerDelays[i] = static_cast<uint16_t>(
         d > kMaxDelayMs ? kMaxDelayMs : d);
   }
 
 #ifdef LAMP_DEBUG
-  Serial.printf("[cascade] %s: broadcasting MSG_EVENT (target=%u staggerMs=%u peers=%u)\n",
+  Serial.printf("[cascade] %s: broadcasting MSG_EVENT (target=%u staggerMs=%u peers=%u payload=%u/%u)\n",
                 entry.config.type.c_str(), (unsigned)intervalIdx,
-                (unsigned)staggerMs, (unsigned)numStagger);
+                (unsigned)staggerMs, (unsigned)numStagger,
+                (unsigned)json.size(), (unsigned)maxPayload);
   for (uint8_t i = 0; i < numStagger; ++i) {
     Serial.printf("[cascade]   peer rssi=%d delayMs=%u\n",
                   (int)targets[i].lastRssi, (unsigned)staggerDelays[i]);
   }
 #endif
 
-  // Build the MSG_EVENT frame and broadcast it twice with ~20 ms jitter
-  // so a single dropped frame doesn't sink the whole cascade. Receivers'
-  // eventDedup_ collapses the second copy by (sourceMac, seq) so this is
-  // cheap: same wire cost as a 2-peer unicast cascade today.
+  // Build the MSG_EVENT frame and broadcast it twice, back-to-back. ESP-NOW
+  // broadcasts have no link-layer ACK, so the duplicate is best-effort
+  // insurance against a single dropped frame (BLE adv burst, brief radio
+  // contention, etc.). Both copies share the same seq; receivers'
+  // eventDedup_ collapses the second copy by (sourceMac, seq) so the
+  // dispatch only fires once.
+  //
+  // The previous implementation inserted `delay(20)` between the two
+  // sends to space them across separate RF transient windows. That was
+  // dropped 2026-06-03 because the delay() blocked Core 1 and stalled the
+  // sender's compositor render — sender's own LEDs visibly lagged
+  // receivers'. Back-to-back (no delay) loses the across-RF-window
+  // spread but keeps the "two TX attempts" resilience and doesn't block.
   uint8_t frame[lamp_protocol::EVENT_MAX_SIZE];
   const uint16_t seq = showReceiver_->nextEventSeq();
   const size_t frameLen = lamp_protocol::buildEvent(
@@ -241,11 +269,6 @@ void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
     return;
   }
   showReceiver_->broadcastRaw(frame, frameLen);
-  // Best-effort retry. delay(20) on Core 1 is fine — the loop pacing
-  // tolerates it (compositor.tick runs ~30 ms cadence anyway), and it
-  // keeps the second broadcast a separate radio transmission rather than
-  // a back-to-back queue spam.
-  delay(20);
   showReceiver_->broadcastRaw(frame, frameLen);
 }
 
@@ -483,9 +506,19 @@ void ExpressionManager::tryHandleExpressionEvent(const uint8_t sourceMac[6],
                                                   uint16_t payloadLen) {
   if (!payload || payloadLen == 0) return;
 
-  // 1) Cheap peek for the type. If the payload doesn't carry one we have
-  // no way to decide cascadeEnabled — drop. The JSON we emit always has
-  // it; an attacker-crafted MSG_EVENT without one is ignored silently.
+  // 1) Cheap peek for the type. Used as the RecentCascade dedup key so we
+  // can drop a duplicate cascade of the same type without paying for the
+  // full JSON parse. The JSON we emit always carries `type`; an attacker-
+  // crafted MSG_EVENT without one is ignored silently.
+  //
+  // No local-config consult: cascade is sender-authoritative. The wire
+  // payload carries the full ExpressionInvocation (type, target, colors,
+  // parameters), and triggerInvocation builds a fresh transient Expression
+  // from it. The receiver's own `expressions` vector is intentionally
+  // irrelevant — keeps the cascade behavior matching the legacy CONTROL_OP
+  // model ("execute this expression once and forget it"). C.3's brief
+  // receiver-side cascadeEnabled gate (commit cb7e6fd → removed
+  // 2026-06-03 after user-observed regression) silently broke this.
   char type[64] = {0};
   if (!peekJsonStringField(payload, payloadLen, "type", type, sizeof(type))) {
 #ifdef LAMP_DEBUG
@@ -494,27 +527,7 @@ void ExpressionManager::tryHandleExpressionEvent(const uint8_t sourceMac[6],
     return;
   }
 
-  // 2) Look up our own config for this type. If cascadeEnabled isn't set
-  // (or no entry of this type exists at all), drop. Receivers only act on
-  // cascade events for types they themselves participate in — keeps the
-  // user's per-lamp opt-in honest and stops a rogue sender from forcing a
-  // visual on a lamp that opted out.
-  bool typeOptedIn = false;
-  for (const auto& entry : expressions) {
-    if (entry.config.type == type &&
-        entry.config.getParameter(kParamCascadeEnabled, 0) != 0) {
-      typeOptedIn = true;
-      break;
-    }
-  }
-  if (!typeOptedIn) {
-#ifdef LAMP_DEBUG
-    Serial.printf("[event] type=%s not cascaded locally, drop\n", type);
-#endif
-    return;
-  }
-
-  // 3) RecentCascade dedup. Keep the same key shape the local-trigger
+  // 2) RecentCascade dedup. Keep the same key shape the local-trigger
   // path uses (type, target). We don't know `target` yet without the
   // full parse, but the wire format defines TARGET_BOTH as 3 and that's
   // what cascade events almost always carry. Use a per-type bucket
@@ -529,7 +542,7 @@ void ExpressionManager::tryHandleExpressionEvent(const uint8_t sourceMac[6],
   }
   recentCascades_.record(std::string(type), 0, nowMs);
 
-  // 4) Full parse now that we've confirmed we'll act on it.
+  // 3) Full parse now that we've confirmed we'll act on it.
   JsonDocument doc;
   if (deserializeJson(doc, payload, payloadLen) != DeserializationError::Ok) {
 #ifdef LAMP_DEBUG
@@ -545,7 +558,7 @@ void ExpressionManager::tryHandleExpressionEvent(const uint8_t sourceMac[6],
     return;
   }
 
-  // 5) Defense-in-depth: clamp the supplied delay. parseInvocation clamps
+  // 4) Defense-in-depth: clamp the supplied delay. parseInvocation clamps
   // `inv.delayMs` but the stagger-list-delivered delay is a separate
   // attacker-controlled quantity. kMaxDelayMs (10s) is plenty for any
   // realistic cascade UX.

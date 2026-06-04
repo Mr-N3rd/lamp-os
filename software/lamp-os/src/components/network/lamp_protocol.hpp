@@ -151,13 +151,31 @@ constexpr size_t OVERRIDE_BRIGHTNESS_FIXED_SIZE = HEADER_SIZE + 6 + 6 + 1 + 1 + 
 // authoritative one — header is 6, not 7.)
 constexpr size_t EVENT_FIXED_SIZE      = HEADER_SIZE + 6 + 1 + 1 + 2;  // 16
 constexpr size_t EVENT_STAGGER_ENTRY   = 6 + 2;                        // mac + delayMs
-// Cap the JSON tail so a full-stagger event still fits the 250 ESP-NOW frame.
-// 250 - 16 - 12*8 = 138.
+// Worst-case JSON tail when the wire frame carries a fully-populated
+// stagger list (12 peers): 250 - 16 - 12*8 = 138. Kept as a hard upper
+// bound the rest of the codebase can rely on for buffer sizing.
+// Callers building or validating an event with a known stagger count
+// should use maxEventPayloadFor(n) instead — small meshes get a larger
+// payload window because fewer bytes are reserved for stagger entries.
 constexpr size_t EVENT_MAX_PAYLOAD     = 250 - EVENT_FIXED_SIZE -
                                          (kMaxStaggerEntries * EVENT_STAGGER_ENTRY);
 constexpr size_t EVENT_MAX_SIZE        = EVENT_FIXED_SIZE +
                                          kMaxStaggerEntries * EVENT_STAGGER_ENTRY +
                                          EVENT_MAX_PAYLOAD;  // 250
+
+// Dynamic payload budget. The stagger list only occupies n * 8 bytes on
+// the wire, so on small meshes (typical home setup: 1–4 lamps) the
+// payload window is much larger than the worst-case 138 B. Clamps at the
+// 12-peer ceiling so a stale numStagger can't grant a larger-than-frame
+// budget. Before this helper, ExpressionManager::maybeCascade dropped any
+// invocation > 138 B even on a 1-peer mesh — which silently broke glitchy
+// (~151 B real payload) in the field.
+constexpr size_t maxEventPayloadFor(uint8_t numStaggerEntries) {
+  const size_t n = numStaggerEntries > kMaxStaggerEntries
+                       ? kMaxStaggerEntries
+                       : static_cast<size_t>(numStaggerEntries);
+  return 250 - EVENT_FIXED_SIZE - (n * EVENT_STAGGER_ENTRY);
+}
 
 // MAX_PACKET_SIZE: receiver buffer sizing. CONTROL_MAX_SIZE has historically
 // been the biggest (250); EVENT_MAX_SIZE is also 250; the override family
@@ -496,8 +514,9 @@ inline size_t buildRestoreBrightness(uint8_t* buf, size_t bufLen, uint16_t seq,
 // user-defined kinds in 0x10..0xFF without re-extending the enum. Stagger
 // entries are `numStaggerEntries * (mac(6) + delayMs(2 LE))`; capped at
 // kMaxStaggerEntries. Payload is opaque (JSON in practice); capped at
-// EVENT_MAX_PAYLOAD so the full frame stays within ESP-NOW's 250-byte limit
-// even with a full stagger list.
+// maxEventPayloadFor(numStaggerEntries) so the full frame stays within
+// ESP-NOW's 250-byte limit. Dynamic in the actual stagger count, not the
+// worst case, so small meshes can carry larger invocations.
 inline size_t buildEvent(uint8_t* buf, size_t bufLen, uint16_t seq,
                          const uint8_t sourceMac[6],
                          uint8_t eventKind,
@@ -508,7 +527,7 @@ inline size_t buildEvent(uint8_t* buf, size_t bufLen, uint16_t seq,
   if (!buf || !sourceMac) return 0;
   if (numStaggerEntries > kMaxStaggerEntries) return 0;
   if (numStaggerEntries > 0 && (!staggerMacs || !staggerDelays)) return 0;
-  if (payloadLen > EVENT_MAX_PAYLOAD) return 0;
+  if (payloadLen > maxEventPayloadFor(numStaggerEntries)) return 0;
   const size_t total = EVENT_FIXED_SIZE +
                        static_cast<size_t>(numStaggerEntries) * EVENT_STAGGER_ENTRY +
                        payloadLen;
@@ -693,7 +712,7 @@ inline bool parseEvent(const uint8_t* data, size_t len, ParsedEvent& out) {
   const uint16_t payloadLen =
        static_cast<uint16_t>(data[payloadLenOff])
      | (static_cast<uint16_t>(data[payloadLenOff + 1]) << 8);
-  if (payloadLen > EVENT_MAX_PAYLOAD) return false;
+  if (payloadLen > maxEventPayloadFor(numStaggerEntries)) return false;
   const size_t expected = EVENT_FIXED_SIZE + staggerBytes + payloadLen;
   if (len != expected) return false;
   out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
