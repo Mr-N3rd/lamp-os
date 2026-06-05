@@ -118,9 +118,44 @@ flags bit 0 = paintMode, bit 1 = wifiConnected, bit 2 = auroraConnected
 ```
 header(6) + targetMac(6) + sourceMac(6) + payloadLen(2 LE) + payload(N)
 ```
-`payload` is opaque: AES-GCM ciphertext (target's password) for forwarded BLE writes, OR plaintext JSON tagged with a `char` field (`brightness`, `shadeColors`, `baseColors`, `expressionOp`, etc.).
+`payload` is opaque: AES-GCM ciphertext (target's password) for forwarded BLE writes, OR plaintext JSON tagged with a `char` field (`brightness`, `shadeColors`, `baseColors`, `expressionOp`, `wifiOp`, `knockout`, `triggerExpression`, `wispOp`, `wispStatus`).
 
 After the MSG_EVENT cascade migration, CONTROL_OP no longer carries `triggerExpression` announcements.
+
+**Phase D wisp envelopes** (plaintext JSON, broadcast):
+
+`wispStatus` — wisp → fleet, periodic state report.
+```json
+{
+  "char":"wispStatus",
+  "currentZone": 3,
+  "zoneSource": "nvs",
+  "observedZones": [0, 3, 7],
+  "wifiConnected": true,
+  "auroraConnected": true,
+  "paletteIdPrefix": "abc12345",
+  "lastSeenMs": 14823
+}
+```
+- **Sender**: wisp(s) only. Lamps gossip-relay (per the v0x03 relay rule for `MSG_CONTROL_OP`) but never originate.
+- **Cadence**: on-change + 30s heartbeat. Change triggers: zone change, WiFi connect/disconnect, Aurora connect/disconnect.
+- **`zoneSource`**: `"nvs"` | `"firstSeen"` | `"appOp"` | `"none"`.
+- **`observedZones`**: capped at 16 entries (oldest-eviction FIFO).
+- **`lastSeenMs`**: wisp-local `millis()` at emission. Does not survive wisp reboot — the app does local-epoch math for "X seconds ago" UI rather than trusting this value across reconnects.
+- **Payload budget**: under 230 B (`CONTROL_MAX_PAYLOAD`). Runtime guard drops oversize frames rather than truncating.
+- **Lamp-side cache**: each lamp keeps the latest `wispStatus` per wisp MAC in `NearbyLamps`. `CHAR_WISP_STATUS` reads merge this cache with the last `MSG_WISP_HELLO` snapshot for the same MAC.
+
+`wispOp` — app → wisp, control writes proxied through any nearby lamp.
+```json
+{"char":"wispOp","op":"setZone","zoneId":3}
+{"char":"wispOp","op":"clearZone"}
+{"char":"wispOp","op":"setWifi","ssid":"...","pw":"..."}
+```
+- **Sender**: the Flutter app writes the JSON to `CHAR_WISP_OP` on any paired lamp; the lamp broadcasts it verbatim as `MSG_CONTROL_OP` for the wisp(s) to consume.
+- **Receiver**: wisp(s) only. Lamps gossip-relay but do NOT apply locally — there is no `wispOp` branch in `applyRemoteOpLocal`, by design.
+- **Wisp dedup**: the wisp runs its own 64-slot `controlOpDedup_` ring keyed on `(sourceMac, msgType, seq)` so gossip-relayed copies of the same op don't re-apply.
+- **NVS persistence**: `setZone` and `clearZone` persist via `WispConfig` (NVS namespace `"wisp"`, key `selZone`). The wisp boots into the persisted zone if one is set.
+- **`setWifi`**: wisp-side stub today; reserved for the WiFi-config follow-up.
 
 ### Tier 3 — Transient overrides
 
@@ -250,9 +285,9 @@ Service UUID `5f64f4d0-d6d9-4a44-9b3f-3a8d6f7e6b40`. AES-GCM-gated characteristi
 - `CHAR_WIFI_STATE` (0xdb) — read+notify: JSON snapshot of WiFi/scan state.
 - `CHAR_NEARBY_LAMPS` (0xe3) — read+notify: JSON array of mesh-visible lamps.
 
-**Wisp proxy** (Phase D, not yet implemented):
-- `CHAR_WISP_STATUS` — read+notify: JSON view of `MSG_WISP_HELLO` data + lamp's NearbyLamps inventory.
-- `CHAR_WISP_OP` — write: `{op, ...}` JSON re-broadcast as `MSG_WISP_OP` over mesh.
+**Wisp proxy** (Phase D):
+- `CHAR_WISP_OP` (`5f64f4e1-...`) — write, auth-gated. Plaintext JSON `{"char":"wispOp","op":"...","..."}` re-broadcast verbatim as `MSG_CONTROL_OP` for the wisp(s) to consume. No new wire-format msg type was added; the routing rides the existing `char`-tagged JSON envelope. Lamps gossip-relay but do not apply locally — `applyRemoteOpLocal` has no `wispOp` branch.
+- `CHAR_WISP_STATUS` (`5f64f4e2-...`) — read+notify, auth-gated. Returns the lamp's cached `wispStatus` JSON (sourced from gossip-relayed `MSG_CONTROL_OP` broadcasts the wisp emits) merged with the last `MSG_WISP_HELLO` data on file (`wispMac`, `wispVersion`, `helloFlags`, `helloPaletteIdPrefix`, `helloLastSeenMs`, `statusLastSeenMs`). Notify fires whenever a new wispStatus lands on the lamp.
 
 ## Sequence diagrams
 
@@ -319,28 +354,47 @@ wisp                                mesh                    lamp
   │     MSG_RESTORE_COLORS arrives    │                       │── restore baseline w/ fade
 ```
 
-### Phone configures wisp WiFi via mesh proxy (Phase D, planned)
+### Phone picks a wisp zone via mesh proxy (Phase D)
 
 ```
 phone        lamp A (paired)             mesh                    wisp
   │              │                        │                       │
   │── BLE write ─►│                        │                       │
   │  CHAR_WISP_OP│                        │                       │
-  │  {op:setWifi,│                        │                       │
-  │   ssid,pw}   │                        │                       │
+  │  {char:wispOp│                        │                       │
+  │   op:setZone│                        │                       │
+  │   zoneId:3} │                        │                       │
   │              │── MSG_CONTROL_OP ──────►│── ESP-NOW broadcast ─►│
-  │              │   payload: {op,...}    │                       │
-  │              │                        │                       │── decode WISP_OP
-  │              │                        │                       │── WispConfig.save()
-  │              │                        │                       │── WiFi.disconnect+begin
-  │              │                        │                       │── WiFi join
-  │              │                        │── MSG_WISP_HELLO ◄────│   (wifiConnected=1)
-  │              │── cache the hello ◄────│                       │
-  │              │                        │                       │
+  │              │   payload: same JSON   │                       │
+  │              │                        │                       │── controlOpDedup_.record
+  │              │                        │                       │── WispOpDispatcher.dispatch
+  │              │                        │                       │── WispConfig
+  │              │                        │                       │   .setSelectedZone(3)
+  │              │                        │                       │   (NVS: "wisp"/selZone)
+  │              │                        │                       │── ZoneSelector.setFromOp(3)
+  │              │                        │                       │── StatusBeacon
+  │              │                        │                       │   .triggerOnChange()
+  │              │                        │── ESP-NOW broadcast ◄─│
+  │              │                        │   MSG_CONTROL_OP
+  │              │                        │   {char:wispStatus,
+  │              │                        │    currentZone:3,
+  │              │                        │    zoneSource:"appOp",
+  │              │                        │    ...}
+  │              │── applyRemoteOpLocal ◄─│                       │
+  │              │   char=="wispStatus"  │                       │
+  │              │── NearbyLamps          │                       │
+  │              │   .cacheWispStatus(    │                       │
+  │              │     wispMac, json)     │                       │
+  │              │── ble_control          │                       │
+  │              │   .notifyWispStatus()  │                       │
   │── BLE notify ◄│                        │                       │
   │  CHAR_WISP_  │                        │                       │
   │  STATUS      │                        │                       │
+  │  {currentZone:3,                      │                       │
+  │   zoneSource:"appOp",...}             │                       │
 ```
+
+`setWifi` follows the same proxy shape (BLE → `MSG_CONTROL_OP` → wisp dispatch → status broadcast) and is reserved as a Phase D follow-up — the wisp-side handler is a stub today.
 
 ## Future protocol additions (reserved)
 

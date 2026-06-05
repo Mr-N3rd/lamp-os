@@ -24,6 +24,18 @@ Everything else is flexible: new `EventKind` values (`0x02..0xFF` open),
 additive JSON fields in MSG_EVENT (old lamps ignore), per-lamp reaction
 logic, the `pendingEvent` slot's internal shape.
 
+**Phase D additions (no protocol bump):**
+
+- Wisp now runs its own 64-slot `controlOpDedup_` ring keyed on
+  `(sourceMac, msgType, seq)` so gossip-relayed copies of an op (or its
+  own emitted `wispStatus`) don't re-apply. Previously the wisp dropped
+  duplicates implicitly because it only received `MSG_HELLO`.
+- Wisp emits `MSG_CONTROL_OP` broadcasts carrying `{"char":"wispStatus",...}`
+  on-change + every ≤30 s as a heartbeat. Lamps gossip-relay these per
+  the v0x03 `MSG_CONTROL_OP` rule and cache the latest per wisp MAC for
+  the app to read via `CHAR_WISP_STATUS`. See `mesh-api.md` for the
+  payload shape, cadence triggers, and the 230-byte payload cap.
+
 **Mixed-fleet warning**: `inspect()` rejects on version mismatch
 (`lamp_protocol.hpp::inspect`), so an old-firmware lamp in a v0x03 mesh
 stops receiving everyone's frames. All lamps + wisp must be flashed to
