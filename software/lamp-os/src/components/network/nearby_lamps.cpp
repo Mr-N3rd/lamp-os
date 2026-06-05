@@ -205,6 +205,14 @@ void NearbyLamps::cacheWispHello(const uint8_t mac[6],
   // this mutex from Core 0). See the addOrUpdate paths above for the
   // bounded-take pattern when the writer is Core 0.
   xSemaphoreTake(mutex_, portMAX_DELAY);
+  // Different wisp — drop stale status data so the next read doesn't merge
+  // wisp-A's wispStatus payload under wisp-B's MAC. Status fields will
+  // refresh on the next MSG_CONTROL_OP wispStatus broadcast from this wisp
+  // (≤30s heartbeat). Mirror of the same guard in cacheWispStatus.
+  if (wispCache_.present && std::memcmp(wispCache_.mac, mac, 6) != 0) {
+    wispCache_.lastStatusJson.clear();
+    wispCache_.lastStatusMs = 0;
+  }
   std::memcpy(wispCache_.mac, mac, 6);
   wispCache_.present = true;
   wispCache_.lastHelloMs = millis();
