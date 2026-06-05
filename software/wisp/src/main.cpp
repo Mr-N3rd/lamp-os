@@ -14,9 +14,7 @@
 
 #include <Arduino.h>
 
-#include <algorithm>
 #include <cstring>
-#include <vector>
 
 #include "CurrentPalette.h"
 #include "LampInventory.h"
@@ -25,6 +23,7 @@
 #include "StatusBeacon.h"
 #include "WispConfig.h"
 #include "WispOpDispatcher.h"
+#include "WispZoneSelector.h"
 #include "aurora/AuroraPaletteClient.h"
 #include "lamp_protocol.hpp"
 
@@ -49,62 +48,9 @@ wisp::WispOpDispatcher wispOpDispatcher(wispConfig);
 // through one queue.
 lamp_protocol::DedupRing controlOpDedup;
 
-// --- ZoneSelector --------------------------------------------------------
-// Process-local zone-selection state. Only `currentZone` is persistent (and
-// that lives in WispConfig); everything here is RAM.
-enum class ZoneSource : uint8_t { None, FirstSeen, Nvs, AppOp };
-
-const char* zoneSourceName(ZoneSource s) {
-  switch (s) {
-    case ZoneSource::None:      return "none";
-    case ZoneSource::FirstSeen: return "first-seen";
-    case ZoneSource::Nvs:       return "nvs";
-    case ZoneSource::AppOp:     return "app-op";
-  }
-  return "?";
-}
-
-// 16 matches Aurora's per-notification states cap; oldest-eviction FIFO
-// keeps the set bounded without leaking memory if a noisy Aurora keeps
-// rotating zone ids.
-constexpr size_t kMaxObservedZones = 16;
-
-// THREADING: all access must occur on the loop task. observe() may be invoked
-// from auroraClient.loop() OR drainPendingWispOp — both run on loop. Never
-// wire a recv-task call site without adding a portMUX.
-struct ZoneSelector {
-  int        currentZone = -1;
-  ZoneSource source = ZoneSource::None;
-  std::vector<int> observedZones;  // FIFO, uniqued on insert
-
-  void observe(int zone) {
-    auto it = std::find(observedZones.begin(), observedZones.end(), zone);
-    if (it != observedZones.end()) return;  // already known
-    if (observedZones.size() >= kMaxObservedZones) {
-      observedZones.erase(observedZones.begin());  // oldest-out FIFO
-    }
-    observedZones.push_back(zone);
-  }
-
-  bool latchFirstSeen(int zone) {
-    if (source != ZoneSource::None || currentZone >= 0) return false;
-    currentZone = zone;
-    source = ZoneSource::FirstSeen;
-    return true;
-  }
-
-  void setFromOp(int zone) {
-    currentZone = zone;
-    source = ZoneSource::AppOp;
-  }
-
-  void clearFromOp() {
-    currentZone = -1;
-    source = ZoneSource::None;
-  }
-};
-
-ZoneSelector zoneSelector;
+// ZoneSelector now lives in WispZoneSelector.{h,cpp} (extracted in Phase D
+// Task 2 because StatusBeacon needs to read it to emit wispStatus JSON).
+wisp::ZoneSelector zoneSelector;
 
 // Phase C.4 temporary serial command buffer. Phase D's BLE proxy replaces
 // this with MSG_WISP_OP from the app pane.
@@ -161,18 +107,24 @@ void drainPendingWispOp() {
       if (wispConfig.hasSelectedZone()) {
         const int newZone = wispConfig.selectedZone();
         zoneSelector.setFromOp(newZone);
-        Serial.printf("[wisp] zone set by app op to %d (source=app-op)\n",
+        Serial.printf("[wisp] zone set by app op to %d (source=appOp)\n",
                       newZone);
       } else {
         zoneSelector.clearFromOp();
         Serial.println("[wisp] zone cleared by app op (source=none)");
       }
+      // Push a fresh wispStatus right away so the app sees the new state
+      // without waiting for the 30s heartbeat. Resets the heartbeat phase.
+      statusBeacon.triggerOnChange();
       break;
     }
     case wisp::DispatchResult::AppliedWifiChange:
       // Stub for this phase; later task wires STA bring-up. The dispatcher
       // already stored credentials into WispConfig.
       Serial.println("[wisp] wifi creds updated (stub — no STA bring-up yet)");
+      // Future setWifi op may flip wifiConnected; force an emit so the
+      // app sees the transition without waiting up to 30s.
+      statusBeacon.triggerOnChange();
       break;
     case wisp::DispatchResult::Ignored:
     case wisp::DispatchResult::Malformed:
@@ -218,13 +170,16 @@ void onAuroraPalette(int zone, const Palette& p) {
 
   // First-seen latch: only when neither NVS nor an app op has chosen a zone.
   if (zoneSelector.latchFirstSeen(zone)) {
-    Serial.printf("[wisp] claimed Aurora zone %d (source=first-seen)\n", zone);
+    Serial.printf("[wisp] claimed Aurora zone %d (source=firstSeen)\n", zone);
+    // First-seen latch is a zone change too — fan it out so the app pane
+    // can show "the wisp picked zone N".
+    statusBeacon.triggerOnChange();
   }
 
-  if (zone != zoneSelector.currentZone) {
+  if (zone != zoneSelector.currentZone()) {
     Serial.printf("[wisp] ignoring zone %d palette (selected %d, source=%s)\n",
-                  zone, zoneSelector.currentZone,
-                  zoneSourceName(zoneSelector.source));
+                  zone, zoneSelector.currentZone(),
+                  wisp::zoneSourceName(zoneSelector.source()));
     return;
   }
 
@@ -308,9 +263,9 @@ void dumpInventory(uint32_t /*nowMs*/) {
   // Phase D: log the ZoneSelector state alongside the roster so the dump
   // is one-stop for "what's this wisp doing?".
   Serial.printf("[wisp] zone=%d source=%s observed=%u\n",
-                zoneSelector.currentZone,
-                zoneSourceName(zoneSelector.source),
-                (unsigned)zoneSelector.observedZones.size());
+                zoneSelector.currentZone(),
+                wisp::zoneSourceName(zoneSelector.source()),
+                (unsigned)zoneSelector.observed().size());
 }
 
 // Build a stable instance id from the chip MAC's low 24 bits. Aurora uses it
@@ -336,9 +291,9 @@ void setup() {
   // ZoneSelector seeds itself from the cached value here.
   wispConfig.begin();
   if (wispConfig.hasSelectedZone()) {
-    zoneSelector.currentZone = wispConfig.selectedZone();
-    zoneSelector.source = ZoneSource::Nvs;
-    Serial.printf("[wisp] zone %d from NVS\n", zoneSelector.currentZone);
+    const int z = wispConfig.selectedZone();
+    zoneSelector.setFromNvs(z);
+    Serial.printf("[wisp] zone %d from NVS\n", z);
   } else {
     Serial.println("[wisp] no zone in NVS; will latch first-seen Aurora zone");
   }
@@ -367,7 +322,8 @@ void setup() {
   // to walk peers and unicast tuples. Status beacon broadcasts MSG_WISP_HELLO
   // every 2s on a FreeRTOS timer so cadence survives Aurora loop() stalls.
   paintDistributor.begin(&inventory, &mesh, &currentPalette);
-  statusBeacon.begin(&mesh, &paintDistributor, &currentPalette);
+  statusBeacon.begin(&mesh, &paintDistributor, &currentPalette,
+                     &zoneSelector, &auroraClient);
   statusBeacon.startTimer();
   Serial.println("[wisp] paint distributor + status beacon online");
   Serial.println("[wisp] cmds: paint:on / paint:off");

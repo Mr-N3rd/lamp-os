@@ -32,6 +32,13 @@ public:
     void begin();
     void loop();
 
+    // Phase D: StatusBeacon needs to mirror this into the wispStatus JSON
+    // payload's `auroraConnected` field. "Streaming" is the only state where
+    // we've actually established a WS session and are processing announcements;
+    // earlier states (discovering / connecting) are best reported as not yet
+    // connected. Read-cheap, no caching at the call site.
+    bool isStreaming() const { return state_ == State::Streaming; }
+
 private:
     enum class State { Idle, Discovering, Connecting, Streaming };
 
