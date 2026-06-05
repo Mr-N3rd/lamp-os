@@ -77,7 +77,7 @@ final class DispositionsProvider
   }
 }
 
-String _$dispositionsHash() => r'65e54dca7b386ea3dd5044127955e062007509f8';
+String _$dispositionsHash() => r'399c037f04416cf54efe76fac029b1f1a53c6b59';
 
 /// Per-peer social disposition for a given lamp.
 ///

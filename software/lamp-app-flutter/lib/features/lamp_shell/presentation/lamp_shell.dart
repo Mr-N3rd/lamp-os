@@ -11,6 +11,7 @@ import '../../inventory/presentation/widgets/lamp_picker_sheet.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
 import '../application/lamp_status.dart';
 import '../../social/presentation/social_screen.dart';
+import '../../wisp/presentation/wisp_pane.dart';
 import 'expressions_screen.dart';
 import 'info_screen.dart';
 import 'setup_screen.dart';
@@ -24,7 +25,7 @@ const _brandGradient = LinearGradient(
   colors: [BrandColors.auroraBlue, BrandColors.glowPink],
 );
 
-enum LampTab { control, expressions, setup, social, info }
+enum LampTab { control, expressions, setup, wisp, social, info }
 
 class LampShell extends ConsumerStatefulWidget {
   const LampShell({
@@ -57,6 +58,7 @@ class _LampShellState extends ConsumerState<LampShell> {
       LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsScreen(lampId: widget.lampId),
       LampTab.setup => SetupScreen(lampId: widget.lampId),
+      LampTab.wisp => WispPane(lampId: widget.lampId),
       LampTab.social => SocialScreen(lampId: widget.lampId),
       LampTab.info => InfoScreen(lampId: widget.lampId),
     };
@@ -145,6 +147,8 @@ class _LampShellState extends ConsumerState<LampShell> {
                 Icons.auto_awesome, 'Expressions', _tab == LampTab.expressions),
             _gradientDestination(
                 Icons.settings, 'Setup', _tab == LampTab.setup),
+            _gradientDestination(
+                Icons.bubble_chart, 'Wisp', _tab == LampTab.wisp),
             _gradientDestination(Icons.handshake_outlined, 'Social',
                 _tab == LampTab.social),
             _gradientDestination(

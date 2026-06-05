@@ -33,4 +33,18 @@ abstract class BleUuids {
   // map; write replaces it. Persisted firmware-side in a separate NVS key
   // so it doesn't bloat CHAR_LAMP_SECTION.
   static const socialDispositions = '5f64f4e6-d6d9-4a44-9b3f-3a8d6f7e6b40';
+
+  // wisp_op (write-with-response, plaintext): JSON op forwarded to the
+  // wisp via MSG_CONTROL_OP broadcast. Shape:
+  //   {"char":"wispOp","op":"setZone","zoneId":N}
+  //   {"char":"wispOp","op":"clearZone"}
+  //   {"char":"wispOp","op":"setWifi","ssid":"…","pw":"…"}  (stub on the wisp)
+  // The lamp does not interpret these — it broadcasts them on the mesh
+  // for the wisp(s) to consume.
+  static const wispOp = '5f64f4e1-d6d9-4a44-9b3f-3a8d6f7e6b40';
+
+  // wisp_status (read + notify): merged JSON of the last wispStatus
+  // MSG_CONTROL_OP broadcast (from the wisp) and the last MSG_WISP_HELLO
+  // data. See features/wisp/data/wisp_repository.dart for the parsed shape.
+  static const wispStatus = '5f64f4e2-d6d9-4a44-9b3f-3a8d6f7e6b40';
 }
