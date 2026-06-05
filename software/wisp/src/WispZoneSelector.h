@@ -5,9 +5,15 @@
 // Only `currentZone` is persistent (and that lives in WispConfig); everything
 // here is RAM.
 //
-// THREADING: all access must occur on the loop task. observe() may be invoked
-// from auroraClient.loop() OR drainPendingWispOp — both run on loop. Never
-// wire a recv-task call site without adding a portMUX.
+// THREADING: observe() and copyObserved() are thread-safe via internal
+// portMUX; other methods (currentZone, source, etc.) are read-only after
+// construction *as far as the loop task is concerned* — they are scalar
+// reads that tolerate a torn snapshot under the assumption that mutators
+// (latchFirstSeen / setFromOp / clearFromOp / setFromNvs) all run on the
+// loop task too. StatusBeacon::emitStatus reads currentZone/source from
+// the timer task; the worst case is one stale heartbeat, which the next
+// triggerOnChange will correct. The observed-vector path is the only one
+// that needs the mux because vector relocation can corrupt the snapshot.
 //
 // The `ZoneSource` discriminator tells the app pane where the current
 // selection came from. The string form is camelCase to match the
@@ -18,6 +24,21 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#if defined(ARDUINO) || defined(ESP_PLATFORM)
+#include <freertos/FreeRTOS.h>
+#include <portmacro.h>
+#define WISP_ZONE_PORTMUX_TYPE       portMUX_TYPE
+#define WISP_ZONE_PORTMUX_INIT       portMUX_INITIALIZER_UNLOCKED
+#define WISP_ZONE_PORTMUX_ENTER(mux) portENTER_CRITICAL(mux)
+#define WISP_ZONE_PORTMUX_EXIT(mux)  portEXIT_CRITICAL(mux)
+#else
+struct WispZoneNullMux {};
+#define WISP_ZONE_PORTMUX_TYPE       WispZoneNullMux
+#define WISP_ZONE_PORTMUX_INIT       {}
+#define WISP_ZONE_PORTMUX_ENTER(mux) ((void)(mux))
+#define WISP_ZONE_PORTMUX_EXIT(mux)  ((void)(mux))
+#endif
 
 namespace wisp {
 
@@ -41,6 +62,12 @@ class ZoneSelector {
 
   void observe(int zone);
 
+  // Snapshot up to `outCap` observed zones into `out`. Returns the count
+  // written. Thread-safe — takes the internal mux. Use this from any task
+  // other than the loop task (e.g. StatusBeacon's timer-service heartbeat)
+  // to avoid iterator invalidation if observe() reallocates concurrently.
+  size_t copyObserved(int* out, size_t outCap) const;
+
   // Returns true if the first-seen latch actually changed state (caller can
   // log accordingly). No-op when a Nvs/AppOp selection is already in force.
   bool latchFirstSeen(int zone);
@@ -55,6 +82,10 @@ class ZoneSelector {
   int currentZone_ = -1;
   ZoneSource source_ = ZoneSource::None;
   std::vector<int> observedZones_;  // FIFO, uniqued on insert
+
+  // Guards observedZones_ so cross-task copyObserved() reads can't race a
+  // loop-task observe() that erases/pushes/reallocates the vector.
+  mutable WISP_ZONE_PORTMUX_TYPE observedMux_ = WISP_ZONE_PORTMUX_INIT;
 };
 
 }  // namespace wisp

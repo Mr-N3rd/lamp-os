@@ -105,6 +105,15 @@ class StatusBeacon {
   bool lastAuroraConnected_ = false;
   bool haveLastConnState_   = false;
 
+  // Diff-state for the 2s HELLO path. Separate from the emitStatus log-
+  // gating vars above so the two on-change paths don't interfere: the
+  // hello-timer slot diffs WiFi + Aurora and, on flip, drives an immediate
+  // emitStatus() so passive radio events propagate within ~2s instead of
+  // waiting up to 30s for the heartbeat.
+  bool lastHelloWifi_      = false;
+  bool lastHelloAurora_    = false;
+  bool haveLastHelloConn_  = false;
+
   // Guards seqCounter_ and the two emission bodies. Critical sections are
   // short (build frame on a stack buffer, hand to MeshLink::broadcast which
   // just enqueues to esp_now_send). Don't log inside the lock.

@@ -135,29 +135,31 @@ void StatusBeacon::emit() {
   mesh_->getMac(srcMac);
 
   // Flags. WISP_HELLO carries paintMode + wifi + aurora as three single
-  // bits; mirrors what wispStatus carries in JSON.
+  // bits; mirrors what wispStatus carries in JSON. Snapshot wifi/aurora into
+  // locals once so the same values feed both the HELLO frame and the
+  // on-change diff below — otherwise a flip between the two reads could
+  // race and produce a stale diff comparison.
+  const bool wifiNow   = WiFi.isConnected();
+  const bool auroraNow = aurora_ && aurora_->isStreaming();
   uint8_t flags = 0;
   if (paint_ && paint_->paintMode()) {
     flags |= lamp_protocol::WISP_HELLO_FLAG_PAINT_MODE;
   }
-  if (WiFi.isConnected()) {
+  if (wifiNow) {
     flags |= lamp_protocol::WISP_HELLO_FLAG_WIFI_CONNECTED;
   }
-  if (aurora_ && aurora_->isStreaming()) {
+  if (auroraNow) {
     flags |= lamp_protocol::WISP_HELLO_FLAG_AURORA_CONNECTED;
   }
 
-  // paletteIdPrefix: low 8 bytes of the active palette id (or zeros).
+  // paletteIdPrefix: low 8 bytes of the active palette id (or zeros). Use
+  // the mux-guarded snapshot so this timer-task read doesn't race a loop-task
+  // CurrentPalette::update() reassigning paletteId_.
   char paletteIdPrefix[lamp_protocol::WISP_HELLO_PALETTE_ID_PREFIX_LEN] = {0};
   size_t paletteIdPrefixLen = 0;
   if (palette_) {
-    const std::string& id = palette_->paletteId();
-    paletteIdPrefixLen = id.size() > sizeof(paletteIdPrefix)
-                            ? sizeof(paletteIdPrefix)
-                            : id.size();
-    if (paletteIdPrefixLen) {
-      std::memcpy(paletteIdPrefix, id.data(), paletteIdPrefixLen);
-    }
+    paletteIdPrefixLen = palette_->copyPaletteIdPrefix(
+        paletteIdPrefix, sizeof(paletteIdPrefix));
   }
 
   // carriedFwChannel / carriedFwVersion: zeros for v1. Phase F populates
@@ -181,6 +183,23 @@ void StatusBeacon::emit() {
   // broadcast() ends in esp_now_send which is itself queued — safe to call
   // outside the mux. The seq is already committed.
   mesh_->broadcast(buf, n);
+
+  // On-change trigger for passive WiFi/Aurora flips. The 2s HELLO timer is
+  // the only path that observes radio state on a fast cadence; without this
+  // diff, a connect/disconnect would wait up to 30s for the next heartbeat
+  // to be reported in wispStatus. emitStatus() takes its own portMUX and is
+  // re-entrant-safe from this task. Stack budget on the timer-service task
+  // (~3 KB) is comfortable for the JsonDocument-on-stack build.
+  const bool helloFlagsChanged =
+      haveLastHelloConn_ &&
+      (wifiNow != lastHelloWifi_ || auroraNow != lastHelloAurora_);
+  lastHelloWifi_     = wifiNow;
+  lastHelloAurora_   = auroraNow;
+  haveLastHelloConn_ = true;
+  if (helloFlagsChanged) {
+    emitStatus();
+    if (statusTimer_) xTimerReset(statusTimer_, 0);
+  }
 }
 
 void StatusBeacon::emitStatus() {
@@ -199,23 +218,24 @@ void StatusBeacon::emitStatus() {
   const char* zoneSrc    = zone_ ? zoneSourceName(zone_->source())
                                  : zoneSourceName(ZoneSource::None);
 
-  // Snapshot observedZones up to 16 entries (matches kMaxObservedZones; if
-  // that cap ever grows we still clamp here so the JSON stays in budget).
-  std::vector<int> observedSnap;
+  // Snapshot observedZones into a fixed stack buffer via the mux-guarded
+  // accessor. Taking a reference to the underlying vector here would race
+  // ZoneSelector::observe() on the loop task — push_back can relocate the
+  // backing storage, and erase() invalidates iterators. Buffer is sized
+  // to kMaxObservedZones so we capture the full set without truncation.
+  int obsBuf[kMaxObservedZones];
+  size_t obsCount = 0;
   if (zone_) {
-    const auto& obs = zone_->observed();
-    const size_t n = obs.size() > kMaxObservedZones ? kMaxObservedZones
-                                                    : obs.size();
-    observedSnap.assign(obs.begin(), obs.begin() + n);
+    obsCount = zone_->copyObserved(obsBuf, kMaxObservedZones);
   }
 
   // paletteIdPrefix — first 8 chars of the active palette id (or empty).
+  // copyPaletteIdPrefix snapshots under the CurrentPalette mux, so this
+  // timer-task call won't tear against a loop-task update().
   char paletteIdPrefix[kPaletteIdPrefixLen + 1] = {0};
   if (palette_) {
-    const std::string& id = palette_->paletteId();
-    const size_t n = id.size() > kPaletteIdPrefixLen ? kPaletteIdPrefixLen
-                                                      : id.size();
-    if (n) std::memcpy(paletteIdPrefix, id.data(), n);
+    const size_t n = palette_->copyPaletteIdPrefix(paletteIdPrefix,
+                                                   kPaletteIdPrefixLen);
     paletteIdPrefix[n] = '\0';
   }
 
@@ -228,7 +248,7 @@ void StatusBeacon::emitStatus() {
   doc["currentZone"]     = currentZone;
   doc["zoneSource"]      = zoneSrc;
   JsonArray zonesArr     = doc["observedZones"].to<JsonArray>();
-  for (int z : observedSnap) zonesArr.add(z);
+  for (size_t i = 0; i < obsCount; ++i) zonesArr.add(obsBuf[i]);
   doc["wifiConnected"]   = wifiConn;
   doc["auroraConnected"] = auroraConn;
   doc["paletteIdPrefix"] = paletteIdPrefix;
