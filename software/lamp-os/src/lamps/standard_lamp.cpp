@@ -78,6 +78,19 @@ lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingExpressionOpJson;
 lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingWifiOpJson;
 lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingTestActionJson;
 lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingRemoteOpJson;
+// Phase D — app-originated wispOp writes (CHAR_WISP_OP). Drain on Core 1
+// broadcasts as MSG_CONTROL_OP. Routed through a DEDICATED slot rather
+// than the converged applyRemoteOpLocal so that gossip-relayed wispOps
+// don't get reinterpreted on every lamp — wispOp is wisp-only, lamps
+// only forward.
+lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingWispOpJson;
+// Phase D — wispStatus payloads observed on the mesh (either own BLE
+// inbound or gossip-relayed from another lamp). applyRemoteOpLocal
+// recognizes char:"wispStatus" and posts here; the drain caches into
+// NearbyLamps and notifies BLE subscribers. The MAC slot carries the
+// wisp's own MAC (source of the original CONTROL_OP) so cacheWispStatus
+// knows whose status it is.
+lamp::PendingJsonSlotWithMac<MAX_PENDING_OP_JSON> pendingWispStatusJson;
 // Disposition map writes from CHAR_SOCIAL_DISPOSITIONS land here from
 // Core 0; the loop drain on Core 1 parses + persists via Config so NVS
 // writes serialise with the settings_blob drain on the same core.
@@ -150,6 +163,17 @@ void postPendingTestActionJson(const char* data, size_t len)        { pendingTes
 void postPendingSettingsBlobJson(const char* data, size_t len)      { pendingSettingsBlobJson.post(pendingMux, data, len); }
 void postPendingRemoteOpJson(const char* data, size_t len)          { pendingRemoteOpJson.post(pendingMux, data, len); }
 void postPendingSocialDispositionsJson(const char* data, size_t len){ pendingSocialDispositionsJson.post(pendingMux, data, len); }
+// Phase D wispOp: app → CHAR_WISP_OP → here → drain → MSG_CONTROL_OP
+// broadcast. The slot carries no mac because the drain inserts the
+// broadcast target itself.
+void postPendingWispOpJson(const char* data, size_t len)            { pendingWispOpJson.post(pendingMux, data, len); }
+// Phase D wispStatus: applyRemoteOpLocal sees char:"wispStatus" and
+// memcpys here under portMUX along with the original wisp's MAC.
+// The drain caches via NearbyLamps + emits a BLE notify.
+static void postPendingWispStatusJson(const uint8_t srcMac[6],
+                                      const char* data, size_t len) {
+  pendingWispStatusJson.post(pendingMux, data, len, srcMac);
+}
 
 namespace lamp {
 // Phase C: typed-payload posts called from ShowReceiver's WiFi recv task.
@@ -411,7 +435,24 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     } else {
       lamp::enqueueDelayedInvocation(inv, srcMac, inv.delayMs);
     }
+
+  } else if (strcmp(ch, "wispStatus") == 0) {
+    // Phase D: a wispStatus payload reached us — either directly from the
+    // wisp's MSG_CONTROL_OP broadcast or via a peer's gossip relay. We
+    // don't APPLY anything locally (lamps don't have a zone state to
+    // mutate); we just cache + notify so the phone-paired lamp's
+    // CHAR_WISP_STATUS read/notify surface stays current. srcMac is the
+    // wisp's MAC (preserved through gossip relay by ShowReceiver, which
+    // copies op.sourceMac into the inbound slot).
+    postPendingWispStatusJson(srcMac, payloadJson, len);
   }
+  // wispOp intentionally has NO branch here. The dedicated CHAR_WISP_OP
+  // slot drain broadcasts a MSG_CONTROL_OP; the wisp(s) on the mesh
+  // consume it. A gossip-relayed wispOp lands here, finds no matching
+  // branch, and silently drops — which is exactly the desired behavior.
+  // See docs/superpowers/plans/2026-06-04-wisp-phase-d-zone-selection.md
+  // ("Don't add wispOp to applyRemoteOpLocal naively") for the design.
+
   // settings forwarding is intentionally deferred — it triggers a remote
   // reboot whose UX over the grid needs more thought. Follow-up plan.
 }
@@ -1237,6 +1278,43 @@ void loop() {
       lamp::nearbyLamps.cacheWispHello(cmd.sourceMac, cmd.wispVersion, cmd.flags,
                                        cmd.paletteIdPrefix, cmd.carriedFwChannel,
                                        cmd.carriedFwVersion);
+    }
+  }
+  // Phase D wispOp drain — app wrote a wispOp via CHAR_WISP_OP; we
+  // broadcast it as MSG_CONTROL_OP so the wisp(s) on the mesh pick it
+  // up. NEVER applied locally — wispOp is wisp-only (lamps don't have a
+  // zone state). ShowReceiver::sendControlOp records its own seq into
+  // controlOpDedup_ before the broadcast, so the reflected copy we get
+  // back from the gossip rebroadcast doesn't try to apply locally.
+  if (pendingWispOpJson.valid) {
+    char buf[MAX_PENDING_OP_JSON + 1];
+    uint16_t len = pendingWispOpJson.drain(pendingMux, buf);
+#ifdef LAMP_DEBUG
+    Serial.printf("[loop] drain wispOp len=%u\n", (unsigned)len);
+#endif
+    if (len > 0) {
+      static const uint8_t kBroadcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+      showReceiver.sendControlOp(kBroadcastMac,
+                                 reinterpret_cast<const uint8_t*>(buf),
+                                 len);
+    }
+  }
+  // Phase D wispStatus drain — applyRemoteOpLocal saw a wispStatus
+  // payload and posted it here with the wisp's source MAC. Cache into
+  // NearbyLamps and push a BLE notification so any app subscribed to
+  // CHAR_WISP_STATUS picks up the change without round-tripping a read.
+  if (pendingWispStatusJson.valid) {
+    char buf[MAX_PENDING_OP_JSON + 1];
+    uint8_t srcMac[6];
+    uint16_t len = pendingWispStatusJson.drain(pendingMux, buf, srcMac);
+#ifdef LAMP_DEBUG
+    Serial.printf("[loop] drain wispStatus len=%u src=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                  (unsigned)len, srcMac[0], srcMac[1], srcMac[2],
+                  srcMac[3], srcMac[4], srcMac[5]);
+#endif
+    if (len > 0) {
+      lamp::nearbyLamps.cacheWispStatus(srcMac, buf, len);
+      ble_control::notifyWispStatus();
     }
   }
   // MSG_EVENT drain. The recv side already resolved our delayMs from the
