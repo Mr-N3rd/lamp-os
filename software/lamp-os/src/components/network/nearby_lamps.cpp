@@ -254,6 +254,15 @@ void NearbyLamps::cacheWispStatus(const uint8_t mac[6],
   if (!wispCache_.present || std::memcmp(wispCache_.mac, mac, 6) != 0) {
     std::memcpy(wispCache_.mac, mac, 6);
     wispCache_.present = true;
+    // Different wisp — drop stale hello data so the next read doesn't
+    // merge wisp-A's hello fields under wisp-B's MAC. Hello fields will
+    // refresh on the next MSG_WISP_HELLO from this wisp.
+    wispCache_.wispVersion = 0;
+    wispCache_.flags = 0;
+    wispCache_.paletteIdPrefix[0] = '\0';
+    wispCache_.carriedFwChannel[0] = '\0';
+    wispCache_.carriedFwVersion = 0;
+    wispCache_.lastHelloMs = 0;
   }
   xSemaphoreGive(mutex_);
 }
@@ -294,11 +303,8 @@ std::string NearbyLamps::getWispStatusReadJson() {
     doc["char"] = "wispStatus";
   }
 
-  // Merge in hello-derived fields. These are additive — if the wisp's
-  // own status payload included the same keys, the wisp's values win
-  // (deserializeJson populated them first; we only set keys when not
-  // already present via the index assignment which DOES overwrite, so
-  // we use isNull() to preserve wisp-authored values).
+  // If the wisp's status payload already contains any of these keys,
+  // the wisp-authored value wins — the isNull() guard skips the merge.
   if (snap.present) {
     char macStr[18];
     std::snprintf(macStr, sizeof(macStr),
@@ -309,7 +315,9 @@ std::string NearbyLamps::getWispStatusReadJson() {
     if (snap.wispVersion != 0 && doc["wispVersion"].isNull()) {
       doc["wispVersion"] = snap.wispVersion;
     }
-    if (doc["helloFlags"].isNull())           doc["helloFlags"] = snap.flags;
+    if (snap.lastHelloMs != 0 && doc["helloFlags"].isNull()) {
+      doc["helloFlags"] = snap.flags;
+    }
     if (snap.paletteIdPrefix[0] != '\0' && doc["helloPaletteIdPrefix"].isNull()) {
       doc["helloPaletteIdPrefix"] = snap.paletteIdPrefix;
     }
