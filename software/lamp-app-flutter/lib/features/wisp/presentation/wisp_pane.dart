@@ -136,14 +136,14 @@ class _WispBodyState extends ConsumerState<_WispBody> {
         const SizedBox(height: 16),
         _ObservedZonesPicker(
           status: status,
-          onPickZone: notifier.setZone,
+          onPickZone: (z) => _runWispOp(() => notifier.setZone(z)),
         ),
         if (_canClearSelection(status)) ...[
           const SizedBox(height: 16),
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: notifier.clearZone,
+              onPressed: () => _runWispOp(notifier.clearZone),
               icon: const Icon(Icons.close, size: 16),
               label: const Text('Clear selection'),
               style: TextButton.styleFrom(
@@ -183,6 +183,23 @@ class _WispBodyState extends ConsumerState<_WispBody> {
   /// no-op on the wisp side and would just confuse the UI.
   bool _canClearSelection(WispStatus s) =>
       s.zoneSource == 'appOp' || s.zoneSource == 'nvs';
+
+  /// Runs a wispOp (setZone/clearZone) and surfaces failures as a
+  /// SnackBar. Without this the notifier's optimistic update would
+  /// stick around forever on a failed write — no status notify is
+  /// coming back to reconcile it.
+  Future<void> _runWispOp(Future<void> Function() op) async {
+    try {
+      await op();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't reach the wisp — try again."),
+        ),
+      );
+    }
+  }
 }
 
 class _WispHeader extends StatelessWidget {

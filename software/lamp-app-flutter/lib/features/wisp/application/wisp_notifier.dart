@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/ble/ble_client_provider.dart';
@@ -57,6 +58,12 @@ class WispNotifier extends _$WispNotifier {
   /// Pin the wisp to [zoneId]. Optimistically updates local state to
   /// `zoneSource: appOp` so the UI feels responsive; the next status
   /// notify will replace this with the wisp's authoritative view.
+  ///
+  /// Throws if the BLE write fails — the optimistic state stays in
+  /// place (no notify is coming to reconcile it), so callers must
+  /// surface the failure to the user. The next genuine status notify
+  /// (or a manual refresh) will eventually correct local state once
+  /// the link recovers.
   Future<void> setZone(int zoneId) async {
     final cur = state.value ?? WispStatus.empty;
     state = AsyncData(cur.copyWith(
@@ -65,15 +72,17 @@ class WispNotifier extends _$WispNotifier {
     ));
     try {
       await _repo.setZone(zoneId);
-    } catch (_) {
-      // Best-effort — if the write fails the next notify (or a manual
-      // refresh) will reconcile to the wisp's actual state.
+    } catch (e, st) {
+      debugPrint('WispNotifier.setZone($zoneId) failed: $e\n$st');
+      rethrow;
     }
   }
 
   /// Clear the persisted zone pin. After the wisp processes this, the
   /// next status update will show `zoneSource: firstSeen` (or `none`
   /// if no zone has been observed yet).
+  ///
+  /// Throws on write failure (see [setZone] for rationale).
   Future<void> clearZone() async {
     final cur = state.value ?? WispStatus.empty;
     state = AsyncData(cur.copyWith(
@@ -84,8 +93,9 @@ class WispNotifier extends _$WispNotifier {
     ));
     try {
       await _repo.clearZone();
-    } catch (_) {
-      // Best-effort.
+    } catch (e, st) {
+      debugPrint('WispNotifier.clearZone() failed: $e\n$st');
+      rethrow;
     }
   }
 

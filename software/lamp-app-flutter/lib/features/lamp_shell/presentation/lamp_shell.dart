@@ -102,8 +102,10 @@ class _LampShellState extends ConsumerState<LampShell> {
           // save flow — Expressions edits live-preview via
           // CHAR_EXPRESSION_OP for instant feedback but only persist to
           // NVS when the global Save Changes pill is tapped. Info is
-          // read-only, so the action is hidden there.
-          if (_tab != LampTab.info)
+          // read-only, so the action is hidden there. Wisp writes are
+          // immediate (CHAR_WISP_OP) with no dirty state — the "Saved"
+          // pill belongs to the settings-blob flow, not wisp ops.
+          if (_tab != LampTab.info && _tab != LampTab.wisp)
             _SaveAction(lampId: widget.lampId),
         ],
       ),
