@@ -48,6 +48,23 @@ class WispNotifier extends _$WispNotifier {
   Timer? _offColorWriteTimer;
   Timer? _manualPaletteWriteTimer;
 
+  /// Optimistic-write guard for [setSource]. The wisp's response chain
+  /// is: app BLE-writes wispOp → relay lamp forwards via MSG_CONTROL_OP
+  /// → wisp dispatches setSource → triggerOnChange emits new wispStatus
+  /// → wispStatus relays back to lamps → BLE notify fires. During that
+  /// round-trip (up to seconds, especially via multi-hop relay), the
+  /// relay lamp keeps notifying its CACHED wispStatus — still carrying
+  /// the previous `source` — which races our optimistic state and flips
+  /// the picker back. While `_pendingSourceMode` is set, incoming
+  /// wispStatus notifications have their `source` field replaced with
+  /// the pending value until either (a) a wispStatus arrives whose
+  /// source matches the pending mode (write confirmed), or (b) the
+  /// 3 s window expires (write missed — let the real state through so
+  /// the picker snaps back and the user can retry).
+  static const Duration _sourceWriteGuard = Duration(seconds: 3);
+  WispSourceMode? _pendingSourceMode;
+  DateTime? _pendingSourceUntil;
+
   // ── Phase E manual palette state ─────────────────────────────────────
   // The wisp does not echo the saved palette back in wispStatus (would
   // push the JSON past CONTROL_MAX_PAYLOAD — only the 8-char paletteId
@@ -103,7 +120,8 @@ class WispNotifier extends _$WispNotifier {
     _sub = ble
         .subscribe(lampId, BleUuids.controlService, BleUuids.wispStatus)
         .listen((bytes) {
-      final next = WispStatus.fromBytes(bytes);
+      var next = WispStatus.fromBytes(bytes);
+      next = _applySourceWriteGuard(next);
       _ingestWispBroadcastPalette(next.manualPalette);
       state = AsyncData(next);
     });
@@ -120,7 +138,7 @@ class WispNotifier extends _$WispNotifier {
     unawaited(_hydrateManualPaletteFromPrefs());
 
     try {
-      final initial = await _repo.readStatus();
+      final initial = _applySourceWriteGuard(await _repo.readStatus());
       _ingestWispBroadcastPalette(initial.manualPalette);
       return initial;
     } catch (_) {
@@ -334,17 +352,56 @@ class WispNotifier extends _$WispNotifier {
   /// Optimistically reflects in local state so the pill picker doesn't
   /// lag the tap; the wispStatus notify reconciles within ~2s. Rolls
   /// back the optimistic state on BLE write failure (audit perf-M8).
+  ///
+  /// Arms the source-write guard so stale wispStatus echoes from the
+  /// relay lamp between the BLE write and the wisp's triggerOnChange
+  /// response don't flip the picker back. See [_sourceWriteGuard].
   Future<void> setSource(WispSourceMode mode) async {
     final prev = state;
+    final prevPendingMode = _pendingSourceMode;
+    final prevPendingUntil = _pendingSourceUntil;
     final cur = state.value ?? WispStatus.empty;
     state = AsyncData(cur.copyWith(source: mode));
+    _pendingSourceMode = mode;
+    _pendingSourceUntil = DateTime.now().add(_sourceWriteGuard);
     try {
       await _repo.setSource(mode);
     } catch (e, st) {
       debugPrint('WispNotifier.setSource($mode) failed: $e\n$st');
       state = prev;
+      // Audit (2026-06-13): on failure, CLEAR the guard rather than
+      // restoring `prevPendingMode`. The optimistic state is also being
+      // rolled back, so suppression of "stale" notifies should stop —
+      // the user needs to see ground truth (whatever the wisp is
+      // actually reporting). Restoring an old guard would mask reality.
+      _pendingSourceMode = null;
+      _pendingSourceUntil = null;
       rethrow;
     }
+  }
+
+  /// Apply the [setSource] optimistic-write guard to an incoming
+  /// [WispStatus]. When the guard is armed and the incoming `source`
+  /// still carries the stale pre-write value, the field is replaced
+  /// with the pending mode (everything else flows through unchanged).
+  /// The guard releases when the wisp confirms (incoming.source ==
+  /// pending) or the window expires.
+  WispStatus _applySourceWriteGuard(WispStatus incoming) {
+    final pendingMode = _pendingSourceMode;
+    if (pendingMode == null) return incoming;
+    final now = DateTime.now();
+    final until = _pendingSourceUntil;
+    if (until == null || now.isAfter(until)) {
+      _pendingSourceMode = null;
+      _pendingSourceUntil = null;
+      return incoming;
+    }
+    if (incoming.source == pendingMode) {
+      _pendingSourceMode = null;
+      _pendingSourceUntil = null;
+      return incoming;
+    }
+    return incoming.copyWith(source: pendingMode);
   }
 
   // ── Manual palette editor state-mutators ─────────────────────────────
