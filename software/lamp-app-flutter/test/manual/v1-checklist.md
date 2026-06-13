@@ -115,3 +115,67 @@ Hardware verification for things automated tests can't cover. Walk through this 
 ### Live color cache
 
 - [ ] After editing shade or base on a lamp and backing out without saving, re-opening the picker shows the inventory tile tinted by the *edited* colors (InventoryLamp.lastShadeColor / lastBaseColor cached on every live write).
+
+## Phase 3 — Knockout (per-LED brightness)
+
+- [ ] Control screen shows a "Knockout · N dimmed" tile below the Base card.
+- [ ] Subtitle reads "No pixels dimmed" when the knockout map is empty; "1 pixel dimmed" or "N pixels dimmed" otherwise.
+- [ ] Tap the tile → KnockoutScreen opens with the back chevron in the AppBar and title "Pixel Knockout · &lt;lamp name&gt;".
+- [ ] One slider row per LED (matches `base.px`); each shows index `#0..#N-1`, slider, percentage.
+- [ ] Default pixels show 100%; previously-dimmed pixels show their saved value.
+- [ ] Drag a slider → that LED on the lamp dims/brightens within ~100 ms.
+- [ ] Footer left side updates to "N edited" as you change pixels.
+- [ ] Tap "Reset all" → every slider returns to 100%, footer reads "0 edited", lamp is fully bright.
+- [ ] Back, then tap global Save → power-cycle the lamp → knockout state persists.
+
+## Phase 5 — Setup screen (name, home WiFi, MQTT, advanced)
+
+### Lamp name
+
+- [ ] Setup tab shows the lamp's current name in a TextField, pre-populated.
+- [ ] Editing the name enables Save in the AppBar.
+- [ ] Save → reboot → AppBar chip on Control reflects the new name.
+
+### Home WiFi
+
+- [ ] SSID + Password + Brightness slider visible under "Home WiFi".
+- [ ] Password field shows the hint "(unchanged — type to replace)" when a password is set; typing replaces it. Leaving blank preserves the existing password across Save.
+- [ ] Setting an SSID + Save → after reboot the lamp connects to that network.
+- [ ] Brightness slider changes the home-mode brightness (the value the lamp uses while WiFi STA is connected) and persists across reboot.
+
+### Smart Home (MQTT)
+
+- [ ] MQTT section is hidden until a home SSID is set.
+- [ ] Once an SSID is set, MQTT section appears as a collapsible card.
+- [ ] Toggle Enabled, set Broker host:port, Save → lamp publishes to the broker (verify in Home Assistant or MQTT Explorer).
+- [ ] Password hint behaves the same as Home WiFi (sentinel preserved unless typed).
+
+### Advanced
+
+- [ ] Setup tab shows "Enable advanced settings" button (not the Advanced section) by default.
+- [ ] Tap it → Advanced section appears with base bpp / shade bpp segmented controls + Advanced-enabled switch.
+- [ ] Flip base bpp to RGB (3) → save → reopen base color picker → Warm White slider is gone.
+- [ ] Disable the Advanced switch → Advanced section retracts; Save still enabled while you have unsaved changes.
+
+## Phase 4 — Expressions
+
+### List view
+
+- [ ] Empty state on a fresh lamp: "No expressions yet — tap + to add a Glitch, Pulse, Breath or Shift effect."
+- [ ] After adding via the editor, the new expression appears in the list with its type, target ("shade"/"base"/"both"), interval range, and enable toggle.
+- [ ] Toggle the Enabled switch → the change writes immediately to the lamp (no Save), and the expression starts/stops within its next interval window.
+- [ ] Swipe a tile left → red delete background appears; release → the expression is removed and the lamp stops it.
+- [ ] Tap a tile → editor opens pre-populated with that expression.
+
+### Editor
+
+- [ ] "+ Add expression" FAB opens the editor for a new expression with default `breathing` type.
+- [ ] Type dropdown shows breathing / pulse / shifty / glitchy.
+- [ ] Target SegmentedButton (Shade / Base / Both) updates the draft.
+- [ ] Enabled switch toggles the draft state.
+- [ ] Tap "+ Add color" → color picker opens; pick a color → swatch added to the row. Tap an existing swatch to edit it. Long-press to remove.
+- [ ] Two interval sliders enforce `min <= max` automatically.
+- [ ] Parameters JSON field accepts a JSON object with numeric values; invalid JSON shows an error and disables Save / Test.
+- [ ] Tap **Test** → lamp runs the configured expression once.
+- [ ] Tap **Save** → editor pops; list reflects the new entry; persists across power-cycle.
+- [ ] On existing-entry edit, Delete button appears and removes the expression.

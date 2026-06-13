@@ -106,7 +106,10 @@ class BaseEditorSheet extends ConsumerWidget {
                   final stop = colors[i];
                   return ListTile(
                     key: ValueKey('stop-$i'),
-                    onTap: () => notifier.setBaseAc(i),
+                    onTap: () {
+                      notifier.setBaseAc(i);
+                      editStop(i);
+                    },
                     leading: ReorderableDragStartListener(
                       index: i,
                       child: const Icon(Icons.drag_indicator,
@@ -114,20 +117,17 @@ class BaseEditorSheet extends ConsumerWidget {
                     ),
                     title: Row(
                       children: [
-                        GestureDetector(
-                          onTap: () => editStop(i),
-                          child: Container(
-                            width: 28,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              color: stop.toSwatch(),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: i == activeIndex
-                                    ? BrandColors.glowPink
-                                    : Colors.white.withValues(alpha: 0.12),
-                                width: i == activeIndex ? 2 : 1,
-                              ),
+                        Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: stop.toSwatch(),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: i == activeIndex
+                                  ? BrandColors.glowPink
+                                  : Colors.white.withValues(alpha: 0.12),
+                              width: i == activeIndex ? 2 : 1,
                             ),
                           ),
                         ),
@@ -142,11 +142,17 @@ class BaseEditorSheet extends ConsumerWidget {
                         ),
                       ],
                     ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.close,
-                          color: BrandColors.slateGrey),
-                      onPressed:
-                          colors.length <= 1 ? null : () => removeStop(i),
+                    trailing: Tooltip(
+                      message: colors.length <= 1
+                          ? 'A gradient needs at least one stop'
+                          : 'Remove stop',
+                      child: IconButton(
+                        icon: const Icon(Icons.close,
+                            color: BrandColors.slateGrey),
+                        onPressed: colors.length <= 1
+                            ? null
+                            : () => removeStop(i),
+                      ),
                     ),
                   );
                 },

@@ -57,6 +57,12 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
   late int _b = widget.initial.b;
   late int _w = widget.bpp == 4 ? widget.initial.w : 0;
 
+  // Round-trips with _r/_g/_b/_w so the user can type a hex code directly
+  // (matches the Vue picker — software/lamp-app/src/components/fields/Color.vue).
+  late final TextEditingController _hexCtrl =
+      TextEditingController(text: _displayHex);
+  String? _hexError;
+
   LampColor get _current => LampColor(
         r: _r,
         g: _g,
@@ -69,25 +75,64 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
     return widget.bpp == 4 ? full : full.substring(0, 7);
   }
 
+  @override
+  void dispose() {
+    _hexCtrl.dispose();
+    super.dispose();
+  }
+
   void _emitLive() => widget.onLive?.call(_current);
+
+  /// Mirror the current channel values back into the hex field whenever a
+  /// slider moves. Skips the write if the field already shows the same hex
+  /// so the user's caret position isn't disturbed mid-typing.
+  void _syncHexField() {
+    if (_hexCtrl.text.toUpperCase() != _displayHex) {
+      _hexCtrl.text = _displayHex;
+    }
+    if (_hexError != null) setState(() => _hexError = null);
+  }
 
   void _setR(int v) {
     setState(() => _r = v);
+    _syncHexField();
     _emitLive();
   }
 
   void _setG(int v) {
     setState(() => _g = v);
+    _syncHexField();
     _emitLive();
   }
 
   void _setB(int v) {
     setState(() => _b = v);
+    _syncHexField();
     _emitLive();
   }
 
   void _setW(int v) {
     setState(() => _w = v);
+    _syncHexField();
+    _emitLive();
+  }
+
+  void _onHexChanged(String input) {
+    final parsed = LampColor.tryFromHex(input);
+    if (parsed == null) {
+      // Show the error inline but don't reject partial typing — the user is
+      // probably mid-keystroke; revert validation when they reach a valid
+      // length.
+      setState(() => _hexError = 'Need #RRGGBB or #RRGGBBWW');
+      return;
+    }
+    setState(() {
+      _r = parsed.r;
+      _g = parsed.g;
+      _b = parsed.b;
+      if (widget.bpp == 4) _w = parsed.w;
+      _hexError = null;
+    });
     _emitLive();
   }
 
@@ -114,15 +159,30 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
               ),
               const SizedBox(height: 16),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   LampColorSwatch(color: _current, size: 48),
                   const SizedBox(width: 12),
-                  Text(
-                    _displayHex,
-                    style: const TextStyle(
-                      color: BrandColors.fogGrey,
-                      fontSize: 14,
-                      fontFamily: 'monospace',
+                  Expanded(
+                    child: TextField(
+                      controller: _hexCtrl,
+                      onChanged: _onHexChanged,
+                      textCapitalization: TextCapitalization.characters,
+                      style: const TextStyle(
+                        color: BrandColors.lampWhite,
+                        fontSize: 14,
+                        fontFamily: 'monospace',
+                      ),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        labelText: 'Hex',
+                        labelStyle: const TextStyle(
+                          color: BrandColors.fogGrey,
+                          fontSize: 12,
+                        ),
+                        errorText: _hexError,
+                        border: const OutlineInputBorder(),
+                      ),
                     ),
                   ),
                 ],
@@ -150,7 +210,7 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
                 _ChannelSlider(
                   label: 'Warm White',
                   value: _w,
-                  trackColor: const Color(0xFFFABB3E),
+                  trackColor: BrandColors.warmWhite,
                   onChanged: _setW,
                 ),
               const SizedBox(height: 12),

@@ -24,10 +24,96 @@ void main() {
     expect(s.colors[1].w, 0xAA);
   });
 
+  test('BaseSection.knockout is empty when the JSON omits it', () {
+    final s = BaseSection.fromJson(jsonDecode(
+      '{"px":35,"ac":0,"bpp":4,"colors":[]}',
+    ) as Map<String, dynamic>);
+    expect(s.knockout, isEmpty);
+  });
+
+  test('BaseSection.knockout folds entries into a map', () {
+    final s = BaseSection.fromJson(jsonDecode(
+      '{"px":35,"ac":0,"bpp":4,"colors":[],"knockout":[{"p":3,"b":50},{"p":7,"b":25}]}',
+    ) as Map<String, dynamic>);
+    expect(s.knockout, {3: 50, 7: 25});
+  });
+
   test('ShadeSection parses single color', () {
     final s = ShadeSection.fromJson(jsonDecode(
       '{"px":38,"bpp":4,"colors":["#000000FF"]}',
     ) as Map<String, dynamic>);
     expect(s.colors.single.w, 0xFF);
+  });
+
+  test('HomeSection parses ssid + brightness', () {
+    final s = HomeSection.fromJson(jsonDecode(
+      '{"ssid":"home","password":"********","brightness":40}',
+    ) as Map<String, dynamic>);
+    expect(s.ssid, 'home');
+    expect(s.password, '********');
+    expect(s.brightness, 40);
+  });
+
+  test('HomeSection defaults on a sparse JSON', () {
+    final s = HomeSection.fromJson(<String, dynamic>{});
+    expect(s.ssid, '');
+    expect(s.brightness, 60);
+  });
+
+  test('MqttSection parses every field', () {
+    final s = MqttSection.fromJson(jsonDecode(
+      '{"enabled":true,"brokerHost":"ha","brokerPort":1884,'
+      '"username":"u","password":"********","topicPrefix":"x"}',
+    ) as Map<String, dynamic>);
+    expect(s.enabled, isTrue);
+    expect(s.brokerHost, 'ha');
+    expect(s.brokerPort, 1884);
+    expect(s.username, 'u');
+    expect(s.topicPrefix, 'x');
+  });
+
+  test('MqttSection defaults to disabled with the firmware default port', () {
+    final s = MqttSection.fromJson(<String, dynamic>{});
+    expect(s.enabled, isFalse);
+    expect(s.brokerPort, 1883);
+  });
+
+  test('ExpressionConfig round-trips through toJson + fromJson', () {
+    final original = ExpressionConfig(
+      type: 'glitchy',
+      enabled: true,
+      colors: [LampColor.fromHex('#FF00FFAA')],
+      intervalMin: 30,
+      intervalMax: 120,
+      target: 2,
+      parameters: {'flickerRate': 5, 'jitter': 100},
+    );
+    final round = ExpressionConfig.fromJson(
+      Map<String, dynamic>.from(
+          jsonDecode(jsonEncode(original.toJson())) as Map),
+    );
+    expect(round.type, 'glitchy');
+    expect(round.enabled, isTrue);
+    expect(round.colors.single.toHex(), '#FF00FFAA');
+    expect(round.intervalMin, 30);
+    expect(round.intervalMax, 120);
+    expect(round.target, 2);
+    expect(round.parameters, {'flickerRate': 5, 'jitter': 100});
+  });
+
+  test('ExpressionsSection parses an empty array', () {
+    expect(ExpressionsSection.fromJson([]).expressions, isEmpty);
+  });
+
+  test('ExpressionsSection parses two entries', () {
+    final s = ExpressionsSection.fromJson(
+      (jsonDecode(
+        '[{"type":"breathing","enabled":true,"colors":[],"intervalMin":10,"intervalMax":20,"target":1},'
+        '{"type":"glitchy","enabled":false,"colors":[],"intervalMin":60,"intervalMax":900,"target":3}]',
+      ) as List).cast<Map<String, dynamic>>(),
+    );
+    expect(s.expressions, hasLength(2));
+    expect(s.expressions[0].type, 'breathing');
+    expect(s.expressions[1].target, 3);
   });
 }

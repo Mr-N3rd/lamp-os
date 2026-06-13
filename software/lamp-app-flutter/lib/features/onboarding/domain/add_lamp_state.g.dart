@@ -17,6 +17,9 @@ _AddLampState _$AddLampStateFromJson(Map<String, dynamic> json) =>
       status:
           $enumDecodeNullable(_$AddLampStatusEnumMap, json['status']) ??
           AddLampStatus.idle,
+      error:
+          $enumDecodeNullable(_$AddLampErrorEnumMap, json['error']) ??
+          AddLampError.none,
       errorMessage: json['errorMessage'] as String?,
     );
 
@@ -27,6 +30,7 @@ Map<String, dynamic> _$AddLampStateToJson(_AddLampState instance) =>
       'name': instance.name,
       'password': instance.password,
       'status': _$AddLampStatusEnumMap[instance.status]!,
+      'error': _$AddLampErrorEnumMap[instance.error]!,
       'errorMessage': instance.errorMessage,
     };
 
@@ -34,6 +38,7 @@ const _$AddLampStepEnumMap = {
   AddLampStep.scan: 'scan',
   AddLampStep.name: 'name',
   AddLampStep.password: 'password',
+  AddLampStep.verifying: 'verifying',
   AddLampStep.done: 'done',
 };
 
@@ -41,4 +46,11 @@ const _$AddLampStatusEnumMap = {
   AddLampStatus.idle: 'idle',
   AddLampStatus.working: 'working',
   AddLampStatus.error: 'error',
+};
+
+const _$AddLampErrorEnumMap = {
+  AddLampError.none: 'none',
+  AddLampError.wrongPassword: 'wrongPassword',
+  AddLampError.claimFailed: 'claimFailed',
+  AddLampError.connectFailed: 'connectFailed',
 };

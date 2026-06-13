@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../../../core/widgets/status_dot.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../../nearby/domain/nearby_lamp.dart';
 import '../../application/add_lamp_notifier.dart';
-import 'confirm_add_dialog.dart';
 
 class AddLampScanStep extends ConsumerWidget {
   const AddLampScanStep({super.key});
@@ -17,6 +17,7 @@ class AddLampScanStep extends ConsumerWidget {
       return const Center(
         child: Text(
           'Scanning for lamps...',
+          textAlign: TextAlign.center,
           style: TextStyle(color: BrandColors.fogGrey),
         ),
       );
@@ -38,12 +39,12 @@ class _LampRow extends ConsumerWidget {
     if (lamp.isFactoryDefault) {
       await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
     } else {
-      final confirmed = await confirmAddDialog(context, lamp.name);
-      if (confirmed) {
-        await ref
-            .read(addLampNotifierProvider.notifier)
-            .add(deviceId: lamp.id, name: lamp.name);
-      }
+      // No confirm dialog — `add()` sets state.step to `done` and the
+      // AddLampShell will swap in the AddLampDoneStep ("X is ready"),
+      // which serves as the visual confirmation.
+      await ref
+          .read(addLampNotifierProvider.notifier)
+          .add(deviceId: lamp.id, name: lamp.name);
     }
   }
 
@@ -62,6 +63,16 @@ class _LampRow extends ConsumerWidget {
         ),
         child: Row(
           children: [
+            // BLE adv tells us bluetooth-reachable; v2-firmware lamps also
+            // carry a mesh-state byte (`NearbyLamp.onMesh`). Light bright
+            // green when the lamp is on the mesh, otherwise faded blue.
+            StatusDot(
+              kind: lamp.onMesh
+                  ? StatusKind.mesh
+                  : StatusKind.bluetooth,
+              size: 14,
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

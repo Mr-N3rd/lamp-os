@@ -80,6 +80,29 @@ void main() {
     await c.read(activeLampNotifierProvider.notifier).set('a');
     addTearDown(c.dispose);
 
+    // Both lamps must be visible in nearby so their tiles are tappable
+    // (offline tiles have onTap: null per the new last-seen UX).
+    c.read(nearbyLampsNotifierProvider.notifier).state = const [
+      NearbyLamp(
+        id: 'a',
+        name: 'jacko',
+        rssi: -55,
+        serviceUuids: [],
+        baseRgb: 0x000000,
+        shadeRgb: 0x000000,
+        lastSeenEpochMs: 0,
+      ),
+      NearbyLamp(
+        id: 'b',
+        name: 'melonie',
+        rssi: -55,
+        serviceUuids: [],
+        baseRgb: 0x000000,
+        shadeRgb: 0x000000,
+        lastSeenEpochMs: 0,
+      ),
+    ];
+
     // Push LampPickerSheet onto a real Navigator route so that
     // Navigator.pop() works and tiles stay inside the 800×600 viewport.
     // context.go() throws without a GoRouter — the try/catch inside
@@ -248,5 +271,110 @@ void main() {
 
     // Current tile just pops — no router call, no errors.
     expect(find.text('active'), findsNothing);
+  });
+
+  testWidgets('offline tile shows last-seen text and no chevron',
+      (tester) async {
+    // Inventory lamp NOT in nearby → status will be offline.
+    final c = await withInventory([
+      InventoryLamp(
+        id: 'a',
+        name: 'jacko',
+        lastSeenEpochMs:
+            DateTime.now().millisecondsSinceEpoch - 5 * 60 * 1000,
+      ),
+    ]);
+    addTearDown(c.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: Scaffold(body: LampPickerSheet(currentLampId: '')),
+      ),
+    ));
+    await settle(tester);
+
+    expect(find.text('5m ago'), findsOneWidget);
+    expect(find.byIcon(Icons.chevron_right), findsNothing);
+  });
+
+  testWidgets('offline tile without lastSeenEpochMs shows "Not seen yet"',
+      (tester) async {
+    final c = await withInventory(const [
+      InventoryLamp(id: 'a', name: 'jacko'),
+    ]);
+    addTearDown(c.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: Scaffold(body: LampPickerSheet(currentLampId: '')),
+      ),
+    ));
+    await settle(tester);
+    expect(find.text('Not seen yet'), findsOneWidget);
+  });
+
+  testWidgets('long-press opens "Remove this lamp?" dialog; Remove drops it',
+      (tester) async {
+    final c = await withInventory(const [
+      InventoryLamp(id: 'a', name: 'jacko'),
+      InventoryLamp(id: 'b', name: 'melonie'),
+    ]);
+    await c.read(activeLampNotifierProvider.future);
+    await c.read(activeLampNotifierProvider.notifier).set('a');
+    addTearDown(c.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: Scaffold(body: LampPickerSheet(currentLampId: 'a')),
+      ),
+    ));
+    await settle(tester);
+
+    await tester.longPress(find.text('melonie'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Remove this lamp?'), findsOneWidget);
+
+    await tester.tap(find.text('Remove'));
+    await settle(tester);
+
+    // Inventory should no longer contain 'b'.
+    final inv = c.read(inventoryNotifierProvider).value!;
+    expect(inv.where((l) => l.id == 'b'), isEmpty);
+    expect(inv.where((l) => l.id == 'a'), hasLength(1));
+    // Active lamp stayed 'a' because we removed 'b', not the active one.
+    expect(await c.read(activeLampNotifierProvider.future), 'a');
+  });
+
+  testWidgets('long-pressing the active lamp removes it and reassigns active',
+      (tester) async {
+    final c = await withInventory(const [
+      InventoryLamp(id: 'a', name: 'jacko'),
+      InventoryLamp(id: 'b', name: 'melonie'),
+    ]);
+    await c.read(activeLampNotifierProvider.future);
+    await c.read(activeLampNotifierProvider.notifier).set('a');
+    addTearDown(c.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: Scaffold(body: LampPickerSheet(currentLampId: 'a')),
+      ),
+    ));
+    await settle(tester);
+
+    await tester.longPress(find.text('jacko'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Remove'));
+    await settle(tester);
+
+    final inv = c.read(inventoryNotifierProvider).value!;
+    expect(inv.where((l) => l.id == 'a'), isEmpty);
+    // Active lamp should now be the surviving lamp 'b'.
+    expect(await c.read(activeLampNotifierProvider.future), 'b');
   });
 }

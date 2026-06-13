@@ -30,11 +30,17 @@ class _AddLampNameStepState extends ConsumerState<AddLampNameStep> {
     final state = ref.watch(addLampNotifierProvider);
     return Padding(
       padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+      // SizedBox.expand fills the Padding's width so `crossAxisAlignment
+      // .center` lands the heading at screen-center (a bare Column shrinks
+      // to its widest child and pins to the left edge of the Padding).
+      child: SizedBox(
+        width: double.infinity,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
           const Text(
             'Name this lamp',
+            textAlign: TextAlign.center,
             style: TextStyle(
               color: BrandColors.lampWhite,
               fontSize: 18,
@@ -78,7 +84,8 @@ class _AddLampNameStepState extends ConsumerState<AddLampNameStep> {
               ),
             ],
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

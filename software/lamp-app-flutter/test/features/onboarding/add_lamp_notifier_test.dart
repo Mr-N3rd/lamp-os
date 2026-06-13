@@ -1,7 +1,11 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
+import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/inventory/application/active_lamp_notifier.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/onboarding/application/add_lamp_notifier.dart';
@@ -9,7 +13,13 @@ import 'package:lamp_app/features/onboarding/domain/add_lamp_state.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    AddLampNotifier.verifyDelay = Duration.zero;
+  });
+  tearDown(() {
+    AddLampNotifier.verifyDelay = const Duration(seconds: 5);
+  });
 
   test('select(deviceId) sets the id and advances to name step', () async {
     final ble = InMemoryBleClient();
@@ -37,13 +47,23 @@ void main() {
     expect(s.password, 'secret');
   });
 
-  test('submit() runs claim then adds to inventory + sets active', () async {
+  test('submit() with valid post-claim lampSection persists + sets active',
+      () async {
     final ble = InMemoryBleClient();
+    // Seed the lampSection so the post-claim probe finds a valid JSON.
+    await ble.connect('dev1');
+    await ble.write(
+      'dev1',
+      BleUuids.controlService,
+      BleUuids.lampSection,
+      Uint8List.fromList(utf8.encode('{"name":"jacko","brightness":50}')),
+    );
+    await ble.disconnect('dev1');
+
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
     );
     addTearDown(c.dispose);
-    // Prime inventory async load.
     await c.read(inventoryNotifierProvider.future);
     await c.read(activeLampNotifierProvider.future);
 
@@ -56,13 +76,78 @@ void main() {
     final s = c.read(addLampNotifierProvider);
     expect(s.step, AddLampStep.done);
     expect(s.status, AddLampStatus.idle);
+    expect(s.error, AddLampError.none);
 
-    final inventory = await c.read(inventoryNotifierProvider.future);
-    expect(inventory.map((l) => l.id).toList(), ['dev1']);
-    expect(inventory.first.controlPassword, 'secret');
+    final inv = await c.read(inventoryNotifierProvider.future);
+    expect(inv.map((l) => l.id).toList(), ['dev1']);
+    expect(inv.first.controlPassword, 'secret');
 
     final active = await c.read(activeLampNotifierProvider.future);
     expect(active, 'dev1');
+  });
+
+  test('submit() bounces back to password step on wrong password', () async {
+    // Seed lampSection with empty bytes so the post-claim read finds the
+    // characteristic but returns no data — the auth-gate behavior. The
+    // notifier throws FormatException('auth-rejected'), which the typed
+    // catch maps to AddLampError.wrongPassword.
+    final ble = InMemoryBleClient();
+    await ble.connect('dev1');
+    await ble.write(
+      'dev1',
+      BleUuids.controlService,
+      BleUuids.lampSection,
+      Uint8List(0), // empty bytes simulate unauthenticated read result
+    );
+    await ble.disconnect('dev1');
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(activeLampNotifierProvider.future);
+
+    final n = c.read(addLampNotifierProvider.notifier);
+    await n.select('dev1');
+    n.setName('jacko');
+    n.setPassword('wrong');
+    await n.submit();
+
+    final s = c.read(addLampNotifierProvider);
+    expect(s.step, AddLampStep.password);
+    expect(s.status, AddLampStatus.error);
+    expect(s.error, AddLampError.wrongPassword);
+
+    final inv = await c.read(inventoryNotifierProvider.future);
+    expect(inv, isEmpty,
+        reason: 'wrong password must not persist the lamp');
+  });
+
+  test('submit() surfaces connectFailed when post-claim read errors out',
+      () async {
+    // Don't seed anything — the read throws BleNotFound, which is caught
+    // as a generic Exception and surfaced as connectFailed.
+    final ble = InMemoryBleClient();
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(activeLampNotifierProvider.future);
+
+    final n = c.read(addLampNotifierProvider.notifier);
+    await n.select('dev1');
+    n.setName('jacko');
+    n.setPassword('secret');
+    await n.submit();
+
+    final s = c.read(addLampNotifierProvider);
+    expect(s.step, AddLampStep.password);
+    expect(s.status, AddLampStatus.error);
+    expect(s.error, AddLampError.connectFailed);
+    final inv = await c.read(inventoryNotifierProvider.future);
+    expect(inv, isEmpty);
   });
 
   test('add(deviceId, name) skips wizard and adds to inventory', () async {

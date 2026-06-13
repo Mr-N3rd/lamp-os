@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/brand_colors.dart';
 import '../../domain/lamp_color.dart';
 
 /// A circular swatch that visualizes a [LampColor] — including the
@@ -10,19 +11,29 @@ import '../../domain/lamp_color.dart';
 /// proportional to W AND to how much "room" RGB still has. With RGB fully
 /// saturated to white the overlay is invisible (no room left); with RGB
 /// near black the overlay can take over the swatch.
+
+/// Two-shape variants of [LampColorSwatch]. The default is [circle] so
+/// existing call-sites stay unchanged; the [roundedSquare] variant is
+/// used by [ShadeCard] to visually rhyme with [BaseCard].
+enum LampSwatchShape { circle, roundedSquare }
+
 class LampColorSwatch extends StatelessWidget {
   const LampColorSwatch({
     super.key,
     required this.color,
     this.size = 48,
     this.borderColor,
+    this.shape = LampSwatchShape.circle,
+    this.borderRadius = 14,
   });
 
   final LampColor color;
   final double size;
   final Color? borderColor;
+  final LampSwatchShape shape;
+  final double borderRadius;
 
-  static const _warmWhiteHex = Color(0xFFFABB3E);
+  static const _warmWhiteHex = BrandColors.warmWhite;
 
   /// `(W / 255) * (availableRoom / 765)`, clamped to [0, 1].
   /// Exposed for unit tests.
@@ -37,11 +48,14 @@ class LampColorSwatch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final overlayOpacity = warmWhiteOpacity(color);
+    final isCircle = shape == LampSwatchShape.circle;
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        shape: BoxShape.circle,
+        shape: isCircle ? BoxShape.circle : BoxShape.rectangle,
+        borderRadius:
+            isCircle ? null : BorderRadius.circular(borderRadius),
         border: Border.all(
           color: borderColor ?? Colors.white.withValues(alpha: 0.12),
         ),

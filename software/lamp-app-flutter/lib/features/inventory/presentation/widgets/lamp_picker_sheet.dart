@@ -14,7 +14,7 @@ import '../../../lamp_shell/application/lamp_status.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../../nearby/domain/nearby_lamp.dart';
 import '../../../onboarding/application/add_lamp_notifier.dart';
-import '../../../onboarding/presentation/widgets/confirm_add_dialog.dart';
+import '../../domain/last_seen.dart';
 
 Future<void> showLampPickerSheet(
   BuildContext context, {
@@ -108,7 +108,10 @@ class LampPickerSheet extends ConsumerWidget {
               label: const Text('Add a lamp'),
               onPressed: () {
                 Navigator.pop(context);
-                GoRouter.maybeOf(context)?.go(AppRoutes.addLamp);
+                // `push` not `go` — user must be able to abort the add-lamp
+                // flow and return to the lamp shell. `go` would replace
+                // history and trap them in the wizard.
+                GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
               },
             ),
           ],
@@ -149,6 +152,45 @@ class _InventoryLampTile extends ConsumerWidget {
     }
   }
 
+  Future<void> _confirmRemove(BuildContext context, WidgetRef ref) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrandColors.midnightBlack,
+        title: const Text('Remove this lamp?',
+            style: TextStyle(color: BrandColors.lampWhite)),
+        content: Text(
+          '${lamp.name} will be removed from your lamps on this phone. '
+          "The lamp itself keeps its name, password, and Wi-Fi — you can "
+          'add it back later from the picker.',
+          style: const TextStyle(color: BrandColors.fogGrey),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: BrandColors.error),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final activeBefore = ref.read(activeLampNotifierProvider).value;
+    await ref.read(inventoryNotifierProvider.notifier).remove(lamp.id);
+    ref.invalidate(controlNotifierProvider(lamp.id));
+    if (lamp.id == activeBefore) {
+      final remaining = ref.read(inventoryNotifierProvider).value ?? const [];
+      if (remaining.isEmpty) {
+        await ref.read(activeLampNotifierProvider.notifier).clear();
+      } else {
+        await ref.read(activeLampNotifierProvider.notifier).set(remaining.first.id);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // The currently-active lamp's row shows mesh when we're connected to
@@ -162,14 +204,16 @@ class _InventoryLampTile extends ConsumerWidget {
       nearby: nearby,
       connected: connected,
     );
+    final isOffline = status == StatusKind.offline;
     return InkWell(
       borderRadius: BorderRadius.circular(12),
-      onTap: () => _onTap(context, ref),
+      onTap: (isOffline && !isCurrent) ? null : () => _onTap(context, ref),
+      onLongPress: () => _confirmRemove(context, ref),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
         child: Row(
           children: [
-            StatusDot(kind: status),
+            StatusDot(kind: status, size: 14),
             const SizedBox(width: 12),
             LampIcon(
               shade: _colorFromList(lamp.lastShadeColor),
@@ -205,6 +249,13 @@ class _InventoryLampTile extends ConsumerWidget {
                   ),
                 ),
               )
+            else if (isOffline)
+              Text(
+                lamp.lastSeenEpochMs == null
+                    ? 'Not seen yet'
+                    : formatLastSeen(lamp.lastSeenEpochMs!, DateTime.now()),
+                style: const TextStyle(color: BrandColors.slateGrey, fontSize: 12),
+              )
             else
               const Icon(Icons.chevron_right, color: BrandColors.slateGrey),
           ],
@@ -231,16 +282,21 @@ class _NearbyLampTile extends ConsumerWidget {
       await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
       if (context.mounted) {
         Navigator.pop(context);
-        GoRouter.maybeOf(context)?.go(AppRoutes.addLamp);
+        // `push` not `go` — same reason as the FAB above.
+        GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
       }
     } else {
-      final confirmed = await confirmAddDialog(context, lamp.name);
-      if (!confirmed) return;
-      if (!context.mounted) return;
+      // Skip the confirm dialog — the AddLampDoneStep ("X is ready") that
+      // follows acts as the user-visible confirmation.
       await ref
           .read(addLampNotifierProvider.notifier)
           .add(deviceId: lamp.id, name: lamp.name);
-      if (context.mounted) Navigator.pop(context);
+      if (context.mounted) {
+        Navigator.pop(context);
+        // Push the wizard so the user lands on the done step (state.step
+        // was set to `done` by `add()` above).
+        GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
+      }
     }
   }
 
@@ -253,7 +309,7 @@ class _NearbyLampTile extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
         child: Row(
           children: [
-            const StatusDot(kind: StatusKind.bluetooth),
+            const StatusDot(kind: StatusKind.bluetooth, size: 14),
             const SizedBox(width: 12),
             LampIcon(
               shade: _colorFromInt(lamp.shadeRgb),

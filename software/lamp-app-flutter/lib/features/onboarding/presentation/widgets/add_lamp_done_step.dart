@@ -1,10 +1,13 @@
 // lib/features/onboarding/presentation/widgets/add_lamp_done_step.dart
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/routing/routes.dart';
 import '../../../../core/theme/brand_colors.dart';
+import '../../../control/application/control_notifier.dart';
+import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../application/add_lamp_notifier.dart';
 
 class AddLampDoneStep extends ConsumerWidget {
@@ -13,39 +16,207 @@ class AddLampDoneStep extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(addLampNotifierProvider);
-    return Padding(
+    // Pre-warm the control provider while the user reads the success screen,
+    // so by the time they tap "Open your lamp" the BLE connect + auth + section
+    // reads are already in flight (and usually done).
+    ref.watch(controlNotifierProvider(state.deviceId));
+    // Lamps running v2 firmware advertise their mesh state. If the
+    // newly-adopted lamp is already on the mesh, skip the Wi-Fi setup
+    // instructions — they're only useful for off-mesh lamps. Watching via
+    // `select` so this only rebuilds when *this* lamp's `onMesh` actually
+    // changes, not on every nearby-lamps tick.
+    final onMesh = ref.watch(nearbyLampsNotifierProvider.select((list) =>
+        list
+            .firstWhereOrNull((l) => l.id == state.deviceId)
+            ?.onMesh ??
+        false));
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: SizedBox(
+        width: double.infinity,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.check_circle,
+              color: BrandColors.lumenGreen,
+              size: 64,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '${state.name} is ready',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: BrandColors.lampWhite,
+                fontSize: 22,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              onMesh
+                  ? 'Your lamp is on the mesh.'
+                  : 'Your lamp is connected over Bluetooth.',
+              style: const TextStyle(color: BrandColors.fogGrey),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            // Wi-Fi instructions only when the lamp isn't already on the mesh —
+            // a mesh-enabled lamp doesn't need the user to chase the AP.
+            if (!onMesh) const _WifiSetupCard(),
+            if (!onMesh) const SizedBox(height: 24),
+            FilledButton(
+              onPressed: () {
+                ref.read(addLampNotifierProvider.notifier).reset();
+                context.go(AppRoutes.control(state.deviceId));
+              },
+              child: const Text('Open your lamp'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Step-by-step instructions for joining the lamp to Wi-Fi via its onboard
+/// AP and web UI. Shown on the done step so every freshly-claimed
+/// Bluetooth-only lamp gets the same path to the mesh.
+///
+/// The recommended firmware-update URL is the marketing redirect
+/// `update.lamplit.ca`, which points at the latest stable image.
+class _WifiSetupCard extends StatelessWidget {
+  const _WifiSetupCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: BrandColors.lampWhite.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: BrandColors.lampWhite.withValues(alpha: 0.06),
+        ),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(
-            Icons.check_circle,
-            color: BrandColors.lumenGreen,
-            size: 64,
+          Row(
+            children: [
+              Icon(Icons.wifi, color: BrandColors.auroraBlue, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Want mesh features?',
+                style: TextStyle(
+                  color: BrandColors.lampWhite,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 8),
           Text(
-            '${state.name} is ready',
-            style: const TextStyle(
-              color: BrandColors.lampWhite,
-              fontSize: 22,
-              fontWeight: FontWeight.w600,
+            'Get this lamp on Wi-Fi to join the mesh and accept '
+            'over-the-air updates.',
+            style: TextStyle(color: BrandColors.fogGrey, fontSize: 13),
+          ),
+          SizedBox(height: 14),
+          _NumberedStep(
+            n: 1,
+            text:
+                'On your phone\'s Wi-Fi settings, join the lamp\'s access '
+                'point (its SSID matches the lamp\'s name).',
+          ),
+          _NumberedStep(
+            n: 2,
+            text: 'Open a browser and visit http://192.168.4.1 — that\'s '
+                'the lamp\'s own setup page.',
+          ),
+          _NumberedStep(
+            n: 3,
+            text:
+                'Enter your home Wi-Fi credentials. The lamp will join the '
+                'mesh once it reconnects.',
+          ),
+          SizedBox(height: 10),
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: 'Tip: ',
+                  style: TextStyle(
+                    color: BrandColors.lumenGreen,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                ),
+                TextSpan(
+                  text:
+                      'while you\'re there, install the latest firmware at ',
+                  style: TextStyle(color: BrandColors.fogGrey, fontSize: 12),
+                ),
+                TextSpan(
+                  text: 'update.lamplit.ca',
+                  style: TextStyle(
+                    color: BrandColors.auroraBlue,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                TextSpan(
+                  text: '.',
+                  style: TextStyle(color: BrandColors.fogGrey, fontSize: 12),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Your lamp is connected and added to your collection.',
-            style: TextStyle(color: BrandColors.fogGrey),
-            textAlign: TextAlign.center,
+        ],
+      ),
+    );
+  }
+}
+
+class _NumberedStep extends StatelessWidget {
+  const _NumberedStep({required this.n, required this.text});
+  final int n;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 22,
+            height: 22,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: BrandColors.auroraBlue.withValues(alpha: 0.18),
+            ),
+            child: Text(
+              '$n',
+              style: const TextStyle(
+                color: BrandColors.auroraBlue,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
-          const SizedBox(height: 32),
-          FilledButton(
-            onPressed: () {
-              ref.read(addLampNotifierProvider.notifier).reset();
-              context.go(AppRoutes.control(state.deviceId));
-            },
-            child: const Text('Open your lamp'),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: BrandColors.lampWhite,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
           ),
         ],
       ),

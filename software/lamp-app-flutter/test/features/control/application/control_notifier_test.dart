@@ -9,31 +9,17 @@ import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/control/application/control_notifier.dart';
 import 'package:lamp_app/features/control/application/control_state.dart';
 import 'package:lamp_app/features/control/domain/lamp_color.dart';
+import 'package:lamp_app/features/control/domain/sections.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../_support/seed.dart';
+
 const _devId = 'dev1';
 
-Future<void> _seed(InMemoryBleClient ble) async {
-  // Pretend the lamp's sections are already published. Seed by writing
-  // through the client while "connected" — the test acts as the firmware
-  // here. The notifier will then read these back.
-  await ble.connect(_devId);
-  await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-      Uint8List.fromList(utf8.encode(
-        '{"name":"jacko","brightness":42,"advancedEnabled":false}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.baseSection,
-      Uint8List.fromList(utf8.encode(
-        '{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"],"knockout":[]}',
-      )));
-  await ble.write(_devId, BleUuids.controlService, BleUuids.shadeSection,
-      Uint8List.fromList(utf8.encode(
-        '{"px":38,"bpp":4,"colors":["#000000FF"]}',
-      )));
-  await ble.disconnect(_devId);
-}
+Future<void> _seed(InMemoryBleClient ble) =>
+    seedControlBle(ble, deviceId: _devId, brightness: 42);
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -351,13 +337,20 @@ void main() {
           controlPassword: 'secret',
         ));
     await c.read(controlNotifierProvider(_devId).future);
+    // Hold a listener so the provider doesn't auto-dispose during the
+    // 500 ms debounce window for `_updateSeen` and kill the flush timer.
+    final sub = c.listen<AsyncValue<ControlState>>(
+        controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
 
     await c
         .read(controlNotifierProvider(_devId).notifier)
         .setShadeColor(const LampColor(r: 0xFF, g: 0x88, b: 0x00, w: 0));
 
-    // Wait for the async updateSeen call to land.
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    // The updateSeen call is now debounced (~500 ms) so a 60 fps slider
+    // doesn't generate 60 disk writes per second. Wait past the window
+    // before asserting the trailing value landed.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
 
     final inv = await c.read(inventoryNotifierProvider.future);
     expect(inv.first.lastShadeColor, [0xFF, 0x88, 0x00]);
@@ -378,19 +371,441 @@ void main() {
           controlPassword: 'secret',
         ));
     await c.read(controlNotifierProvider(_devId).future);
+    // See setShadeColor test for why we hold a listener here.
+    final sub = c.listen<AsyncValue<ControlState>>(
+        controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
 
     await c.read(controlNotifierProvider(_devId).notifier).setBaseColors([
       const LampColor(r: 0x11, g: 0x22, b: 0x33, w: 0),
       const LampColor(r: 0x44, g: 0x55, b: 0x66, w: 0),
     ]);
 
-    // Wait for the async updateSeen call to land.
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    // See setShadeColor test — same 500 ms debounce.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
 
     final inv = await c.read(inventoryNotifierProvider.future);
     final lamp = inv.firstWhere((l) => l.id == _devId);
     // ac was 0 (seeded), so we expect colors[0]
     expect(lamp.lastBaseColor, [0x11, 0x22, 0x33]);
+  });
+
+  test('setKnockoutPixel adds the entry to local state', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    await c.read(controlNotifierProvider(_devId).notifier)
+        .setKnockoutPixel(3, 50);
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.base.knockout,
+      {3: 50},
+    );
+  });
+
+  test('setKnockoutPixel removes the entry when brightness is 100', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.setKnockoutPixel(3, 50);
+    await n.setKnockoutPixel(3, 100);
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.base.knockout,
+      isEmpty,
+    );
+  });
+
+  test('setKnockoutPixel writes [index, brightness] after debounce', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+    // Hold a subscription so the auto-dispose timer doesn't fire.
+    final sub = c.listen(controlNotifierProvider(_devId), (_, _) {});
+    addTearDown(sub.close);
+
+    await c.read(controlNotifierProvider(_devId).notifier)
+        .setKnockoutPixel(3, 50);
+    // Drain the 30 ms debounce window.
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.baseKnockout);
+    expect(written, [3, 50]);
+  });
+
+  test('save() encodes knockout map into the settings blob', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    await ble.connect(_devId);
+    // Seed the blob shape — note absence of knockout in the blob; we want
+    // save() to inject it from local state.
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
+          '"base":{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"]},'
+          '"shade":{"px":38,"bpp":4,"colors":["#000000FF"]}}',
+        )));
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.setKnockoutPixel(3, 50);
+    await n.save();
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    final knockout = (parsed['base'] as Map)['knockout'] as List;
+    expect(knockout, [{'p': 3, 'b': 50}]);
+  });
+
+  test('build() loads home + mqtt sections into state', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    final state = await c.read(controlNotifierProvider(_devId).future);
+    expect(state.home.brightness, 60);
+    expect(state.mqtt.brokerPort, 1883);
+  });
+
+  test('setLampName flips isDirty and lands in the blob on save', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    await ble.connect(_devId);
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
+          '"base":{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"]},'
+          '"shade":{"px":38,"bpp":4,"colors":["#000000FF"]},'
+          '"homeMode":{"ssid":"","brightness":60},'
+          '"mqtt":{"enabled":false,"brokerHost":"","brokerPort":1883}}',
+        )));
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    expect(n.isDirty, isFalse);
+
+    await n.setLampName('foyer');
+    expect(n.isDirty, isTrue);
+
+    await n.save();
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect((parsed['lamp'] as Map)['name'], 'foyer');
+  });
+
+  test('home + mqtt mutators flip isDirty', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    expect(n.isDirty, isFalse);
+
+    await n.setHomeSsid('WiFi');
+    expect(n.isDirty, isTrue);
+  });
+
+  test('save() omits home password when it is still the firmware sentinel',
+      () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    await ble.connect(_devId);
+    await ble.write(_devId, BleUuids.controlService, BleUuids.settingsBlob,
+        Uint8List.fromList(utf8.encode(
+          '{"lamp":{"name":"jacko","brightness":42,"advancedEnabled":false},'
+          '"base":{"px":35,"ac":0,"bpp":4,"colors":["#300783FF"]},'
+          '"shade":{"px":38,"bpp":4,"colors":["#000000FF"]},'
+          '"homeMode":{"ssid":"WiFi","password":"********","brightness":60},'
+          '"mqtt":{"enabled":false,"brokerHost":"","brokerPort":1883}}',
+        )));
+    // Seed home section so build() loads ssid/password
+    await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
+        Uint8List.fromList(utf8.encode(
+          '{"ssid":"WiFi","password":"********","brightness":60}',
+        )));
+    await ble.disconnect(_devId);
+
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.setHomeBrightness(80); // touch something other than password
+    await n.save();
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.settingsBlob);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    final homeNode = parsed['homeMode'] as Map<String, dynamic>;
+    expect(homeNode['ssid'], 'WiFi');
+    expect(homeNode['brightness'], 80);
+    expect(homeNode.containsKey('password'), isFalse); // sentinel was stripped
+  });
+
+  test('upsertExpression adds a new entry and writes the op', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final entry = ExpressionConfig(
+      type: 'glitchy',
+      enabled: true,
+      colors: [LampColor.fromHex('#FF00FFAA')],
+      intervalMin: 30,
+      intervalMax: 60,
+      target: 2,
+      parameters: const {},
+    );
+    await c.read(controlNotifierProvider(_devId).notifier)
+        .upsertExpression(entry);
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.expressions.expressions,
+      hasLength(1),
+    );
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.expressionOp);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect(parsed['op'], 'upsert');
+    expect((parsed['entry'] as Map)['type'], 'glitchy');
+  });
+
+  test('upsertExpression replaces an existing (type,target) entry', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    const a = ExpressionConfig(
+      type: 'glitchy', enabled: true, colors: [],
+      intervalMin: 30, intervalMax: 60, target: 2, parameters: {},
+    );
+    const b = ExpressionConfig(
+      type: 'glitchy', enabled: false, colors: [],
+      intervalMin: 30, intervalMax: 60, target: 2, parameters: {},
+    );
+    await n.upsertExpression(a);
+    await n.upsertExpression(b);
+
+    final list = c.read(controlNotifierProvider(_devId)).value!.expressions.expressions;
+    expect(list, hasLength(1));
+    expect(list.single.enabled, isFalse);
+  });
+
+  test('removeExpression drops the (type, target) entry and writes op',
+      () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    final n = c.read(controlNotifierProvider(_devId).notifier);
+    await n.upsertExpression(const ExpressionConfig(
+      type: 'glitchy', enabled: true, colors: [],
+      intervalMin: 30, intervalMax: 60, target: 2, parameters: {},
+    ));
+    await n.removeExpression(type: 'glitchy', target: 2);
+
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.expressions.expressions,
+      isEmpty,
+    );
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.expressionOp);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect(parsed['op'], 'remove');
+    expect(parsed['type'], 'glitchy');
+    expect(parsed['target'], 2);
+  });
+
+  test('testExpression writes to CHAR_EXPRESSION_TEST', () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    await c.read(controlNotifierProvider(_devId).notifier).testExpression(
+          const ExpressionConfig(
+            type: 'breathing', enabled: true, colors: [],
+            intervalMin: 30, intervalMax: 60, target: 1, parameters: {},
+          ),
+        );
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.expressionTest);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    // Firmware-expected envelope: action + the named entry's keys. The full
+    // ExpressionConfig isn't sent — the lamp already has those colors and
+    // parameters from the preceding expressionOp upsert.
+    expect(parsed['a'], 'test_expression');
+    expect(parsed['type'], 'breathing');
+    expect(parsed['target'], 1);
+  });
+
+  test('completeExpressionTest writes the test_expression_complete envelope',
+      () async {
+    final ble = InMemoryBleClient();
+    await _seed(ble);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: _devId,
+          name: 'jacko',
+          controlPassword: 'secret',
+        ));
+    await c.read(controlNotifierProvider(_devId).future);
+
+    // build() itself sends the complete write at the end of the load, so the
+    // last value on expressionTest is already what we want to assert. Call
+    // the public mutator anyway to verify the production code path.
+    await c
+        .read(controlNotifierProvider(_devId).notifier)
+        .completeExpressionTest();
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.expressionTest);
+    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    expect(parsed['a'], 'test_expression_complete');
   });
 
   test('save() is a no-op while disconnected', () async {

@@ -39,11 +39,6 @@ class ShadeCard extends StatelessWidget {
     }
   }
 
-  String get _displayHex {
-    final full = color.toHex(); // '#RRGGBBWW'
-    return bpp == 4 ? full : full.substring(0, 7);
-  }
-
   @override
   Widget build(BuildContext context) {
     return InkWell(
@@ -59,7 +54,7 @@ class ShadeCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            LampColorSwatch(color: color, size: 36),
+            LampColorSwatch(color: color, size: 56, shape: LampSwatchShape.roundedSquare, borderRadius: 14),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
@@ -72,15 +67,6 @@ class ShadeCard extends StatelessWidget {
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.4,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _displayHex,
-                    style: const TextStyle(
-                      color: BrandColors.fogGrey,
-                      fontSize: 12,
-                      fontFamily: 'monospace',
                     ),
                   ),
                 ],
