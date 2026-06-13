@@ -37,13 +37,10 @@ void ShiftyExpression::configureFromParameters(const std::map<std::string, uint3
 }
 
 void ShiftyExpression::startShift() {
-  // Pick a random color to shift to
-  if (!colors.empty()) {
-    shiftedColor = getRandomColor();
-  } else {
-    // Fallback to white (W channel only) if no colors configured
-    shiftedColor = Color(0, 0, 0, 255);
-  }
+  // Pick a random color to shift to. getRandomColor() returns
+  // Expression::kSafeFallbackColor when the palette is empty, so no explicit
+  // fallback branch needed here.
+  shiftedColor = getRandomColor();
 
   // For fade start, use current buffer state
   fadeStartColors = fb->buffer;
@@ -78,9 +75,7 @@ void ShiftyExpression::startUnshift() {
 }
 
 uint32_t ShiftyExpression::getRandomShiftDuration() {
-  std::uniform_int_distribution<uint32_t> dist(shiftDurationMinMs,
-                                                shiftDurationMaxMs);
-  return dist(rng);
+  return rng.range(shiftDurationMinMs, shiftDurationMaxMs);
 }
 
 void ShiftyExpression::onTrigger() {

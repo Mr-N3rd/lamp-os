@@ -2,12 +2,12 @@
 
 #include <cstdint>
 #include <map>
-#include <random>
 #include <variant>
 #include <vector>
 
 #include "core/animated_behavior.hpp"
 #include "util/color.hpp"
+#include "util/fast_rng.hpp"
 
 namespace lamp {
 
@@ -37,7 +37,7 @@ class Expression : public AnimatedBehavior {
   uint32_t intervalMaxMs = 900000;  // 15 min default
   uint32_t lastCompletedLoop = 0;   // Track last completed animation loop
   ExpressionTarget target = TARGET_BOTH;
-  std::mt19937 rng{esp_random()};
+  FastRng rng;
 
   /**
    * @brief Schedule next trigger within configured interval range
@@ -80,9 +80,25 @@ class Expression : public AnimatedBehavior {
   void trigger();
 
   /**
-   * @brief Get random color from configured palette
+   * @brief Get random color from configured palette. Returns
+   *        Expression::kSafeFallbackColor when the palette is empty so all
+   *        four expression subclasses share one well-defined empty-palette
+   *        behavior (W=255 dim white) rather than each picking their own.
    */
   Color getRandomColor();
+
+  /**
+   * @brief First palette color if any, else the provided fallback. Helper
+   *        used by expressions that want a deterministic first-color pick
+   *        without an explicit if-empty branch at every call site.
+   */
+  Color firstColorOr(Color fallback) const;
+
+  // Shared safe fallback color when a palette is unconfigured. W channel only
+  // so the lamp emits a dim white rather than going dark. Unifies what
+  // pulse/breathing/shifty each used to define independently as a magic
+  // (0, 0, 0, 255) literal.
+  static inline const Color kSafeFallbackColor{0, 0, 0, 255};
 
   const std::vector<Color>& getColors() const { return colors; }
   ExpressionTarget getTarget() const { return target; }

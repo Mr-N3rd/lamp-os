@@ -22,8 +22,7 @@ void Expression::configure(const std::vector<Color>& inColors,
 }
 
 void Expression::scheduleNextTrigger() {
-  std::uniform_int_distribution<uint32_t> dist(intervalMinMs, intervalMaxMs);
-  nextTriggerMs = millis() + dist(rng);
+  nextTriggerMs = millis() + rng.range(intervalMinMs, intervalMaxMs);
 }
 
 void Expression::saveBufferState() {
@@ -90,10 +89,13 @@ void Expression::control() {
 
 Color Expression::getRandomColor() {
   if (colors.empty()) {
-    return Color(0, 0, 0, 0);
+    return kSafeFallbackColor;
   }
-  std::uniform_int_distribution<size_t> dist(0, colors.size() - 1);
-  return colors[dist(rng)];
+  return colors[rng.range(0, colors.size() - 1)];
+}
+
+Color Expression::firstColorOr(Color fallback) const {
+  return colors.empty() ? fallback : colors.front();
 }
 
 void Expression::trigger() {

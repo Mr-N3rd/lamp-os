@@ -25,11 +25,7 @@ void BreathingExpression::configureFromParameters(const std::map<std::string, ui
   // Color change intervals are set by base Expression::configure() in intervalMinMs/MaxMs
   // No need to read them from parameters
 
-  if (colors.empty()) {
-    colors.push_back(Color(0, 0, 0, 255));
-  }
-
-  targetColor = colors[0];
+  targetColor = firstColorOr(kSafeFallbackColor);
 }
 
 void BreathingExpression::updateBreathPhase() {
@@ -69,8 +65,11 @@ void BreathingExpression::updateBreathPhase() {
     if (colors.size() > 1) {
       if (cyclingForward) {
         currentColorIndex++;
-        // If we reached the last color, switch to backward
-        if (currentColorIndex >= colors.size() - 1) {
+        // If we reached the last color, switch to backward. Written as
+        // `currentColorIndex + 1 >= colors.size()` (not `>= size - 1`) so the
+        // comparison is safe if the upstream `colors.size() > 1` guard ever
+        // moves — unsigned subtraction would underflow on an empty palette.
+        if (currentColorIndex + 1 >= colors.size()) {
           currentColorIndex = colors.size() - 1;
           cyclingForward = false;
         }

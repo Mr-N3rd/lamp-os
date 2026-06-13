@@ -43,8 +43,7 @@ void GlitchyExpression::onTrigger() {
   if (glitchDurationMin == glitchDurationMax) {
     frames = glitchDurationMin;
   } else {
-    std::uniform_int_distribution<uint32_t> durationDist(glitchDurationMin, glitchDurationMax);
-    frames = durationDist(rng);
+    frames = rng.range(glitchDurationMin, glitchDurationMax);
   }
 
 }
@@ -78,10 +77,8 @@ void GlitchyExpression::onComplete() {
   // finishes, ignoring the configured intervalMin/Max. The base
   // class's scheduleNextTrigger() handles the next regular trigger
   // when this short-circuit doesn't fire.
-  std::uniform_int_distribution<uint32_t> rollDist(0, 99);
-  if (rollDist(rng) < 33) {
-    std::uniform_int_distribution<uint32_t> delayDist(200, 600);
-    nextTriggerMs = millis() + delayDist(rng);
+  if (rng.range(0, 99) < 33) {
+    nextTriggerMs = millis() + rng.range(200, 600);
   }
 }
 

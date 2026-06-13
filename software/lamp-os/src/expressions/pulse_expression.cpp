@@ -36,11 +36,7 @@ void PulseExpression::configureFromParameters(const std::map<std::string, uint32
   static constexpr uint32_t PULSE_WIDTH = 15;
   pulseWidth = PULSE_WIDTH;
 
-  if (colors.empty()) {
-    colors.push_back(Color(0, 0, 0, 255));
-  }
-
-  pulseColor = colors[0];
+  pulseColor = firstColorOr(kSafeFallbackColor);
 }
 
 uint32_t PulseExpression::calculateBlendFactor(int pixelIndex) const {
@@ -74,6 +70,15 @@ void PulseExpression::updateWavePosition() {
     return;
   }
 
+  // Why: cap deltaMs to protect against stale lastUpdateMs across long pauses.
+  // updateWavePosition() is gated by shouldAffectBuffer() and the wisp-override
+  // path, and the same lastUpdateMs persists through STOPPED → PLAYING
+  // re-entries. Without the cap, the first tick after a long gap would
+  // teleport wavePosition past the (pixelCount + 2*pulseWidth) end-of-strip
+  // stop check in one step, flipping the animation to STOPPED before any
+  // pixels were drawn at the new position. The compositor's
+  // MINIMUM_FRAME_DRAW_TIME_MS already bounds normal frame spacing, so this
+  // ceiling only matters on the pathological-gap path.
   uint32_t deltaMs = std::min(currentMs - lastUpdateMs, (uint32_t)100);
 
   // Calculate how far to move based on speed
