@@ -10,6 +10,7 @@
 #include <string>
 
 #include "components/firmware/firmware_receiver.hpp"
+#include "components/firmware/firmware_distributor.hpp"
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
 #include <esp_ota_ops.h>
 #endif
@@ -242,7 +243,11 @@ lamp::ShowReceiver showReceiver;
 // setFirmwareReceiver() in setup() so the WiFi recv path can hand
 // MSG_FW_CHUNK directly to handleChunkOnRecvTask (Core 0). OFFER/DONE
 // arrive via pendingFirmwareControl and are drained on Core 1.
-lamp::FirmwareReceiver firmwareReceiver;
+lamp::FirmwareReceiver    firmwareReceiver;
+// firmwareDistributor's global instance lives in firmware_distributor.cpp
+// (extern decl in firmware_distributor.hpp) so SocialBehavior can reference
+// it as `lamp::firmwareDistributor` from any TU — matches the pattern used
+// by `lamp::nearbyLamps` and `lamp::personalityEngine`.
 
 // Phase G: post-OTA "mark this app valid" state.
 //
@@ -581,11 +586,16 @@ static void applyRemoteOpRouted(const char* payloadJson, size_t len,
     // session — `srcMac` was already populated with selfMac by the caller.
     applyRemoteOpLocal(payload.data(), payload.size(), srcMac);
   }
-  if (!isSelf) {
+  if (!isSelf && !showReceiver.isOtaInProgress()) {
     // Forward over ESP-NOW. broadcast => fan out to all peers; unicast =>
     // targets the specific MAC. ShowReceiver::sendControlOp also records
     // its own seq into controlOpDedup_ so the rebroadcast we'll get back
     // doesn't loop in as an "apply locally".
+    //
+    // Suppressed during gossip OTA: control-op forwards compete with the
+    // chunk stream for ESP-NOW airtime under BLE coex. Dropped forwards
+    // are recoverable — the app retries on its next loop drain — but a
+    // dropped chunk needs a stall-watchdog REQ round trip to recover.
     showReceiver.sendControlOp(
         targetMac,
         reinterpret_cast<const uint8_t*>(payload.data()),
@@ -841,7 +851,14 @@ static uint8_t effectiveBrightness() {
   // Applied BEFORE the transient brightnessOverride.effective() so paint /
   // wisp overrides continue to work normally over the dimmed baseline.
   const uint8_t afterCrowd = lamp::personalityEngine.applyCrowdDim(raw);
-  return lamp::personalityEngine.applySaltyDim(afterCrowd);
+  const uint8_t afterSalty = lamp::personalityEngine.applySaltyDim(afterCrowd);
+  // OTA progress pulse (Phase 5b'.5). Innermost multiplier — applied LAST
+  // so it modulates whatever the configurator / home-mode / personality
+  // dimming yielded. Returns 100 (no effect) when no OTA flow is active;
+  // single-pulse (sender) or double-pulse (receiver) cadence during a
+  // flow. Multiplier never reaches 0 — lamp stays visibly lit.
+  const uint8_t pulseMul = shadeSocialBehavior.otaPulseMultiplier(millis());
+  return static_cast<uint8_t>((static_cast<uint16_t>(afterSalty) * pulseMul) / 100);
 }
 
 static void applyEffectiveBrightness() {
@@ -964,7 +981,27 @@ void setup() {
   // Bring up ESP-NOW grid presence (HELLO + COLORS). Independent of home
   // WiFi — runs on whatever channel the radio is on. See lamp_protocol.hpp.
   showReceiver.begin(&config);
-  firmwareReceiver.begin(&showReceiver);
+  // Wire the ESP-NOW transport adapter onto the FirmwareReceiver. The
+  // mesh path (wisp → lamp MSG_FW_*) emits via this transport. The BLE
+  // transport is late-bound by ble_control::setFirmwareReceiver() below
+  // (which uses the static BleFirmwareTransport instance internal to
+  // ble_control.cpp).
+  static lamp::EspNowFirmwareTransport meshFwTransport(&showReceiver);
+  firmwareReceiver.begin(&meshFwTransport);
+
+  // Wire app-driven BLE OTA: registers FirmwareReceiver with ble_control so
+  // CHAR_FW_CONTROL writes (OFFER/DONE) and CHAR_FW_CHUNK writes route into
+  // the receiver, and the receiver can notify ACCEPT/REQ/RESULT on
+  // CHAR_FW_CONTROL. The single-source mutex in FirmwareReceiver enforces
+  // that only one transport (mesh OR BLE) drives an active OTA at a time.
+  ble_control::setFirmwareReceiver(&firmwareReceiver);
+
+  // Gossip OTA (Phase 5b'): the lamp can ALSO originate offers to peers
+  // it meets via the social system. Wire the distributor through the same
+  // EspNowFirmwareTransport (it emits MSG_FW_OFFER/CHUNK/DONE and listens
+  // for ACCEPT/REQ/RESULT via show_receiver's new dispatch ladder).
+  lamp::firmwareDistributor.begin(&meshFwTransport);
+  showReceiver.setFirmwareDistributor(&lamp::firmwareDistributor);
 
   // Phase G: arm the post-OTA self-health timer. esp_ota_get_state_partition
   // returns the ota-image-state of the running partition. If we just
@@ -1468,7 +1505,9 @@ void loop() {
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain wispOp len=%u\n", (unsigned)len);
 #endif
-    if (len > 0) {
+    if (len > 0 && !showReceiver.isOtaInProgress()) {
+      // Mesh quiesce during gossip OTA — see the
+      // applyRemoteOpRouted() forward gate for the same rationale.
       static const uint8_t kBroadcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
       showReceiver.sendControlOp(kBroadcastMac,
                                  reinterpret_cast<const uint8_t*>(buf),
@@ -1572,6 +1611,7 @@ void loop() {
   // Phase F: drive OTA stall watchdog + REQ generation + 60s hard cap.
   // Cheap when state == Idle (single switch + return).
   firmwareReceiver.tick(millis());
+  lamp::firmwareDistributor.tick(millis());
   // Phase G: post-OTA self-health check. After 30 seconds of steady-state
   // loop iteration, if BLE is up and the loop has been iterating (we're
   // inside it now so trivially true), call mark_app_valid so the next OTA

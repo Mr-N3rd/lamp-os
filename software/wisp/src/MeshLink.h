@@ -114,9 +114,9 @@ class MeshLink {
 
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
   // Mutex around the peer table. send() is called from the loop task
-  // (PaintDistributor / OFFER from tick()) AND from the FirmwareDistributor
-  // streaming task; without a mutex two concurrent first-touches of the
-  // same NEW MAC could both pass the "not present" check, both call
+  // (PaintDistributor / OFFER from tick()); without a mutex two
+  // concurrent first-touches of the same NEW MAC could both pass the
+  // "not present" check, both call
   // esp_now_add_peer (the second returns ESP_ERR_ESPNOW_EXIST, benign),
   // and both write into peers_ at peerCount_++ (NOT benign — torn
   // increment, duplicate slot, eventual eviction picking the wrong

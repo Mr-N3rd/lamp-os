@@ -11,6 +11,7 @@ import '../../../core/utils/tap_counter.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/advanced_session.dart';
 import '../../control/application/control_notifier.dart';
+import '../../firmware/presentation/firmware_update_panel.dart';
 
 /// Info tab — Lamplit branding only. Nearby + Seen lamp lists moved to
 /// the new Social tab (see `features/social/presentation/social_screen.dart`).
@@ -118,6 +119,12 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
           ),
         ),
         const SizedBox(height: 24),
+        // Firmware update panel — silent download from GitHub Releases,
+        // local Ed25519 verify, BLE push to this paired lamp. NO
+        // background scan — gossip-OTA on the mesh propagates the
+        // update to the rest of the fleet once one lamp gets it.
+        FirmwareUpdatePanel(deviceId: widget.lampId),
+        const SizedBox(height: 16),
         // Version footer — firmware first (read from CHAR_LAMP_SECTION),
         // then this app's version (PackageInfo + hardcoded kAppChannel).
         Center(

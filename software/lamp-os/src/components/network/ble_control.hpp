@@ -86,6 +86,22 @@ constexpr const char* CHAR_WISP_OP         = "5f64f4e1-d6d9-4a44-9b3f-3a8d6f7e6b
 // updates (drain of pendingWispStatus).
 constexpr const char* CHAR_WISP_STATUS     = "5f64f4e2-d6d9-4a44-9b3f-3a8d6f7e6b40";
 
+// ── Firmware OTA (Phase 5a) ───────────────────────────────────────────────
+//
+// fw_control (write + notify): app pushes MSG_FW_OFFER and MSG_FW_DONE
+// frames (lamp_protocol wire format, no envelope) and receives
+// MSG_FW_ACCEPT, MSG_FW_REQ, and MSG_FW_RESULT back as notifications.
+// Auth-gated. Single in-flight OTA per lamp (mutex enforced in
+// FirmwareReceiver); a write while another source is mid-flow yields a
+// DeclineBusy notification.
+constexpr const char* CHAR_FW_CONTROL      = "5f64f4e7-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// fw_chunk (write-without-response): app streams MSG_FW_CHUNK payloads.
+// Auth-gated. Frequency is high (~one chunk per BLE PDU); the write
+// callback parses the frame on the BLE host task and calls
+// FirmwareReceiver::handleChunkOnRecvTask directly — same fast path as
+// the ESP-NOW chunk handler.
+constexpr const char* CHAR_FW_CHUNK        = "5f64f4e8-d6d9-4a44-9b3f-3a8d6f7e6b40";
+
 /**
  * @brief Start the BLE GATT control service.
  */
@@ -173,5 +189,20 @@ bool isScanPaused();
  *        get out of the way of.
  */
 void markActivity();
+
+}  // namespace ble_control
+
+namespace lamp { class FirmwareReceiver; }
+
+namespace ble_control {
+
+/**
+ * @brief Wire the FirmwareReceiver instance into the BLE OTA dispatch.
+ *        Called from standard_lamp.cpp after firmwareReceiver.begin().
+ *        Once registered, CHAR_FW_CONTROL writes (OFFER/DONE) and
+ *        CHAR_FW_CHUNK writes route into the receiver, and the receiver's
+ *        BLE transport notifies ACCEPT/REQ/RESULT back on CHAR_FW_CONTROL.
+ */
+void setFirmwareReceiver(lamp::FirmwareReceiver* receiver);
 
 }  // namespace ble_control

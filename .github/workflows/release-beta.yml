@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/build.yml
+    secrets:
+      LAMP_FIRMWARE_PRIVATE_KEY_HEX: ${{ secrets.LAMP_FIRMWARE_PRIVATE_KEY_HEX }}
 
   publish:
     needs: build
@@ -22,6 +24,13 @@ jobs:
         with:
           name: updates
           path: updates
+      - uses: actions/download-artifact@v4
+        with:
+          name: lamp-firmware-signed
+          path: signed/lamp
+      - name: Rename signed artifact for clarity in the release
+        run: |
+          mv signed/lamp/firmware-signed.bin signed/lamp-firmware-signed.bin
       - name: Replace rolling beta release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,3 +50,4 @@ jobs:
             updates/partitions.bin
             updates/firmware.bin
             updates/spiffs.bin
+            signed/lamp-firmware-signed.bin

@@ -800,6 +800,121 @@ class HomeSectionCallback : public NimBLECharacteristicCallbacks {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Firmware OTA — CHAR_FW_CONTROL (write+notify) + CHAR_FW_CHUNK (write)
+// ---------------------------------------------------------------------------
+//
+// BLE-driven OTA flow:
+//   1. App writes MSG_FW_OFFER (lamp_protocol wire format) to CHAR_FW_CONTROL.
+//      FwControlCallback parses + posts a PendingFirmwareControl with
+//      transportKind=Ble to the Core 1 drain.
+//   2. Core 1 drains, calls FirmwareReceiver::handleControlOnLoop.
+//   3. The receiver decides Accept/Decline; the response routes back via
+//      the BleFirmwareTransport's sendFrame() — a notify on CHAR_FW_CONTROL.
+//   4. App streams MSG_FW_CHUNK frames to CHAR_FW_CHUNK. FwChunkCallback
+//      calls FirmwareReceiver::handleChunkOnRecvTask directly on the BLE
+//      host task (same fast path as the ESP-NOW chunk handler).
+//   5. App writes MSG_FW_DONE to CHAR_FW_CONTROL. Receiver verifies +
+//      reboots. Final MSG_FW_RESULT notify lets the app know.
+
+static NimBLECharacteristic*  s_fwControlChar = nullptr;
+static lamp::FirmwareReceiver* s_firmwareReceiver = nullptr;
+
+class BleFirmwareTransport : public lamp::FirmwareTransport {
+ public:
+  void getMyMac(uint8_t out[6]) const override {
+    // Same chip MAC as ESP-NOW on ESP32 (the BT controller and Wi-Fi share
+    // the OUI; for our use as a sourceMac identifier on the wire, either
+    // is fine since both are stable across reboots).
+    const ble_addr_t* a = NimBLEDevice::getAddress().getBase();
+    if (a) std::memcpy(out, a->val, 6);
+    else   std::memset(out, 0, 6);
+  }
+  bool sendFrame(const uint8_t* data, size_t len) override {
+    if (!s_fwControlChar) return false;
+    s_fwControlChar->setValue(data, len);
+    s_fwControlChar->notify();
+    return true;
+  }
+};
+
+static BleFirmwareTransport s_bleFwTransport;
+
+class FwControlCallback : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
+    if (!isAuthed(connInfo.getConnHandle())) return;
+    const std::string raw = c->getValue();
+    if (raw.size() < lamp_protocol::HEADER_SIZE) return;
+    const uint8_t msgType = lamp_protocol::inspect(
+        reinterpret_cast<const uint8_t*>(raw.data()), raw.size());
+
+    lamp::PendingFirmwareControl slot{};
+    slot.transportKind  = lamp::FirmwareTransportKind::Ble;
+    slot.bleConnHandle  = connInfo.getConnHandle();
+
+    if (msgType == lamp_protocol::MSG_FW_OFFER) {
+      lamp_protocol::ParsedFwOffer p;
+      if (!lamp_protocol::parseFwOffer(
+              reinterpret_cast<const uint8_t*>(raw.data()), raw.size(), p)) {
+        return;
+      }
+      slot.msgType = lamp_protocol::MSG_FW_OFFER;
+      slot.seq     = p.seq;
+      std::memcpy(slot.sourceMac, p.sourceMac, 6);
+      std::memcpy(slot.targetMac, p.targetMac, 6);
+      slot.offer.version       = p.version;
+      slot.offer.totalLen      = p.totalLen;
+      slot.offer.chunkSize     = p.chunkSize;
+      std::memcpy(slot.offer.channel, p.channel,
+                  lamp_protocol::FW_CHANNEL_LEN);
+      std::memcpy(slot.offer.sha256Prefix, p.sha256Prefix,
+                  lamp_protocol::FW_SHA256_PREFIX_LEN);
+      slot.offer.footerLen   = p.footerLen;
+      slot.offer.totalChunks = p.totalChunks;
+      lamp::postPendingFirmwareControl(slot);
+    } else if (msgType == lamp_protocol::MSG_FW_DONE) {
+      lamp_protocol::ParsedFwDone p;
+      if (!lamp_protocol::parseFwDone(
+              reinterpret_cast<const uint8_t*>(raw.data()), raw.size(), p)) {
+        return;
+      }
+      slot.msgType = lamp_protocol::MSG_FW_DONE;
+      slot.seq     = p.seq;
+      std::memcpy(slot.sourceMac, p.sourceMac, 6);
+      std::memcpy(slot.targetMac, p.targetMac, 6);
+      slot.done.version  = p.version;
+      slot.done.totalLen = p.totalLen;
+      std::memcpy(slot.done.sha256Prefix, p.sha256Prefix,
+                  lamp_protocol::FW_SHA256_PREFIX_LEN);
+      slot.done.footerLen = p.footerLen;
+      lamp::postPendingFirmwareControl(slot);
+    }
+    // Other MSG_FW_* types (CHUNK/ACCEPT/REQ/RESULT) don't belong on this
+    // char; silently drop. MSG_FW_CHUNK goes to CHAR_FW_CHUNK below.
+  }
+};
+
+class FwChunkCallback : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
+    if (!isAuthed(connInfo.getConnHandle())) return;
+    if (!s_firmwareReceiver) return;
+    const std::string raw = c->getValue();
+    lamp_protocol::ParsedFwChunk p;
+    if (!lamp_protocol::parseFwChunk(
+            reinterpret_cast<const uint8_t*>(raw.data()), raw.size(), p)) {
+      return;
+    }
+    // Direct fast-path call on the BLE host task — mirrors how
+    // show_receiver.cpp dispatches the ESP-NOW chunk path. The
+    // receiver's handler is bounded (~0.5 ms: one OTA partition write +
+    // bitmap set). Dropping a chunk here just means the receiver's
+    // stall watchdog will REQ for it next tick.
+    s_firmwareReceiver->handleChunkOnRecvTask(p);
+  }
+};
+
 static void notifySection(NimBLECharacteristic* c, const std::string& json) {
   if (!c) return;
   c->setValue(json);
@@ -1070,6 +1185,16 @@ void start(lamp::Config* config, Preferences* prefs) {
       NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new SettingsBlobCallback());
 
+  // Firmware OTA (Phase 5a) — write + notify on CHAR_FW_CONTROL for the
+  // OFFER/DONE/ACCEPT/REQ/RESULT control plane; write-without-response on
+  // CHAR_FW_CHUNK for the high-frequency 200-byte chunk stream.
+  s_fwControlChar = s_service->createCharacteristic(
+      CHAR_FW_CONTROL,
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY);
+  s_fwControlChar->setCallbacks(new FwControlCallback());
+  s_service->createCharacteristic(CHAR_FW_CHUNK, LIVE_WRITE_PROPS)
+      ->setCallbacks(new FwChunkCallback());
+
   // State notify — notify only; no write/read needed
   s_stateNotify = s_service->createCharacteristic(CHAR_STATE_NOTIFY,
                                                   NIMBLE_PROPERTY::NOTIFY);
@@ -1119,5 +1244,15 @@ void stop() {
 }
 
 bool isRunning() { return s_running; }
+
+// Register the FirmwareReceiver instance + bind the BLE transport to it
+// so notifications on CHAR_FW_CONTROL come back via the right path. Called
+// from standard_lamp.cpp::setup() after firmwareReceiver.begin().
+void setFirmwareReceiver(lamp::FirmwareReceiver* receiver) {
+  s_firmwareReceiver = receiver;
+  if (receiver) {
+    receiver->setBleTransport(&s_bleFwTransport);
+  }
+}
 
 }  // namespace ble_control

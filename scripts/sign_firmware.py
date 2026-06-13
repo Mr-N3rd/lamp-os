@@ -262,6 +262,17 @@ def sign(input_bin: Path, output_bin: Path) -> None:
 
     output_bin.write_bytes(signed)
 
+    # Also overwrite the input firmware.bin with the LSIG-tailed bytes
+    # so PIO's standard upload (which flashes firmware.bin) plants the
+    # signed image on the lamp's running partition. Without this the
+    # first-flashed lamp can't act as a gossip-OTA distributor: its
+    # FirmwareDistributor scans backward for the LSIG magic to discover
+    # the image length, and an unsigned firmware.bin has nothing for
+    # it to find. The ESP IDF bootloader ignores the 96 trailing bytes
+    # (it only reads segment headers from offset 0 onward), so the
+    # tail is functionally invisible to boot.
+    input_bin.write_bytes(signed)
+
     sha = hashlib.sha256(raw).hexdigest()[:16]
     channel_str = channel.rstrip(b"\x00").decode("ascii", errors="replace")
     print(
@@ -269,6 +280,7 @@ def sign(input_bin: Path, output_bin: Path) -> None:
         f'channel="{channel_str}" version={fw_human} '
         f"(0x{fw_version:08x}) signedLen={len(raw)} totalLen={len(signed)}"
     )
+    print(f"[sign]   firmware.bin also overwritten with LSIG-tailed bytes")
     print(f"[sign]   sha256(signed_region)={sha}...")
 
 
@@ -279,6 +291,17 @@ def sign(input_bin: Path, output_bin: Path) -> None:
 
 def _post_build_action(source, target, env):  # noqa: ARG001 — PIO signature
     """SCons action signature. `target` is the linker output (.elf)."""
+    # Compile-only escape hatch — set LAMP_FIRMWARE_SKIP_SIGN=1 to no-op the
+    # post-build hook. Used by CI on PR builds (where the private key
+    # isn't materialized from a secret) so that `pio run` succeeds without
+    # producing a signed artifact. Release workflows (tag / beta branch)
+    # materialize the secret and don't set this flag.
+    if os.environ.get("LAMP_FIRMWARE_SKIP_SIGN") == "1":
+        print(
+            "[sign] skipped: LAMP_FIRMWARE_SKIP_SIGN=1 "
+            "(compile-only / PR build — no signed artifact produced)"
+        )
+        return
     build_dir = Path(env.subst("$BUILD_DIR"))
     input_bin = build_dir / "firmware.bin"
     output_bin = build_dir / "firmware-signed.bin"

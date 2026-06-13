@@ -13,6 +13,7 @@
 #include "lamp_protocol.hpp"
 #include "nearby_lamps.hpp"
 #include "util/color.hpp"
+#include "../firmware/firmware_receiver.hpp"  // FirmwareTransport interface
 
 #ifndef LAMP_ESPNOW_CHANNEL
 #define LAMP_ESPNOW_CHANNEL 1
@@ -150,6 +151,7 @@ void postPendingEvent(const PendingEvent& src);
 // (which it calls DIRECTLY on the WiFi task — no slot indirection for the
 // high-frequency chunk path, per the lamp-side plan §5).
 class FirmwareReceiver;
+class FirmwareDistributor;
 
 // Receives HELLO + CONTROL_OP frames over ESP-NOW, and announces this
 // lamp's presence (HELLO) so peers can populate their registry with our
@@ -209,6 +211,20 @@ class ShowReceiver {
   // callback registers inside begin().
   void setFirmwareReceiver(FirmwareReceiver* r) { firmwareReceiver_ = r; }
 
+  // Wire a FirmwareDistributor into the dispatch ladder. handleRecv calls
+  // its onAcceptOnRecvTask / onReqOnRecvTask / onResultOnRecvTask on the
+  // WiFi task (Core 0) for MSG_FW_ACCEPT / MSG_FW_REQ / MSG_FW_RESULT
+  // addressed to this lamp's MAC. Set BEFORE begin() — same lifecycle as
+  // setFirmwareReceiver.
+  void setFirmwareDistributor(FirmwareDistributor* d) { firmwareDistributor_ = d; }
+
+  // True if either receive- or send-side OTA is mid-flight. Used by mesh
+  // emit sites (HELLO tick, cascade broadcast, override forwards) to
+  // suppress non-OTA traffic during gossip OTA, freeing channel airtime
+  // for the chunk stream. Inbound dispatch is NOT gated — receiving is
+  // always safe.
+  bool isOtaInProgress() const;
+
   // Static recv glue (the EspNowLink hands us a C function pointer).
   static ShowReceiver* s_instance;
   static void onRecv(const uint8_t* mac, const uint8_t* data, size_t len,
@@ -242,10 +258,28 @@ class ShowReceiver {
   uint16_t eventSeq_ = 0;
 
   ControlOpHandler controlOpHandler_;
-  FirmwareReceiver* firmwareReceiver_ = nullptr;
+  FirmwareReceiver*    firmwareReceiver_    = nullptr;
+  FirmwareDistributor* firmwareDistributor_ = nullptr;
 
   void handleRecv(const uint8_t* mac, const uint8_t* data, size_t len, int8_t rssi);
   void emitHello();
+};
+
+// FirmwareTransport adapter for the ESP-NOW mesh path. Thin wrapper over
+// ShowReceiver — used for the existing wisp-driven OTA flow where the
+// lamp accepts MSG_FW_OFFER over the mesh and emits ACCEPT/REQ/RESULT
+// the same way. The BLE-driven OTA flow uses a sibling
+// `BleFirmwareTransport` (in ble_control.hpp) that notifies on
+// CHAR_FW_STATUS instead.
+class EspNowFirmwareTransport : public FirmwareTransport {
+ public:
+  explicit EspNowFirmwareTransport(ShowReceiver* link) : link_(link) {}
+  void getMyMac(uint8_t out[6]) const override { link_->getMyMac(out); }
+  bool sendFrame(const uint8_t* data, size_t len) override {
+    return link_->broadcastRaw(data, len);
+  }
+ private:
+  ShowReceiver* link_;
 };
 
 }  // namespace lamp

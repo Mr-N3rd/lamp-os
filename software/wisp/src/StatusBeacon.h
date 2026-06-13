@@ -59,7 +59,6 @@ class AuroraPaletteClient;
 namespace wisp {
 
 class CurrentPalette;
-class FirmwareCarrier;
 class MeshLink;
 class PaintDistributor;
 class WispConfig;
@@ -67,11 +66,6 @@ class ZoneSelector;
 
 class StatusBeacon {
  public:
-  // `carrier` is optional (may be nullptr). When non-null and the
-  // carrier reports isReady(), the emitted MSG_WISP_HELLO populates
-  // carriedFwChannel + carriedFwVersion from it; otherwise those fields
-  // are zero-filled (back-compat with the pre-Phase-F behavior).
-  //
   // `zone` and `aurora` join the family in Phase D for the wispStatus
   // path; the HELLO path doesn't need them.
   //
@@ -79,10 +73,13 @@ class StatusBeacon {
   // emit includes the `source` enum so the app can surface and round-trip
   // the Phase E source-toggle state. (Manual palette body is intentionally
   // not echoed; see emitStatus comment for the CONTROL_MAX_PAYLOAD budget.)
+  //
+  // MSG_WISP_HELLO's carriedFw* fields zero-fill — the wisp no longer
+  // distributes firmware (gossip-OTA on lamps replaces it). Wire layout
+  // unchanged for back-compat with older lamp firmware.
   void begin(MeshLink* mesh, PaintDistributor* paint,
              CurrentPalette* palette, ZoneSelector* zone,
              AuroraPaletteClient* aurora,
-             FirmwareCarrier* carrier = nullptr,
              WispConfig* config = nullptr);
 
   // One-shot wiring of the two FreeRTOS software timers. Call once after
@@ -105,7 +102,6 @@ class StatusBeacon {
   CurrentPalette* palette_ = nullptr;
   ZoneSelector* zone_ = nullptr;
   AuroraPaletteClient* aurora_ = nullptr;
-  FirmwareCarrier* carrier_ = nullptr;
   WispConfig* config_ = nullptr;
   uint16_t seqCounter_ = 0;          // shared across both emission paths
   StatusBeaconTimerHandle timer_       = nullptr;  // 2s HELLO

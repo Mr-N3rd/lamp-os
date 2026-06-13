@@ -198,6 +198,30 @@ std::vector<NearbyLamp> NearbyLamps::getAll() {
   return snapshot;
 }
 
+uint32_t NearbyLamps::getFirmwareVersionByMac(const uint8_t mac[6],
+                                              uint32_t maxAgeMs) {
+  uint32_t now = millis();
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  for (const auto& e : store_) {
+    if (!e.hasMac) continue;
+    if (std::memcmp(e.mac, mac, 6) != 0) continue;
+    // Gate on lastSeenViaEspNowMs: firmwareVersion is only populated via
+    // ESP-NOW HELLO; BLE-only sightings carry no version. A peer last
+    // heard via ESP-NOW longer than maxAgeMs ago may have rebooted into
+    // a different version.
+    if (e.lastSeenViaEspNowMs == 0 ||
+        (now - e.lastSeenViaEspNowMs) > maxAgeMs) {
+      xSemaphoreGive(mutex_);
+      return 0;
+    }
+    uint32_t v = e.firmwareVersion;
+    xSemaphoreGive(mutex_);
+    return v;
+  }
+  xSemaphoreGive(mutex_);
+  return 0;
+}
+
 void NearbyLamps::acknowledge(const std::string& name) {
   xSemaphoreTake(mutex_, portMAX_DELAY);
   size_t idx = findIndexLocked(name);

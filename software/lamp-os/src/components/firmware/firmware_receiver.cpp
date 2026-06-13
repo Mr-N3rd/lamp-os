@@ -118,10 +118,16 @@ bool channelMatchesOurs(const char* offerChannel /* FW_CHANNEL_LEN bytes */) {
 // Lifecycle
 // =============================================================================
 
-void FirmwareReceiver::begin(ShowReceiver* receiver) {
-  showReceiver_ = receiver;
-  if (showReceiver_) {
-    showReceiver_->getMyMac(myMac_);
+void FirmwareReceiver::begin(FirmwareTransport* meshTransport,
+                             FirmwareTransport* bleTransport) {
+  meshTransport_ = meshTransport;
+  bleTransport_  = bleTransport;
+  // Snapshot the lamp's MAC from whichever transport is wired (both should
+  // report the same identity — it's the lamp's chip MAC, transport-agnostic).
+  if (meshTransport_) {
+    meshTransport_->getMyMac(myMac_);
+  } else if (bleTransport_) {
+    bleTransport_->getMyMac(myMac_);
   }
   state_ = State::Idle;
   publishedOtaHandle_.store(0, std::memory_order_relaxed);
@@ -248,12 +254,24 @@ void FirmwareReceiver::onOfferOnLoop(const PendingFirmwareControl& ctrl,
     sendAccept(ctrl, lamp_protocol::FwAcceptStatus::DeclineAlreadyCurrent);
     return;
   }
-  // Already mid-flow for a DIFFERENT version → decline-busy. Re-OFFER for
-  // the SAME version while streaming is idempotent (re-ACK so a wisp that
-  // missed the first ACCEPT restarts).
+  // Already mid-flow → enforce single-source-at-a-time. An idempotent
+  // re-OFFER (same version AND same transport AND same source identity)
+  // re-ACKs so a wisp that missed our first ACCEPT can restart cleanly.
+  // Anything else (different version, different transport — e.g. BLE
+  // app trying to interrupt a mesh OTA in progress — or different source
+  // on the same transport) is DeclineBusy. The mutex prevents two
+  // concurrent flows writing the same OTA partition.
   if (state_ == State::Streaming || state_ == State::Verify) {
-    if (ctrl.offer.version == offerVersion_ &&
-        std::memcmp(ctrl.sourceMac, wispMac_, 6) == 0) {
+    const bool sameTransport = ctrl.transportKind == activeTransportKind_;
+    bool sameSource = false;
+    if (sameTransport) {
+      if (activeTransportKind_ == FirmwareTransportKind::EspNow) {
+        sameSource = (std::memcmp(ctrl.sourceMac, wispMac_, 6) == 0);
+      } else {
+        sameSource = (ctrl.bleConnHandle == activeBleConnHandle_);
+      }
+    }
+    if (ctrl.offer.version == offerVersion_ && sameTransport && sameSource) {
       sendAccept(ctrl, lamp_protocol::FwAcceptStatus::Accept);
       return;
     }
@@ -296,6 +314,10 @@ void FirmwareReceiver::onOfferOnLoop(const PendingFirmwareControl& ctrl,
   // bounds check — and was historically populated AFTER the pre-erase
   // block, masking eraseEnd=0 as bug A in the old FIXME.
   std::memcpy(wispMac_, ctrl.sourceMac, 6);
+  // Snapshot transport context for the active flow — the busy-check on
+  // any subsequent OFFER uses these to enforce single-source semantics.
+  activeTransportKind_ = ctrl.transportKind;
+  activeBleConnHandle_ = ctrl.bleConnHandle;
   offerSeq_           = ctrl.seq;
   offerVersion_       = ctrl.offer.version;
   offerTotalLen_      = ctrl.offer.totalLen;
@@ -600,35 +622,44 @@ uint16_t FirmwareReceiver::firstMissingChunk() const {
 
 bool FirmwareReceiver::sendAccept(const PendingFirmwareControl& ctrl,
                                   lamp_protocol::FwAcceptStatus status) {
-  if (!showReceiver_) return false;
+  // ACCEPT goes back to the source of the OFFER, NOT the in-flight flow's
+  // transport — if a BLE app is trying to start an OTA and we're busy
+  // mid-mesh, the DeclineBusy needs to reach the app, not the wisp.
+  FirmwareTransport* t = transportForKind(ctrl.transportKind);
+  if (!t) return false;
   uint8_t buf[lamp_protocol::FW_ACCEPT_FIXED_SIZE];
   const size_t n = lamp_protocol::buildFwAccept(
       buf, sizeof(buf), fwOutSeq_++, myMac_, ctrl.sourceMac,
       ctrl.seq, ctrl.offer.version, status, /*resumeOffset=*/0);
   if (!n) return false;
-  return showReceiver_->broadcastRaw(buf, n);
+  return t->sendFrame(buf, n);
 }
 
 bool FirmwareReceiver::sendReq(uint16_t firstChunkIdx, uint16_t chunkCount,
                                lamp_protocol::FwReqReason reason) {
-  if (!showReceiver_) return false;
+  // REQ is part of the in-flight flow — route to the active transport.
+  FirmwareTransport* t = transportForKind(activeTransportKind_);
+  if (!t) return false;
   uint8_t buf[lamp_protocol::FW_REQ_FIXED_SIZE];
   const size_t n = lamp_protocol::buildFwReq(
       buf, sizeof(buf), fwOutSeq_++, myMac_, wispMac_,
       firstChunkIdx, chunkCount, reason);
   if (!n) return false;
-  return showReceiver_->broadcastRaw(buf, n);
+  return t->sendFrame(buf, n);
 }
 
 bool FirmwareReceiver::sendResult(lamp_protocol::FwResultStatus status,
                                   uint8_t detail) {
-  if (!showReceiver_) return false;
+  // RESULT is the final ACK at end of the flow — same transport that
+  // streamed the chunks.
+  FirmwareTransport* t = transportForKind(activeTransportKind_);
+  if (!t) return false;
   uint8_t buf[lamp_protocol::FW_RESULT_FIXED_SIZE];
   const size_t n = lamp_protocol::buildFwResult(
       buf, sizeof(buf), fwOutSeq_++, myMac_, wispMac_,
       status, detail, offerVersion_);
   if (!n) return false;
-  return showReceiver_->broadcastRaw(buf, n);
+  return t->sendFrame(buf, n);
 }
 
 // =============================================================================

@@ -18,8 +18,6 @@
 #include <cstring>
 
 #include "CurrentPalette.h"
-#include "FirmwareCarrier.h"
-#include "FirmwareDistributor.h"
 #include "LampInventory.h"
 #include "MeshLink.h"
 #include "PaintDistributor.h"
@@ -44,8 +42,6 @@ wisp::LampInventory inventory;
 wisp::CurrentPalette currentPalette;
 wisp::PaintDistributor paintDistributor;
 wisp::StatusBeacon statusBeacon;
-wisp::FirmwareCarrier firmwareCarrier;
-wisp::FirmwareDistributor firmwareDistributor;
 AuroraPaletteClient auroraClient;
 wisp::WifiLink wifi;
 wisp::StageBeacon stageBeacon;
@@ -308,7 +304,7 @@ void drainPendingWispOp() {
   }
 }
 
-// HELLO + CONTROL_OP + MSG_FW_* recv handler. Fires on the WiFi task — keep
+// HELLO + CONTROL_OP recv handler. Fires on the WiFi task — keep
 // it tight; only protocol parse + bounded memcpy. No logging, no Preferences,
 // no ArduinoJson.
 void onMeshPacket(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len) {
@@ -320,13 +316,6 @@ void onMeshPacket(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len) {
         h.nameLen ? std::string(h.name, h.nameLen) : std::string();
     inventory.recordHello(h.sourceMac, peerName, h.base, h.shade,
                           h.firmwareVersion, millis());
-    return;
-  }
-  // MSG_FW_* family (0x40..0x45) goes to the firmware distributor. It
-  // owns the parsing + target-mac filtering for ACCEPT/REQ/RESULT.
-  if (msgType >= lamp_protocol::MSG_FW_OFFER &&
-      msgType <= lamp_protocol::MSG_FW_RESULT) {
-    firmwareDistributor.onMeshPacket(msgType, data, len);
     return;
   }
   if (msgType == lamp_protocol::MSG_CONTROL_OP) {
@@ -574,17 +563,12 @@ void setup() {
   // every 2s on a FreeRTOS timer so cadence survives Aurora loop() stalls.
   paintDistributor.begin(&inventory, &mesh, &currentPalette);
 
-  // Phase F wiring. FirmwareCarrier comes up first so StatusBeacon and
-  // FirmwareDistributor can both read its isReady() state. A stub /
-  // unprovisioned build silently keeps the distributor Disabled.
-  if (!firmwareCarrier.begin()) {
-    Serial.println("[wisp] firmware carrier disabled (no valid LSIG footer)");
-  }
+  // Wisp no longer participates in OTA — lamps gossip firmware to each
+  // other peer-to-peer. MSG_WISP_HELLO's carriedFw* fields zero-fill
+  // (wire layout unchanged for back-compat with older lamps).
   statusBeacon.begin(&mesh, &paintDistributor, &currentPalette,
-                     &zoneSelector, &auroraClient, &firmwareCarrier,
-                     &wispConfig);
+                     &zoneSelector, &auroraClient, &wispConfig);
   statusBeacon.startTimer();
-  firmwareDistributor.begin(&mesh, &firmwareCarrier, &inventory);
 
   // Apply the persisted source mode now that everything it touches
   // (paintDistributor, currentPalette) is up. This is what makes a
@@ -608,7 +592,6 @@ void loop() {
   // when empty (one portMUX read + bool check), so safe to call every loop.
   drainPendingWispOp();
   paintDistributor.tick(now);
-  firmwareDistributor.tick(now);
   artnetEmitter.tick(now);
 
   if (now - lastDumpMs > 10000) {

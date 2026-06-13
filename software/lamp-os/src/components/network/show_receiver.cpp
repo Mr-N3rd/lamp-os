@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "../firmware/firmware_receiver.hpp"
+#include "../firmware/firmware_distributor.hpp"
 #include "../../version.hpp"
 
 namespace lamp {
@@ -33,7 +34,17 @@ void ShowReceiver::tick() {
   uint32_t now = millis();
   if (now - lastHelloMs_ < LAMP_HELLO_INTERVAL_MS && lastHelloMs_ != 0) return;
   lastHelloMs_ = now;
+  // Mesh quiesce during gossip OTA: while either the distributor or the
+  // receiver is mid-flow, suppress HELLO emits so the chunk stream gets
+  // the channel time. Inbound HELLO is still processed.
+  if (isOtaInProgress()) return;
   emitHello();
+}
+
+bool ShowReceiver::isOtaInProgress() const {
+  const bool rx = firmwareReceiver_ ? firmwareReceiver_->isInProgress() : false;
+  const bool tx = firmwareDistributor_ ? firmwareDistributor_->isInProgress() : false;
+  return rx || tx;
 }
 
 void ShowReceiver::getMyMac(uint8_t out[6]) const {
@@ -397,9 +408,30 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
                 lamp_protocol::FW_SHA256_PREFIX_LEN);
     slot.done.footerLen = p.footerLen;
     postPendingFirmwareControl(slot);
+  } else if (msgType == lamp_protocol::MSG_FW_ACCEPT) {
+    // ACCEPT is the lamp's own distributor response to a peer's OFFER.
+    // (Phase 5b' gossip OTA: the lamp now ORIGINATES offers as well as
+    // receives them.) Route addressed-to-me ACCEPT/REQ/RESULT into the
+    // FirmwareDistributor on this recv task — the distributor's state
+    // machine handles them under its own portMUX.
+    lamp_protocol::ParsedFwAccept p;
+    if (!lamp_protocol::parseFwAccept(data, len, p)) return;
+    if (!firmwareDedup_.record(p.sourceMac, lamp_protocol::MSG_FW_ACCEPT, p.seq)) return;
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    if (firmwareDistributor_) firmwareDistributor_->onAcceptOnRecvTask(p);
+  } else if (msgType == lamp_protocol::MSG_FW_REQ) {
+    lamp_protocol::ParsedFwReq p;
+    if (!lamp_protocol::parseFwReq(data, len, p)) return;
+    if (!firmwareDedup_.record(p.sourceMac, lamp_protocol::MSG_FW_REQ, p.seq)) return;
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    if (firmwareDistributor_) firmwareDistributor_->onReqOnRecvTask(p);
+  } else if (msgType == lamp_protocol::MSG_FW_RESULT) {
+    lamp_protocol::ParsedFwResult p;
+    if (!lamp_protocol::parseFwResult(data, len, p)) return;
+    if (!firmwareDedup_.record(p.sourceMac, lamp_protocol::MSG_FW_RESULT, p.seq)) return;
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    if (firmwareDistributor_) firmwareDistributor_->onResultOnRecvTask(p);
   }
-  // NOTE: MSG_FW_ACCEPT, MSG_FW_REQ, MSG_FW_RESULT are lamp→wisp; the
-  // lamp does not receive them. No branches needed here.
 }
 
 void ShowReceiver::emitHello() {

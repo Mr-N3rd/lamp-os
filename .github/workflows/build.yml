@@ -1,9 +1,16 @@
 # workflows adapted from the WLED project using PlatformIO
 name: LampOS Build
 
-# Only included into other workflows
+# Only included into other workflows. Caller passes the firmware signing
+# secret (release.yml + release-beta.yml) or omits it (lamp-os-ci.yml PR
+# builds) — in the latter case sign_firmware.py sees LAMP_FIRMWARE_SKIP_SIGN=1
+# and no-ops the post-build hook.
 on:
   workflow_call:
+    secrets:
+      LAMP_FIRMWARE_PRIVATE_KEY_HEX:
+        description: 32-byte Ed25519 firmware-signing seed as 64 hex chars
+        required: false
 
 jobs:
 
@@ -19,23 +26,47 @@ jobs:
       with:
           python-version: '3.12'
           cache: 'pip'
-    - name: Install PlatformIO
+    - name: Install PlatformIO + signing deps
       run: pip install -r requirements.txt
-    - name: Build firmware
+
+    - name: Materialize firmware signing key (or set skip flag)
+      env:
+        KEY_HEX: ${{ secrets.LAMP_FIRMWARE_PRIVATE_KEY_HEX }}
+      run: |
+        if [ -n "$KEY_HEX" ]; then
+          printf '%s' "$KEY_HEX" | xxd -r -p > "$HOME/.lamp-os-firmware-key.bin"
+          chmod 600 "$HOME/.lamp-os-firmware-key.bin"
+          echo "[ci] signing enabled — key materialized at ~/.lamp-os-firmware-key.bin"
+        else
+          echo "LAMP_FIRMWARE_SKIP_SIGN=1" >> "$GITHUB_ENV"
+          echo "[ci] no signing secret available — sign_firmware.py will no-op"
+        fi
+
+    - name: Build lamp firmware
       working-directory: ./software/lamp-os
       run: |
         pio run --environment upesy_wroom
         pio run --target buildfs --environment upesy_wroom
-    - name: Merge firmware
+
+    - name: Build wisp firmware
+      working-directory: ./software/wisp
+      run: |
+        pio run --environment seeed_xiao_esp32_c6
+
+    - name: Merge lamp firmware for USB-flash distribution.bin
       working-directory: ./software/lamp-os/.pio/build/upesy_wroom
       run: |
         esptool --chip esp32 merge-bin -o distribution.bin --flash-mode dio --flash-freq 40m --flash-size 4MB 0x1000 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin 0x3D0000 spiffs.bin
-    - uses: actions/upload-artifact@v4
+
+    - name: Upload lamp USB-flash distribution.bin
+      uses: actions/upload-artifact@v4
       with:
         name: distribution
         path: |
           ./software/lamp-os/.pio/build/upesy_wroom/distribution.bin
-    - uses: actions/upload-artifact@v4
+
+    - name: Upload lamp partition images (for esptool / advanced flashing)
+      uses: actions/upload-artifact@v4
       with:
         name: updates
         path: |
@@ -43,3 +74,11 @@ jobs:
           ./software/lamp-os/.pio/build/upesy_wroom/partitions.bin
           ./software/lamp-os/.pio/build/upesy_wroom/firmware.bin
           ./software/lamp-os/.pio/build/upesy_wroom/spiffs.bin
+
+    - name: Upload signed lamp firmware (for app-driven BLE OTA + gossip seed)
+      if: env.LAMP_FIRMWARE_SKIP_SIGN != '1'
+      uses: actions/upload-artifact@v4
+      with:
+        name: lamp-firmware-signed
+        path: |
+          ./software/lamp-os/.pio/build/upesy_wroom/firmware-signed.bin

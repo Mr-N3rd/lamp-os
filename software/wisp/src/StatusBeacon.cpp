@@ -7,7 +7,6 @@
 #include <cstring>
 
 #include "CurrentPalette.h"
-#include "FirmwareCarrier.h"
 #include "MeshLink.h"
 #include "PaintDistributor.h"
 #include "WispConfig.h"
@@ -74,14 +73,12 @@ constexpr size_t kPaletteIdPrefixLen = lamp_protocol::WISP_HELLO_PALETTE_ID_PREF
 void StatusBeacon::begin(MeshLink* mesh, PaintDistributor* paint,
                          CurrentPalette* palette, ZoneSelector* zone,
                          AuroraPaletteClient* aurora,
-                         FirmwareCarrier* carrier,
                          WispConfig* config) {
   mesh_ = mesh;
   paint_ = paint;
   palette_ = palette;
   zone_ = zone;
   aurora_ = aurora;
-  carrier_ = carrier;
   config_ = config;
 }
 
@@ -168,18 +165,12 @@ void StatusBeacon::emit() {
         paletteIdPrefix, sizeof(paletteIdPrefix));
   }
 
-  // carriedFwChannel / carriedFwVersion: populated from the firmware
-  // carrier when it has a valid LSIG-footered blob. Null carrier or a
-  // not-ready carrier (stub build, parse failure) falls back to the
-  // historical zero-fill — wire layout unchanged either way.
+  // carriedFwChannel / carriedFwVersion zero-fill: wisp no longer
+  // distributes firmware. Wire layout retained so older lamps that read
+  // these fields don't malform-drop the HELLO.
   const char* carriedFwChannel = nullptr;
-  size_t carriedFwChannelLen = 0;
-  uint32_t carriedFwVersion = 0;
-  if (carrier_ && carrier_->isReady()) {
-    carriedFwChannel = carrier_->getChannel();
-    carriedFwChannelLen = carriedFwChannel ? std::strlen(carriedFwChannel) : 0;
-    carriedFwVersion = carrier_->getVersion();
-  }
+  const size_t carriedFwChannelLen = 0;
+  const uint32_t carriedFwVersion = 0;
 
   uint8_t buf[lamp_protocol::WISP_HELLO_FIXED_SIZE];
   size_t n = 0;

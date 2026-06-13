@@ -268,6 +268,17 @@ void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
 #endif
     return;
   }
+  // Mesh quiesce during gossip OTA: a 1.4 MB chunk stream is fragile under
+  // BLE coex; suppress MSG_EVENT cascade broadcasts while we're mid-flow
+  // so the chunk stream gets the channel time. The cascade resumes once
+  // the OTA flow exits (Done/Failed → Idle).
+  if (showReceiver_->isOtaInProgress()) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: suppressed during OTA flow\n",
+                  entry.config.type.c_str());
+#endif
+    return;
+  }
   showReceiver_->broadcastRaw(frame, frameLen);
   showReceiver_->broadcastRaw(frame, frameLen);
 }

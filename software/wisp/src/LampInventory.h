@@ -38,7 +38,6 @@ struct InventoryEntry {
  * Phase C consumer: PaintDistributor walks the snapshot to fan out paint.
  * Phase D consumer: StatusBeacon includes the count in HELLO; OpHandler
  *                   surfaces the snapshot to the app via BLE proxy.
- * Phase F consumer: FirmwareDistributor picks lowest-version peer.
  */
 class LampInventory {
  public:

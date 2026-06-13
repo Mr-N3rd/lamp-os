@@ -57,6 +57,44 @@ namespace lamp {
 
 class ShowReceiver;
 
+// Transport abstraction for outbound MSG_FW_* responses (ACCEPT / REQ /
+// RESULT). FirmwareReceiver doesn't know whether the OTA flow it's
+// servicing came in over ESP-NOW (wisp → lamp mesh) or BLE (app → lamp
+// direct); it just hands a serialized MSG_FW_* frame to its bound
+// transport and asks for the lamp's own MAC for the sourceMac field.
+//
+// Production implementations:
+//   - EspNowFirmwareTransport — wraps ShowReceiver::broadcastRaw, sends
+//     to the mesh on channel LAMP_ESPNOW_CHANNEL. Used for the existing
+//     wisp-driven OTA path.
+//   - BleFirmwareTransport — notifies on CHAR_FW_STATUS to the BLE
+//     connection that initiated the flow. Used for app-driven BLE OTA.
+//
+// Tests inject a MockFirmwareTransport that records calls for assertion.
+class FirmwareTransport {
+ public:
+  virtual ~FirmwareTransport() = default;
+
+  // Snapshot the lamp's own 6-byte MAC into out[6]. Called once during
+  // FirmwareReceiver::begin() to populate the sourceMac field on every
+  // outbound ACCEPT/REQ/RESULT.
+  virtual void getMyMac(uint8_t out[6]) const = 0;
+
+  // Send a pre-serialized MSG_FW_* frame. Returns true if the send was
+  // accepted (queued / notified successfully).
+  virtual bool sendFrame(const uint8_t* data, size_t len) = 0;
+};
+
+// Where did this control frame come from? Used by the FirmwareReceiver
+// busy-check to enforce single-source-at-a-time semantics — a mesh OTA
+// from the wisp can't be interrupted mid-flow by an app pushing over BLE
+// (or vice versa), and an idempotent re-offer must come from the SAME
+// transport + SAME source as the current flow to be accepted.
+enum class FirmwareTransportKind : uint8_t {
+  EspNow = 0,  // mesh — sourceMac identifies the wisp
+  Ble    = 1,  // BLE  — bleConnHandle identifies the app's connection
+};
+
 // Slot payload that ShowReceiver's WiFi recv task posts (via
 // postPendingFirmwareControl) and standard_lamp's Core 1 drain consumes.
 // Discriminated by msgType (MSG_FW_OFFER / MSG_FW_DONE).
@@ -65,6 +103,11 @@ struct PendingFirmwareControl {
   uint8_t sourceMac[6];
   uint8_t targetMac[6];
   uint16_t seq;
+  // Transport context — populated by whichever dispatcher posted this
+  // slot. Mesh path sets EspNow + bleConnHandle=0; BLE path sets Ble +
+  // bleConnHandle=<the writer's NimBLE conn handle>.
+  FirmwareTransportKind transportKind = FirmwareTransportKind::EspNow;
+  uint16_t bleConnHandle = 0;
   // Union by msgType. Keeping struct flat (not actually a union) costs a
   // handful of bytes on the wire vs. an anonymous union, and trivially-
   // copyable types stay PendingTypedSlot-friendly.
@@ -105,9 +148,27 @@ class FirmwareReceiver {
     Failed           = 6,  // terminal error; reset to Idle on next tick
   };
 
-  // Wire up. `receiver` is used to emit MSG_FW_ACCEPT/REQ/RESULT via its
-  // broadcastRaw + getMyMac surfaces; caller retains ownership.
-  void begin(ShowReceiver* receiver);
+  // Wire up. The receiver can service OTA flows over both ESP-NOW (wisp →
+  // lamp via the mesh) and BLE (app → lamp direct) simultaneously, with
+  // the single-source mutex enforcing only one active flow at a time.
+  // `meshTransport` is required; `bleTransport` is optional (pass nullptr
+  // if BLE OTA isn't wired in this build, e.g. a wisp using only the mesh
+  // path). Caller retains ownership.
+  //
+  // Responses are routed per-call:
+  //   - ACCEPT goes back to the OFFER's source transport (ctrl.transportKind)
+  //   - REQ + RESULT during streaming go to the in-flight flow's transport
+  //     (activeTransportKind_, captured at offer-accept time)
+  void begin(FirmwareTransport* meshTransport,
+             FirmwareTransport* bleTransport = nullptr);
+
+  // Late-bind the BLE transport. The BLE GATT server is set up by
+  // ble_control::start() AFTER firmwareReceiver.begin(), so its transport
+  // adapter can't be passed at begin() time. ble_control::setFirmwareReceiver
+  // calls this once the GATT chars are created. Caller retains ownership.
+  void setBleTransport(FirmwareTransport* bleTransport) {
+    bleTransport_ = bleTransport;
+  }
 
   // Called from main loop on Core 1. Drains internal control queue,
   // runs stall/timeout watchdogs, generates MSG_FW_REQ on gaps. Cheap
@@ -157,8 +218,10 @@ class FirmwareReceiver {
   // 1-2 KB so this is fast (~1.6 ms worst case at 8000 chunks).
   uint16_t firstMissingChunk() const;
 
-  // Transmit helpers. All FW_* sends go via showReceiver_->broadcastRaw
-  // — no unicast in EspNowLink. Wisp filters via addressedToUs.
+  // Transmit helpers. All FW_* sends route through `transport_->sendFrame`.
+  // For the ESP-NOW transport, that's `broadcastRaw` (wisp filters via
+  // addressedToUs); for the BLE transport, it's a notify on the firmware-
+  // status characteristic to the originating connection.
   bool sendAccept(const PendingFirmwareControl& ctrl,
                   lamp_protocol::FwAcceptStatus status);
   bool sendReq(uint16_t firstChunkIdx, uint16_t chunkCount,
@@ -193,9 +256,17 @@ class FirmwareReceiver {
   // code (Success on full success, or the first failure encountered).
   lamp_protocol::FwResultStatus verifyAndApply();
 
+  // Look up the FirmwareTransport instance bound to a given kind. Returns
+  // nullptr if that transport wasn't wired at begin() time.
+  FirmwareTransport* transportForKind(FirmwareTransportKind kind) const {
+    if (kind == FirmwareTransportKind::Ble) return bleTransport_;
+    return meshTransport_;
+  }
+
   // --- State -------------------------------------------------------------
 
-  ShowReceiver* showReceiver_ = nullptr;
+  FirmwareTransport* meshTransport_ = nullptr;
+  FirmwareTransport* bleTransport_  = nullptr;
 
   State state_ = State::Idle;
 
@@ -204,6 +275,13 @@ class FirmwareReceiver {
   uint8_t  wispMac_[6] = {0};      // sourceMac of the OFFER (target of our ACCEPT/REQ/RESULT)
   uint8_t  myMac_[6]   = {0};      // our MAC (sourceMac of ACCEPT/REQ/RESULT)
   uint16_t offerSeq_   = 0;        // header seq from the OFFER (echoed in ACCEPT)
+  // Active-flow transport context. Used by the onOfferOnLoop busy-check
+  // to distinguish "same source re-offering" (idempotent ACCEPT) from
+  // "different source trying to start a new OTA while one is in flight"
+  // (DeclineBusy). Set at offer-accept time; cleared by abortOta / on
+  // transition back to Idle.
+  FirmwareTransportKind activeTransportKind_ = FirmwareTransportKind::EspNow;
+  uint16_t activeBleConnHandle_ = 0;
   uint32_t offerVersion_ = 0;
   uint32_t offerTotalLen_ = 0;
   uint16_t offerChunkSize_ = 0;

@@ -47,4 +47,18 @@ abstract class BleUuids {
   // MSG_CONTROL_OP broadcast (from the wisp) and the last MSG_WISP_HELLO
   // data. See features/wisp/data/wisp_repository.dart for the parsed shape.
   static const wispStatus = '5f64f4e2-d6d9-4a44-9b3f-3a8d6f7e6b40';
+
+  // Firmware OTA — Phase 5a. Both auth-gated. App writes MSG_FW_OFFER
+  // and MSG_FW_DONE (lamp_protocol wire format, no envelope) to
+  // CHAR_FW_CONTROL and receives MSG_FW_ACCEPT, MSG_FW_REQ, MSG_FW_RESULT
+  // back as notifications. Chunk payloads stream to CHAR_FW_CHUNK
+  // (write-without-response).
+  //
+  // Wire format mirrors software/lamp-os/src/components/network/lamp_protocol.hpp
+  // — see features/firmware/domain/firmware_protocol.dart for the Dart
+  // builders/parsers. Single in-flight OTA per lamp (mutex enforced in
+  // FirmwareReceiver); a write while another source is mid-flow yields
+  // a DeclineBusy notification.
+  static const fwControl = '5f64f4e7-d6d9-4a44-9b3f-3a8d6f7e6b40';
+  static const fwChunk   = '5f64f4e8-d6d9-4a44-9b3f-3a8d6f7e6b40';
 }

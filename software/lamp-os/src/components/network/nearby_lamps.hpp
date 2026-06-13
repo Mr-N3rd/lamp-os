@@ -121,6 +121,15 @@ class NearbyLamps {
   // is within maxAgeMs.
   std::vector<NearbyLamp> getReachableViaEspNow(uint32_t maxAgeMs);
 
+  // Look up a peer's firmwareVersion by MAC, returning 0 if the peer is
+  // unknown OR was last heard via ESP-NOW longer than maxAgeMs ago.
+  // Used by the gossip-OTA path on Core 1: SocialBehavior::control()
+  // queries this when iterating nearby peers to decide whether to call
+  // firmwareDistributor.considerPeerForOta. maxAgeMs gates on
+  // lastSeenViaEspNowMs (not BLE), since firmwareVersion is only
+  // populated by ESP-NOW HELLO and BLE-only sightings carry no version.
+  uint32_t getFirmwareVersionByMac(const uint8_t mac[6], uint32_t maxAgeMs);
+
   // Full snapshot — used by CHAR_NEARBY_LAMPS for the app's unified list.
   std::vector<NearbyLamp> getAll();
 

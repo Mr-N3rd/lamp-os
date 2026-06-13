@@ -67,6 +67,50 @@ class SocialBehavior : public AnimatedBehavior {
   // No setter = behaves as Ambivert (the spec's pre-personality default).
   void setConfig(Config* config) { config_ = config; }
 
+  // Gossip-OTA progress pulse (Phase 5b'.5). Returns a brightness
+  // multiplier in [kOtaPulseMinPct, 100] composed into the brightness
+  // chain alongside applyCrowdDim/applySaltyDim. When neither side of
+  // an OTA flow is in progress: returns 100 (no effect). When the
+  // distributor is mid-flow: single-pulse cadence (sender role). When
+  // the receiver is mid-flow: double-pulse cadence (receiver role).
+  // Distinct cadences let an observer identify roles by eye; both
+  // patterns are subtle (multiplier dips to ~70 at the bottom of each
+  // pulse) but visible — a casual observer won't notice, a paying-
+  // attention observer notices the rhythm.
+  //
+  // Never reaches 0 — the lamp doesn't blackout during OTA.
+  uint8_t otaPulseMultiplier(uint32_t nowMs) const;
+
+  // OTA pulse tunables. Single-pulse: linear dip 100 → 70 over kDipMs,
+  // hold briefly at 70, linear return over kReturnMs, pause kPauseMs,
+  // repeat. Double-pulse: two dips back-to-back with kDoubleGapMs
+  // between, then kDoublePauseMs pause, repeat. Subtle-but-visible
+  // target. The hold beat at minimum is what makes the eye read this
+  // as a "pulse" rather than a triangle wave; a smoothed curve adds
+  // negligible perceptual upgrade over the configured tunables.
+  static constexpr uint8_t  kOtaPulseMinPct       = 70;
+  static constexpr uint32_t kOtaPulseDipMs        = 600;
+  static constexpr uint32_t kOtaPulseHoldMs       = 100;
+  static constexpr uint32_t kOtaPulseReturnMs     = 400;
+  static constexpr uint32_t kOtaPulsePauseMs      = 400;
+  static constexpr uint32_t kOtaPulseDoubleGapMs  = 200;
+  static constexpr uint32_t kOtaPulseDoublePauseMs = 700;
+
+  // OTA-hold extends the greeting animation lifetime so the shade stays
+  // on the peer's base color while the distributor is mid-flow sending
+  // to that peer. ~60s ceiling — a 1.5 MB image at 50 chunks/s lands in
+  // ~30s, so 60s gives generous slack for retries without painting a
+  // stale color forever. AnimatedBehavior frame budget at ~60fps.
+  static constexpr uint32_t kOtaHoldFrameBudget = 60 * 60;
+
+  // Throttle the gossip-OTA peer scan to this cadence. Lamps emit HELLO
+  // every 1-2s, so 500 ms catches every fresh sighting while saving the
+  // ~60 Hz vector allocation that control() would otherwise do per
+  // frame. Skipped entirely while distributor.isInProgress() — the
+  // single-source mutex blocks a second concurrent session anyway, so
+  // there's nothing useful to scan for.
+  static constexpr uint32_t kOtaScanIntervalMs  = 500;
+
  private:
   static constexpr size_t MAX_GREETED_TRACKED = 32;
   static constexpr uint32_t EXTROVERT_COOLDOWN_MS = 1000;
@@ -83,6 +127,20 @@ class SocialBehavior : public AnimatedBehavior {
   std::map<std::string, uint32_t> lastGreetedAtMs_;
   std::vector<uint32_t> recentGreetMs_;
   uint32_t tiredUntilMs_ = 0;
+
+  // OTA-hold: when we greet a peer AND the distributor is mid-flow to
+  // that same peer, we extend the greeting's color hold past the normal
+  // fadeOut window so the OTA pulse modulates on the peer's color rather
+  // than snapping back to the lamp's own shade. Cleared when the
+  // distributor stops targeting otaHoldPeerMac_ (success, fail, or
+  // pivoted to another peer).
+  bool    otaHoldActive_       = false;
+  uint8_t otaHoldPeerMac_[6]   = {0};
+
+  // Last time the OTA peer-scan block in control() actually walked the
+  // ESP-NOW roster. Throttled by kOtaScanIntervalMs to amortize the
+  // vector allocation across many frames.
+  uint32_t lastOtaScanMs_      = 0;
 };
 
 }  // namespace lamp

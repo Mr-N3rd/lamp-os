@@ -1,13 +1,21 @@
 # Lamp-OS firmware OTA tooling
 
-Three host scripts integrate with PlatformIO to produce signed firmware
-that wisp can carry and push to lamps over the ESP-NOW mesh:
+Two host scripts integrate with PlatformIO to produce signed firmware
+for the gossip-OTA mesh:
 
 | Script | Hook | Role |
 |---|---|---|
 | `gen_firmware_keys.py` | manual, one-shot | Generate the ed25519 keypair that signs all OTA firmware. |
-| `sign_firmware.py` | PIO `post:` on lamp build | Append the LSIG footer + ed25519 signature to `firmware.bin`. |
-| `embed_firmware.py` | PIO `pre:` on wisp build | Convert the signed lamp binary into a C++ byte array the wisp carries. |
+| `sign_firmware.py` | PIO `post:` on lamp + wisp builds | Append the LSIG footer + ed25519 signature to `firmware.bin`. |
+
+The gossip-OTA model: the Flutter app downloads a signed lamp binary
+from GitHub Releases, verifies the LSIG footer locally, then pushes it
+to a paired lamp over BLE. The lamp accepts the OTA, reboots into the
+new version, and then propagates that exact same image to peers it
+meets over ESP-NOW mesh — every running lamp is its own
+"distributor", sourcing the bytes directly out of its running OTA
+partition. No wisp involvement, no embedded blob, no separate
+distribution channel.
 
 ## One-time setup (per workstation)
 
@@ -41,25 +49,19 @@ because every lamp will reject any signature not matching its baked-in
 Same path applies to deliberate rotation (e.g. dev key → production key).
 Plan accordingly.
 
-## Building signed firmware for OTA push
-
-The lamp + wisp builds are coupled. Run in this order:
+## Building signed firmware
 
 ```sh
 cd software/lamp-os && pio run -e upesy_wroom
   # post-build sign_firmware.py appends LSIG footer to firmware.bin,
-  # writes firmware-signed.bin alongside it.
+  # writes firmware-signed.bin alongside it. This is what the app pushes
+  # over BLE to seed gossip-OTA across the fleet.
 
 cd software/wisp && pio run -e seeed_xiao_esp32_c6
-  # pre-build embed_firmware.py reads the lamp's firmware-signed.bin,
-  # writes software/wisp/include/embedded_firmware_generated.h.
-  # FirmwareCarrier reads this at boot and offers it over the mesh.
+  # post-build sign_firmware.py runs the same way. The signed wisp
+  # binary has no consumer in v1 (wisps don't gossip-OTA), but the hook
+  # stays so a future wisp self-OTA path doesn't need re-plumbing.
 ```
-
-If the lamp build is missing when the wisp builds, the wisp pre-build
-fails with a clear error. Set `WISP_ALLOW_STUB_FIRMWARE=1` to build the
-wisp with a 200-byte 0xFF placeholder (FirmwareCarrier rejects it at
-runtime, distributor stays Disabled, wisp continues palette work).
 
 ## Channels
 
@@ -68,10 +70,9 @@ The LSIG footer carries an 8-byte ASCII channel field. Default is
 
 ```sh
 LAMP_FIRMWARE_CHANNEL=beta pio run -e upesy_wroom
-cd ../wisp && pio run -e seeed_xiao_esp32_c6
 ```
 
-A `beta` wisp's OFFER carries `channel="beta"`; a `stable` lamp silently
+A `beta` lamp's OFFER carries `channel="beta"`; a `stable` peer silently
 drops it. Cross-channel migration only via USB re-flash.
 
 ## Files in detail
@@ -88,7 +89,8 @@ drops it. Cross-channel migration only via USB re-flash.
 ### `sign_firmware.py`
 
 - PIO post-build hook for `[env:upesy_wroom]` in
-  `software/lamp-os/platformio.ini`.
+  `software/lamp-os/platformio.ini` and `[env:seeed_xiao_esp32_c6]` in
+  `software/wisp/platformio.ini`.
 - Reads `firmware.bin` from PIO's build dir, appends 96-byte LSIG footer
   (magic + channel + version + signedRegionLen + reserved + ed25519
   signature), writes `firmware-signed.bin` alongside.
@@ -98,16 +100,3 @@ drops it. Cross-channel migration only via USB re-flash.
   defines file is absent.
 - Idempotent: if `firmware-signed.bin` is newer than `firmware.bin` AND
   newer than the private key, skips re-signing.
-
-### `embed_firmware.py`
-
-- PIO pre-build hook for `[env:seeed_xiao_esp32_c6]` in
-  `software/wisp/platformio.ini`.
-- Reads
-  `software/lamp-os/.pio/build/upesy_wroom/firmware-signed.bin`, writes
-  `software/wisp/include/embedded_firmware_generated.h` containing the
-  bytes as a 16-bytes-per-line hex array.
-- Content-based staleness check (sha256 over the blob); skips
-  regeneration when the embed is current.
-- Honors `WISP_ALLOW_STUB_FIRMWARE=1` to emit a 200-byte 0xFF stub when
-  the lamp build is missing.

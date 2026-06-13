@@ -1,12 +1,22 @@
 #include "social.hpp"
 
 #include <Arduino.h>
+#include <cstring>
 
 #include "components/network/nearby_lamps.hpp"
 #include "components/personality/personality_engine.hpp"
+#include "components/firmware/firmware_distributor.hpp"
+#include "components/firmware/firmware_receiver.hpp"
 #include "config/config.hpp"
 #include "util/color.hpp"
 #include "util/fade.hpp"
+#include "version.hpp"
+
+// Defined in standard_lamp.cpp at global scope (the
+// `lamp::firmwareReceiver` pattern isn't used because firmware_receiver.hpp
+// doesn't expose an extern decl). Used by otaPulseMultiplier to detect
+// receiver-role pulse cadence.
+extern lamp::FirmwareReceiver firmwareReceiver;
 
 namespace lamp {
 
@@ -65,9 +75,23 @@ void SocialBehavior::draw() {
       // Phase 3 — ease out back to the underlying expression's pixel.
       const uint32_t fadeFrame = frame - (easeIn + hold);
       out = fade(foundLampColor, buf, fadeOut - 1, fadeFrame);
+    } else if (otaHoldActive_ &&
+               firmwareDistributor.isDistributingTo(otaHoldPeerMac_)) {
+      // Phase 4 (OTA-hold) — past the normal fadeOut window AND we're
+      // mid-OTA to the peer we just greeted. Hold the peer's color so
+      // the brightness pulse modulates on a meaningful hue rather than
+      // snapping back to the underlying expression mid-update. The
+      // distributor's session naturally terminates (success / fail /
+      // pivot) — `isDistributingTo` flips false at that point and we
+      // fall through to the else below, returning the shade to the
+      // underlying buffer.
+      out = foundLampColor;
     } else {
       // Past the explicit window — leave buffer alone (playOnce will stop
-      // us at `frames` regardless).
+      // us at `frames` regardless). Also clear the OTA-hold flag here so
+      // the next greeting starts with a fresh state regardless of how
+      // this session ended.
+      if (otaHoldActive_) otaHoldActive_ = false;
       out = buf;
     }
     fb->buffer[i] = out;
@@ -79,6 +103,45 @@ void SocialBehavior::draw() {
 void SocialBehavior::control() {
   if (animationState != STOPPED) return;
   const uint32_t now = millis();
+
+  // -- Gossip OTA tick (Phase 5b'.4) -------------------------------------
+  // Fires INDEPENDENTLY of the social cooldowns/dispositions below. The
+  // user's intent (locked in the design): "personality controls the
+  // visual greeting, not whether firmware propagates. Version updates
+  // outrank social preference." So this loop runs even when:
+  //   - The greeting cooldown gate (just below) would skip greeting
+  //   - The Ambivert fatigue window blocks greeting
+  //   - A peer's disposition is Salty (skipped for greeting elsewhere)
+  //
+  // The distributor's per-peer backoff (10 min after a failure, idempotent
+  // on Idle re-trigger) handles dedup so calling considerPeerForOta on
+  // every social tick is safe.
+  //
+  // Two throttles to keep this cheap:
+  //   (1) Skip entirely while distributor.isInProgress() — the single-
+  //       source mutex blocks concurrent sessions, so scanning during
+  //       OTA finds nothing actionable.
+  //   (2) Throttle the ESP-NOW vector snapshot to kOtaScanIntervalMs
+  //       (500 ms). Lamps emit HELLO every 1-2s, so this still catches
+  //       every fresh sighting while collapsing the 60 Hz tick rate.
+  //
+  // Iterates ESP-NOW-reachable peers (not BLE) because firmwareVersion is
+  // only populated by ESP-NOW HELLO; BLE-only sightings carry no version.
+  if (!firmwareDistributor.isInProgress() &&
+      (lastOtaScanMs_ == 0 ||
+       static_cast<int32_t>(now - lastOtaScanMs_) >=
+           static_cast<int32_t>(kOtaScanIntervalMs))) {
+    lastOtaScanMs_ = now;
+    std::vector<NearbyLamp> espNowPeers =
+        nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
+    for (const auto& p : espNowPeers) {
+      if (!p.hasMac) continue;
+      if (p.firmwareVersion == 0) continue;
+      if (p.firmwareVersion >= lamp::FIRMWARE_VERSION) continue;
+      firmwareDistributor.considerPeerForOta(p.mac, p.firmwareVersion, now);
+    }
+  }
+
   // Wraparound-safe time comparison (millis() rolls over at ~49 days).
   // The re-greet check below uses the same idiom for consistency.
   if (static_cast<int32_t>(now - nextAcknowledgeTimeMs) < 0) return;
@@ -149,6 +212,21 @@ void SocialBehavior::control() {
     pulseBackStrength = tuning.pulseBackStrength;
     frames            = tuning.totalFrames;
 
+    // OTA-hold: if we're mid-OTA to the peer we're about to greet, extend
+    // the animation lifetime to give the OTA-hold draw branch room to
+    // run. Distributor session lifetime is ~15-45s for a 1.5 MB image;
+    // kOtaHoldFrameBudget (~60s at 60fps) covers that with slack.
+    if (it->hasMac && firmwareDistributor.isDistributingTo(it->mac)) {
+      otaHoldActive_ = true;
+      std::memcpy(otaHoldPeerMac_, it->mac, 6);
+      frames += kOtaHoldFrameBudget;
+    } else {
+      // Defensive: clear any stale flag from a prior greeting whose OTA
+      // already finished but where the next greeting fired before the
+      // draw-side clear ran (e.g. greeting cooldown is short).
+      otaHoldActive_ = false;
+    }
+
     // Record into our persistent (in-memory) greeting log.
     lastGreetedAtMs_[it->name] = now;
     if (lastGreetedAtMs_.size() > MAX_GREETED_TRACKED) {
@@ -202,5 +280,94 @@ void SocialBehavior::control() {
     break;
   }
 };
+
+// Returns the brightness multiplier from a SINGLE-pulse cadence.
+// Pattern repeats: dip → hold → return → pause. Falls and rises are
+// linear; the perceptible "easing" comes from the explicit hold beat
+// at the minimum, not from a smoothed curve. Tested looks fine on
+// hardware at the configured tunables — bumping to a parabolic ease
+// would gain little visual difference for the multiply-per-frame cost.
+static uint8_t singlePulseMul(uint32_t phaseMs) {
+  const uint32_t period =
+      SocialBehavior::kOtaPulseDipMs +
+      SocialBehavior::kOtaPulseHoldMs +
+      SocialBehavior::kOtaPulseReturnMs +
+      SocialBehavior::kOtaPulsePauseMs;
+  const uint32_t t = phaseMs % period;
+  // Slice the period into the four phases.
+  if (t < SocialBehavior::kOtaPulseDipMs) {
+    // Linear fall 100 → kOtaPulseMinPct over kOtaPulseDipMs.
+    const float f = static_cast<float>(t) / SocialBehavior::kOtaPulseDipMs;
+    const float dip = (100 - SocialBehavior::kOtaPulseMinPct) * f;
+    return static_cast<uint8_t>(100.0f - dip);
+  }
+  uint32_t off = SocialBehavior::kOtaPulseDipMs;
+  if (t < off + SocialBehavior::kOtaPulseHoldMs) {
+    return SocialBehavior::kOtaPulseMinPct;
+  }
+  off += SocialBehavior::kOtaPulseHoldMs;
+  if (t < off + SocialBehavior::kOtaPulseReturnMs) {
+    // Linear rise kOtaPulseMinPct → 100 over kOtaPulseReturnMs.
+    const float f = static_cast<float>(t - off) / SocialBehavior::kOtaPulseReturnMs;
+    const float rise = (100 - SocialBehavior::kOtaPulseMinPct) * f;
+    return static_cast<uint8_t>(SocialBehavior::kOtaPulseMinPct + rise);
+  }
+  // Pause — return at full brightness.
+  return 100;
+}
+
+// Returns the brightness multiplier from a DOUBLE-pulse cadence.
+// Pattern: dip → return → short gap → dip → return → long pause.
+static uint8_t doublePulseMul(uint32_t phaseMs) {
+  // Combine two short pulses (shorter dip + return) followed by a longer
+  // pause. A "short" pulse uses half the single-pulse dip/return for
+  // tighter rhythm so the doubles read as a distinct pattern.
+  const uint32_t shortDip    = SocialBehavior::kOtaPulseDipMs / 2;
+  const uint32_t shortReturn = SocialBehavior::kOtaPulseReturnMs / 2;
+  const uint32_t period =
+      (shortDip + shortReturn) * 2 +
+      SocialBehavior::kOtaPulseDoubleGapMs +
+      SocialBehavior::kOtaPulseDoublePauseMs;
+  const uint32_t t = phaseMs % period;
+  uint32_t off = 0;
+
+  auto dipPhase = [&](uint32_t windowStart) -> int {
+    // -1 → not in this dip; 0..100 → multiplier inside the dip+return.
+    if (t < windowStart || t >= windowStart + shortDip + shortReturn) return -1;
+    const uint32_t rel = t - windowStart;
+    if (rel < shortDip) {
+      const float f = static_cast<float>(rel) / shortDip;
+      const float dip = (100 - SocialBehavior::kOtaPulseMinPct) * f;
+      return static_cast<int>(100.0f - dip);
+    }
+    const float f = static_cast<float>(rel - shortDip) / shortReturn;
+    const float rise = (100 - SocialBehavior::kOtaPulseMinPct) * f;
+    return static_cast<int>(SocialBehavior::kOtaPulseMinPct + rise);
+  };
+
+  int v = dipPhase(off);
+  if (v >= 0) return static_cast<uint8_t>(v);
+  off += shortDip + shortReturn + SocialBehavior::kOtaPulseDoubleGapMs;
+
+  v = dipPhase(off);
+  if (v >= 0) return static_cast<uint8_t>(v);
+
+  // Long pause.
+  return 100;
+}
+
+uint8_t SocialBehavior::otaPulseMultiplier(uint32_t nowMs) const {
+  // Distributor sending = single-pulse. Receiver receiving = double-pulse.
+  // If both somehow report in-progress (shouldn't happen with the
+  // single-source mutex), prefer the receiver pattern — the lamp is the
+  // one being updated, more important to surface.
+  if (firmwareReceiver.isInProgress()) {
+    return doublePulseMul(nowMs);
+  }
+  if (firmwareDistributor.isInProgress()) {
+    return singlePulseMul(nowMs);
+  }
+  return 100;
+}
 
 }  // namespace lamp
