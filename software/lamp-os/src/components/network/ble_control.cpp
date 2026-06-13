@@ -661,6 +661,20 @@ class WispStatusCallback : public NimBLECharacteristicCallbacks {
 void notifyWispStatus() {
   if (!s_wispStatusChar) return;
   auto json = lamp::nearbyLamps.getWispStatusReadJson();
+#ifdef LAMP_DEBUG
+  // Diagnostic for the 2026-06-13 "wisp icon doesn't show even though the
+  // lamp IS being wisp-painted" report. Print the actual JSON length and
+  // peek at the controllingBase/controllingShade values so we can confirm
+  // whether the LAMP is reporting them as true at notify-out time, which
+  // pins the regression to either the firmware state machine
+  // (isWispActive returns false) or the app (parses the JSON but doesn't
+  // render the icon).
+  const bool sawCB = json.find("\"controllingBase\":true") != std::string::npos;
+  const bool sawCS = json.find("\"controllingShade\":true") != std::string::npos;
+  Serial.printf("[wisp_state] notify len=%u controllingBase=%d controllingShade=%d preview=%.220s\n",
+                (unsigned)json.length(), sawCB ? 1 : 0, sawCS ? 1 : 0,
+                json.c_str());
+#endif
   s_wispStatusChar->setValue(json);
   s_wispStatusChar->notify();
 }

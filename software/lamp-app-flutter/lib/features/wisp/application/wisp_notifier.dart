@@ -104,6 +104,7 @@ class WispNotifier extends _$WispNotifier {
         .subscribe(lampId, BleUuids.controlService, BleUuids.wispStatus)
         .listen((bytes) {
       final next = WispStatus.fromBytes(bytes);
+      _ingestWispBroadcastPalette(next.manualPalette);
       state = AsyncData(next);
     });
 
@@ -119,7 +120,9 @@ class WispNotifier extends _$WispNotifier {
     unawaited(_hydrateManualPaletteFromPrefs());
 
     try {
-      return await _repo.readStatus();
+      final initial = await _repo.readStatus();
+      _ingestWispBroadcastPalette(initial.manualPalette);
+      return initial;
     } catch (_) {
       // Read can fail if the BLE link isn't fully ready yet (e.g. the
       // user navigated to the Wisp tab during a reconnect). Empty state
@@ -127,6 +130,46 @@ class WispNotifier extends _$WispNotifier {
       // as soon as the lamp pushes the next status.
       return WispStatus.empty;
     }
+  }
+
+  /// Consume the manualPalette field from a fresh wispStatus payload.
+  /// When the wisp has broadcast its canonical palette (MSG_WISP_PALETTE
+  /// → cached on the lamp → served back in this JSON), it becomes the
+  /// source of truth — overriding the SharedPreferences-cached view that
+  /// previously diverged per-lampId. The SharedPreferences cache stays
+  /// as the offline fallback (a lamp may be paint-controlled by a wisp
+  /// the app can't currently reach via BLE — we want the editor to open
+  /// populated even then).
+  ///
+  /// Doesn't touch the draft if the user is mid-edit (draft has diverged
+  /// from the previous saved). The next save replaces the wisp's view
+  /// anyway.
+  void _ingestWispBroadcastPalette(List<LampColor>? broadcast) {
+    if (broadcast == null || broadcast.isEmpty) return;
+    // No change? Skip the work.
+    if (_palettesEqual(_savedManualPalette, broadcast)) return;
+    // Capture pristine-vs-OLD-saved BEFORE we overwrite — the pristine
+    // check is "did the user touch the draft since the last save". If
+    // we computed it after the overwrite, a divergent broadcast would
+    // always look dirty and we'd never refresh the editor view, which
+    // was the on-hardware repro the user hit on 2026-06-13.
+    final wasDraftPristine = _draftManualPalette.isEmpty ||
+        _palettesEqual(_draftManualPalette, _savedManualPalette);
+    _savedManualPalette = List<LampColor>.unmodifiable(broadcast);
+    if (wasDraftPristine) {
+      _draftManualPalette = List<LampColor>.from(_savedManualPalette);
+    }
+    // Mirror to SharedPreferences for the next cold-start before the
+    // wisp's next broadcast lands.
+    unawaited(_persistManualPaletteToPrefs());
+  }
+
+  static bool _palettesEqual(List<LampColor> a, List<LampColor> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Load the last persisted manual palette for this lamp. No-op if the

@@ -147,5 +147,56 @@ void main() {
       ));
       expect(s.auroraDetected, isFalse);
     });
+
+    test('manualPalette decodes base64-packed RGB into LampColor triples', () {
+      // 3 colors: (199, 0, 16), (49, 155, 255), (1, 205, 103)
+      // base64('C700 1031 9BFF 01CD 67') with proper byte alignment.
+      // We compute the base64 explicitly so the test is self-checking.
+      final raw = [199, 0, 16, 49, 155, 255, 1, 205, 103];
+      final b64 = base64Encode(raw);
+      final s = WispStatus.fromBytes(_b(
+        '{"wispMac":"AA:BB:CC:DD:EE:FF","manualPalette":"$b64"}',
+      ));
+      expect(s.manualPalette, isNotNull);
+      expect(s.manualPalette!.length, 3);
+      expect(s.manualPalette![0].r, 199);
+      expect(s.manualPalette![0].g, 0);
+      expect(s.manualPalette![0].b, 16);
+      expect(s.manualPalette![0].w, 0);
+      expect(s.manualPalette![1].r, 49);
+      expect(s.manualPalette![1].g, 155);
+      expect(s.manualPalette![1].b, 255);
+      expect(s.manualPalette![2].r, 1);
+      expect(s.manualPalette![2].g, 205);
+      expect(s.manualPalette![2].b, 103);
+    });
+
+    test('manualPalette absent → null', () {
+      final s = WispStatus.fromBytes(_b(
+        '{"wispMac":"AA:BB:CC:DD:EE:FF"}',
+      ));
+      expect(s.manualPalette, isNull);
+    });
+
+    test('manualPalette with malformed base64 → null', () {
+      final s = WispStatus.fromBytes(_b(
+        '{"wispMac":"AA:BB:CC:DD:EE:FF","manualPalette":"not!!base64"}',
+      ));
+      expect(s.manualPalette, isNull);
+    });
+
+    test('manualPalette truncates partial trailing triple', () {
+      // 7 bytes = 2 full triples + 1 stray byte. The stray byte is
+      // dropped; parser surfaces 2 colors. Defends against the wisp
+      // sending an odd payload length (shouldn't happen, but the
+      // parser is the defense-in-depth line if it does).
+      final raw = [10, 20, 30, 40, 50, 60, 70];
+      final b64 = base64Encode(raw);
+      final s = WispStatus.fromBytes(_b(
+        '{"wispMac":"AA:BB:CC:DD:EE:FF","manualPalette":"$b64"}',
+      ));
+      expect(s.manualPalette, isNotNull);
+      expect(s.manualPalette!.length, 2);
+    });
   });
 }

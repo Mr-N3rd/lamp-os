@@ -154,16 +154,49 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
     // this room) still propagate. Same gossip semantics as MSG_HELLO.
     link_.broadcast(data, len);
   } else if (msgType == lamp_protocol::MSG_WISP_CLAIM) {
-    // Wisp-to-wisp coordination. Lamps don't act on the payload — they
-    // just gossip-relay so a wisp on the other side of the mesh learns
-    // about claims from wisps it can't directly hear. Dedup BEFORE
-    // rebroadcast so the gossip storm dies out instead of cycling.
+    // Wisp-to-wisp coordination. Lamps don't act on the payload.
+    //
+    // Stopped gossip-relaying on 2026-06-13 after a sub-agent traffic audit
+    // showed CLAIM relay was the single biggest new broadcast load — every
+    // claim is rebroadcast by every lamp every 2 s, which adds ~900 B per
+    // 30 s of pure relay overhead in a 2-lamp room. With BLE coex (IDF
+    // #14904) already starving ESP-NOW under load, this was contributing
+    // to wispOps occasionally getting lost on the mesh.
+    //
+    // The original rationale for relaying (so a wisp on the other side of
+    // the mesh hears about claims from wisps it can't directly hear) only
+    // matters in multi-wisp deployments where two wisps can't hear each
+    // other directly but can via a lamp. Single-wisp setups never need
+    // the relay; even multi-wisp setups in the same room hear each other
+    // directly. If/when a true multi-room multi-wisp deployment surfaces,
+    // we can re-enable selectively.
+    //
+    // Still dedup so the wisp's own gossip back doesn't repeat-fire the
+    // (currently absent) downstream handlers if a future change adds one.
     lamp_protocol::ParsedWispClaim wc;
     if (!lamp_protocol::parseWispClaim(data, len, wc)) return;
-    if (!wispClaimDedup_.record(wc.sourceMac,
-                                lamp_protocol::MSG_WISP_CLAIM, wc.seq)) {
+    (void)wispClaimDedup_.record(wc.sourceMac,
+                                 lamp_protocol::MSG_WISP_CLAIM, wc.seq);
+  } else if (msgType == lamp_protocol::MSG_WISP_PALETTE) {
+    // Wisp's manualPalette broadcast. Lamps cache + gossip-relay; the
+    // cache feeds CHAR_WISP_STATUS so the app sees a converged palette
+    // through any lamp it connects to. Dedup-before-relay so the gossip
+    // storm dies out instead of cycling.
+    lamp_protocol::ParsedWispPalette wp;
+    if (!lamp_protocol::parseWispPalette(data, len, wp)) return;
+    if (!wispPaletteDedup_.record(wp.sourceMac,
+                                  lamp_protocol::MSG_WISP_PALETTE, wp.seq)) {
       return;
     }
+    PendingWispPalette slot;
+    std::memcpy(slot.sourceMac, wp.sourceMac, 6);
+    slot.count = wp.count;
+    if (wp.count > 0 && wp.rgb) {
+      std::memcpy(slot.rgb, wp.rgb,
+                  static_cast<size_t>(wp.count) *
+                      lamp_protocol::WISP_PALETTE_ENTRY_SIZE);
+    }
+    postPendingWispPalette(slot);
     link_.broadcast(data, len);
   } else if (msgType == lamp_protocol::MSG_OVERRIDE_COLORS) {
     lamp_protocol::ParsedOverrideColors p;

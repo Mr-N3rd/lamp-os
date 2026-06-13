@@ -120,6 +120,16 @@ struct PendingWispHello {
   uint32_t carriedFwVersion;
 };
 
+// MSG_WISP_PALETTE pending slot. Holds the wisp's broadcast manualPalette
+// until the Core 1 drain forwards it into NearbyLamps::cacheWispPalette.
+// Sized to kMaxWispPaletteColors * 3 = 150 bytes (matches the on-wire cap).
+struct PendingWispPalette {
+  uint8_t sourceMac[6];
+  uint8_t count;  // 0..kMaxWispPaletteColors
+  uint8_t rgb[lamp_protocol::kMaxWispPaletteColors *
+              lamp_protocol::WISP_PALETTE_ENTRY_SIZE];
+};
+
 // MSG_EVENT pending slot. ShowReceiver's WiFi-task recv path does the
 // stagger-list lookup (own MAC → delayMs) and memcpys the result here;
 // the Core 1 drain calls ExpressionManager::tryHandleExpressionEvent
@@ -146,6 +156,7 @@ void postPendingRestoreColors(const PendingRestoreColors& src);
 void postPendingOverrideBrightness(const PendingOverrideBrightness& src);
 void postPendingRestoreBrightness(const PendingRestoreBrightness& src);
 void postPendingWispHello(const PendingWispHello& src);
+void postPendingWispPalette(const PendingWispPalette& src);
 void postPendingEvent(const PendingEvent& src);
 
 // Forward decl — full type lives in components/firmware/firmware_receiver.hpp.
@@ -242,6 +253,10 @@ class ShowReceiver {
   // the gossip relay doesn't echo a frame back to its origin. Lamps
   // don't otherwise act on MSG_WISP_CLAIM — pure pass-through.
   lamp_protocol::DedupRing wispClaimDedup_;
+  // Wisp manualPalette broadcasts. Same dedup + gossip-relay pattern as
+  // wispHello/wispClaim. Lamps DO act on the payload — cache it for the
+  // app to read via CHAR_WISP_STATUS.
+  lamp_protocol::DedupRing wispPaletteDedup_;
   lamp_protocol::DedupRing eventDedup_;
   // Single shared dedup for MSG_FW_OFFER/CHUNK/DONE per lamp-side plan §5.
   // One wisp owns all outbound FW seqs; the 6 msgTypes in this family

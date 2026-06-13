@@ -75,20 +75,23 @@ class WispRepository {
     });
   }
 
-  /// Phase E manual palette. The wisp persists the (clamped to 10) color
+  /// Phase E manual palette. The wisp persists the (clamped to 50) color
   /// list in NVS and, if currently in Manual mode, pushes it into
   /// CurrentPalette so the lamps repaint without a mode flip. Palette is
   /// emitted as a list of `[r,g,b]` integer triples; W is intentionally
   /// dropped — the lamp's headroom math handles warm tinting locally.
+  /// The cap aligns with `lamp_protocol::kMaxWispPaletteColors` on the
+  /// firmware side so the MSG_WISP_PALETTE broadcast that follows can
+  /// carry the whole palette without truncation.
   Future<void> setManualPalette(List<LampColor> palette) async {
     await _writeOp({
       'char': 'wispOp',
       'op': 'setManualPalette',
       'colors': [
-        // The wisp dispatcher caps at 10 even if we send more, but we
+        // The wisp dispatcher caps at 50 even if we send more, but we
         // also clamp client-side so a slightly stale UI doesn't waste
         // wire bytes on values that will be silently discarded.
-        for (final c in palette.take(10)) [c.r, c.g, c.b],
+        for (final c in palette.take(50)) [c.r, c.g, c.b],
       ],
     });
   }

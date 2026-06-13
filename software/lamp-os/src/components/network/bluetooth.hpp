@@ -7,27 +7,23 @@
 // Lamp manufacturer identifier
 #define BLE_LAMP_MAGIC_NUMBER 42069
 
-// Central-scan duty cycle.
+// Scan every INTERVAL for WINDOW.
 //
-// Was 15 ms window every 1000 ms (1.5% duty, continuous bursts every 1 s).
-// Overnight log analysis on 2026-06-13 confirmed SW coex (ENABLED per
-// platformio.ini) arbitrates BLE scan-request TX against ESP-NOW recv,
-// starving paint delivery. Two lamps + one wisp showed FAIL rate triple
-// from ~1/10min to ~30/10min the moment the app disconnected and the
-// scan auto-resumed.
-//
-// New: 100 ms window every 10 000 ms (1.0% duty, sparse bursts every 10 s).
-// Lamp advertises at 30-60 ms; a 100 ms window catches the next adv
-// reliably, so SocialBehavior's BLE-proximity signal stays intact.
-// kPrune (2 min) still fires often enough.
+// Tried slowing this to 100 ms / 10 000 ms / 10 000 ms on 2026-06-13 as
+// part of the SW-coex fix — the longer scan window + interval combination
+// broke app-side discovery in the field (app couldn't find lamps without
+// a force-reboot). Reverted to the previously-known-good values pending
+// a smaller-blast-radius coex tweak. The wisp-side mDNS gate from the
+// same commit (`500520c`) stays — that one's verified clean and removes
+// the bigger of the two coex contributors.
 #define BLE_GAP_SCAN_INTERVAL_MS 400
-#define BLE_GAP_SCAN_WINDOW_MS 100
+#define BLE_GAP_SCAN_WINDOW_MS 15
 
 // Advertise every INTERVAL
-#define BLE_GAP_ADV_INTERVAL_MS 10000
+#define BLE_GAP_ADV_INTERVAL_MS 1000
 
 // Scan time
-#define BLE_GAP_SCAN_TIME_MS 10000
+#define BLE_GAP_SCAN_TIME_MS 1000
 
 // Advertising intervals (BLE units of 0.625 ms). Lamp is mains-powered so
 // no reason not to advertise fast.

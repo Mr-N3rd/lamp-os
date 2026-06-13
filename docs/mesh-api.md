@@ -69,6 +69,7 @@ Four behavioral tiers, each with its own crypto posture, reach, and lifetime:
 | `MSG_HELLO` (0x01) | broadcast | yes — gossip-rebroadcast on first sight | `helloDedup_` 64-slot ring per (sourceMac, seq) |
 | `MSG_CONTROL_OP` (0x03) | unicast or broadcast | yes — unconditional after FLAG_LOCAL_ONLY retirement | `controlOpDedup_` 64-slot ring |
 | `MSG_WISP_HELLO` (0x20) | broadcast | yes — gossip-rebroadcast | `wispHelloDedup_` 64-slot ring |
+| `MSG_WISP_PALETTE` (0x26) | broadcast | yes — gossip-rebroadcast | `wispPaletteDedup_` 64-slot ring |
 | `MSG_OVERRIDE_COLORS` (0x21) | unicast | **no** — single-hop, addressedToUs filter | n/a (no relay) |
 | `MSG_RESTORE_COLORS` (0x22) | unicast or broadcast | **no** — single-hop | n/a |
 | `MSG_OVERRIDE_BRIGHTNESS` (0x23) | unicast | **no** — single-hop | n/a |
@@ -112,6 +113,17 @@ carriedFwChannel(8 utf-8, null-padded) + carriedFwVersion(4 LE)
 flags bit 0 = paintMode, bit 1 = wifiConnected, bit 2 = auroraConnected
 ```
 
+**`MSG_WISP_PALETTE` (0x26)** — Wisp's canonical manual palette, broadcast for app convergence. Added 2026-06-13 because the prior design kept the palette in per-lampId Flutter SharedPreferences, which diverged when the same operator edited via one lamp and viewed via another.
+```
+header(6) + sourceMac(6) + count(1) + rgb[count*3]
+= 13..163 bytes  (count ≤ kMaxWispPaletteColors = 50)
+```
+- **Sender**: wisp(s) only. Lamps cache + gossip-relay (dedup ring `wispPaletteDedup_`); they never originate.
+- **Cadence**: piggybacked on the existing 30 s `emitStatus()` tick — emitted right after `MSG_CONTROL_OP wispStatus` in the same broadcast pass. Also fired on `triggerOnChange()` after a `setManualPalette` wispOp, so app edits propagate within ~2 s.
+- **Encoding**: raw R, G, B bytes; W is intentionally dropped (the lamp's headroom math does warm tinting locally).
+- **Truncation**: Aurora palettes can exceed 50 colors; the wisp builder caps at `kMaxWispPaletteColors` and logs once per oversize burst (`[wisp.beacon] manualPalette truncated:`). The full palette stays usable on the wisp side for actual paint distribution — only the app's view of the palette gets the cap.
+- **Lamp-side cache**: each lamp stores the latest `(mac, rgb[], count)` in `NearbyLamps::WispCache.manualPaletteRgb`. The cache is exposed to the app inside `CHAR_WISP_STATUS` reads as a base64-encoded `manualPalette` field — see the wispStatus envelope below.
+
 ### Tier 2 — Authenticated commands
 
 **`MSG_CONTROL_OP` (0x03)** — Authenticated peer command. Unicast or broadcast.
@@ -138,12 +150,12 @@ After the MSG_EVENT cascade migration, CONTROL_OP no longer carries `triggerExpr
 }
 ```
 - **Sender**: wisp(s) only. Lamps gossip-relay (per the v0x03 relay rule for `MSG_CONTROL_OP`) but never originate.
-- **Cadence**: on-change + 30s heartbeat. Change triggers: zone change, WiFi connect/disconnect, Aurora connect/disconnect.
+- **Cadence**: on-change + 30s heartbeat. Change triggers: zone change, WiFi connect/disconnect, Aurora connect/disconnect. `MSG_WISP_PALETTE` is emitted in the same tick (see Tier 1) so the app's view of the palette converges on the same cadence.
 - **`zoneSource`**: `"nvs"` | `"firstSeen"` | `"appOp"` | `"none"`.
 - **`observedZones`**: capped at 16 entries (oldest-eviction FIFO).
 - **`lastSeenMs`**: wisp-local `millis()` at emission. Does not survive wisp reboot — the app does local-epoch math for "X seconds ago" UI rather than trusting this value across reconnects.
-- **Payload budget**: under 230 B (`CONTROL_MAX_PAYLOAD`). Runtime guard drops oversize frames rather than truncating.
-- **Lamp-side cache**: each lamp keeps the latest `wispStatus` per wisp MAC in `NearbyLamps`. `CHAR_WISP_STATUS` reads merge this cache with the last `MSG_WISP_HELLO` snapshot for the same MAC.
+- **Payload budget**: under 230 B (`CONTROL_MAX_PAYLOAD`). Runtime guard drops oversize frames rather than truncating. `manualPalette` is intentionally NOT carried here — it ships via the separate `MSG_WISP_PALETTE` broadcast.
+- **Lamp-side cache**: each lamp keeps the latest `wispStatus` per wisp MAC in `NearbyLamps`. `CHAR_WISP_STATUS` reads merge this cache with the last `MSG_WISP_HELLO` snapshot AND the cached manualPalette (base64-encoded `manualPalette` field in the served JSON) for the same MAC.
 
 `wispOp` — app → wisp, control writes proxied through any nearby lamp.
 ```json

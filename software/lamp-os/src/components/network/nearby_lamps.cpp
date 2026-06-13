@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "util/base64.hpp"
+
 namespace lamp {
 
 NearbyLamps nearbyLamps;  // global instance
@@ -311,6 +313,43 @@ void NearbyLamps::cacheWispStatus(const uint8_t mac[6],
   xSemaphoreGive(mutex_);
 }
 
+void NearbyLamps::cacheWispPalette(const uint8_t mac[6],
+                                    const uint8_t* rgb, uint8_t count) {
+  // Loop-task-only writer (drain of pendingWispPalette on Core 1). Same
+  // mutex pattern as cacheWispStatus: portMAX_DELAY take because the BLE
+  // read side (Core 0) uses a bounded 2 ms take, so the writer never
+  // starves the reader for long.
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  // Different wisp — drop stale per-wisp data so the next BLE read doesn't
+  // merge wisp-A's palette under wisp-B's MAC. Mirrors the mac-mismatch
+  // branch in cacheWispStatus.
+  if (wispCache_.present && std::memcmp(wispCache_.mac, mac, 6) != 0) {
+    wispCache_.lastStatusJson.clear();
+    wispCache_.lastStatusMs = 0;
+    wispCache_.lastHelloMs = 0;
+    wispCache_.wispVersion = 0;
+    wispCache_.flags = 0;
+    wispCache_.paletteIdPrefix[0] = '\0';
+    wispCache_.carriedFwChannel[0] = '\0';
+    wispCache_.carriedFwVersion = 0;
+  }
+  std::memcpy(wispCache_.mac, mac, 6);
+  wispCache_.present = true;
+  // Clamp at the cache slot capacity (150 B / 3 = 50 colors). The wisp
+  // builder also caps at kMaxWispPaletteColors, but defending here keeps
+  // the cache safe against a future protocol bump.
+  static constexpr uint8_t kSlotMaxColors =
+      static_cast<uint8_t>(sizeof(WispCache{}.manualPaletteRgb) / 3);
+  const uint8_t safeCount = count > kSlotMaxColors ? kSlotMaxColors : count;
+  if (safeCount > 0 && rgb) {
+    std::memcpy(wispCache_.manualPaletteRgb, rgb,
+                static_cast<size_t>(safeCount) * 3);
+  }
+  wispCache_.manualPaletteCount = safeCount;
+  wispCache_.lastPaletteMs = millis();
+  xSemaphoreGive(mutex_);
+}
+
 void NearbyLamps::cacheWispMacFromPaint(const uint8_t mac[6]) {
   // Bounded take: called from the loop-task drain of pendingOverrideColors
   // on Core 1 (see standard_lamp.cpp's OVERRIDE_COLORS branch). Loop-task
@@ -439,6 +478,21 @@ std::string NearbyLamps::getWispStatusReadJson() {
       doc["shadeWispColor"] = ws.shadeWispColor;
     }
   }
+
+  // manualPalette is INTENTIONALLY OMITTED from this JSON now. The base64
+  // encoding inflated the served payload past ~250 B (~504 B with the
+  // wisp's roster non-empty), which the BLE NOTIFY path silently
+  // truncates at MTU-3 (≈244 B). The app's parser sees a truncated JSON,
+  // returns WispStatus.empty, and the wisp icon disappears + control
+  // flags get lost — exactly the regression observed on hardware
+  // 2026-06-13.
+  //
+  // The manualPalette is still cached in WispCache and surfaced on its
+  // own characteristic — see CHAR_WISP_PALETTE in ble_control.cpp. The
+  // characteristic READ path can carry the full payload (BLE chunked
+  // read isn't bounded by MTU), and the dedicated NOTIFY pushes a tiny
+  // dummy (or the small encoded blob if MTU allows) without inflating
+  // wispStatus.
 
   std::string out;
   serializeJson(doc, out);

@@ -8,6 +8,7 @@ import 'wisp_source_mode.dart';
 import 'zone_source.dart';
 
 const _observedZonesEq = ListEquality<int>();
+const _manualPaletteEq = ListEquality<LampColor>();
 
 /// Default Off-mode color. Matches the wisp firmware's NVS-default for
 /// `offColor` (warm candle-amber); also the fallback when the wispStatus
@@ -45,6 +46,7 @@ class WispStatus {
     this.controllingShade = false,
     this.baseWispColor,
     this.shadeWispColor,
+    this.manualPalette,
   });
 
   /// Sentinel for "no wisp has been heard on this lamp yet" (lamp
@@ -119,6 +121,21 @@ class WispStatus {
 
   /// Same as [baseWispColor] for the Shade surface.
   final LampColor? shadeWispColor;
+
+  /// Wisp's canonical manual palette, broadcast as MSG_WISP_PALETTE and
+  /// served to the app inside the wispStatus JSON as a base64-packed RGB
+  /// blob (`software/lamp-os/src/components/network/nearby_lamps.cpp`,
+  /// `getWispStatusReadJson`). `null` means the lamp hasn't heard a
+  /// palette broadcast yet (typical for the first ~30 s after wisp boot,
+  /// or for offline lamps). The wisp truncates at 50 colors before
+  /// emission; larger Aurora palettes round-trip partially with a
+  /// `[wisp.beacon] manualPalette truncated:` log on the wisp side.
+  ///
+  /// When non-null, this is the source of truth — overrides any
+  /// SharedPreferences-cached palette in the notifier layer. This
+  /// fixes the per-lamp divergence observed on 2026-06-13 when the same
+  /// operator edited the palette via one lamp and viewed it via another.
+  final List<LampColor>? manualPalette;
 
   /// Convenience: are we currently being wisp-painted on either surface?
   bool get controlling => controllingBase || controllingShade;
@@ -218,6 +235,31 @@ class WispStatus {
       }
     }
 
+    // Decode the base64-packed RGB blob that the lamp serves inside
+    // `manualPalette`. Each triple becomes one LampColor (W=0). Returns
+    // null for missing or malformed payloads — callers fall back to the
+    // SharedPreferences cache in that case.
+    List<LampColor>? parseManualPalette(Object? v) {
+      if (v is! String || v.isEmpty) return null;
+      try {
+        final bytes = base64Decode(v);
+        if (bytes.length < 3) return null;
+        final usable = bytes.length - (bytes.length % 3);
+        final colors = <LampColor>[];
+        for (var i = 0; i + 2 < usable; i += 3) {
+          colors.add(LampColor(
+            r: bytes[i],
+            g: bytes[i + 1],
+            b: bytes[i + 2],
+            w: 0,
+          ));
+        }
+        return colors;
+      } catch (_) {
+        return null;
+      }
+    }
+
     final zoneSrc = asString(json['zoneSource']);
     final sourceRaw = json['source'];
     return WispStatus(
@@ -246,6 +288,7 @@ class WispStatus {
       controllingShade: asBool(json['controllingShade']),
       baseWispColor: parseWispHexColor(json['baseWispColor']),
       shadeWispColor: parseWispHexColor(json['shadeWispColor']),
+      manualPalette: parseManualPalette(json['manualPalette']),
     );
   }
 
@@ -255,6 +298,7 @@ class WispStatus {
     List<int>? observedZones,
     WispSourceMode? source,
     LampColor? offColor,
+    List<LampColor>? manualPalette,
   }) {
     return WispStatus(
       currentZone: currentZone ?? this.currentZone,
@@ -276,6 +320,7 @@ class WispStatus {
       controllingShade: controllingShade,
       baseWispColor: baseWispColor,
       shadeWispColor: shadeWispColor,
+      manualPalette: manualPalette ?? this.manualPalette,
     );
   }
 
@@ -301,7 +346,10 @@ class WispStatus {
           controllingBase == other.controllingBase &&
           controllingShade == other.controllingShade &&
           baseWispColor == other.baseWispColor &&
-          shadeWispColor == other.shadeWispColor;
+          shadeWispColor == other.shadeWispColor &&
+          _manualPaletteEq.equals(
+              manualPalette ?? const <LampColor>[],
+              other.manualPalette ?? const <LampColor>[]);
 
   @override
   int get hashCode => Object.hash(
@@ -320,5 +368,8 @@ class WispStatus {
         offColor,
         Object.hash(controllingBase, controllingShade, baseWispColor,
             shadeWispColor),
+        manualPalette == null
+            ? 0
+            : _manualPaletteEq.hash(manualPalette!),
       );
 }

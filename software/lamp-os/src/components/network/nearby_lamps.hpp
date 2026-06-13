@@ -84,6 +84,16 @@ struct WispCache {
   // fields above. Empty until the first wispStatus has been seen.
   std::string lastStatusJson;
   uint32_t lastStatusMs = 0;
+  // Latest MSG_WISP_PALETTE the lamp has heard from this wisp. The wisp
+  // emits this alongside wispStatus every 30 s + on-change so the app's
+  // wisp editor can read the canonical manualPalette through any
+  // connected lamp instead of relying on its own per-lampId
+  // SharedPreferences cache. Served base64-encoded inside
+  // getWispStatusReadJson()'s `manualPalette` field. Capacity matches
+  // lamp_protocol::kMaxWispPaletteColors * 3 = 150 bytes.
+  uint8_t manualPaletteRgb[150] = {0};
+  uint8_t manualPaletteCount = 0;
+  uint32_t lastPaletteMs = 0;
 };
 
 /**
@@ -159,6 +169,16 @@ class NearbyLamps {
   // mesh, regardless of whether a hello has arrived yet.
   void cacheWispStatus(const uint8_t mac[6],
                        const char* json, size_t jsonLen);
+
+  // Cache the latest MSG_WISP_PALETTE broadcast for a given wisp MAC.
+  // Same single-slot semantics as cacheWispStatus — a different MAC
+  // overwrites and clears stale per-wisp data. `rgb` is `count * 3`
+  // bytes of packed R, G, B. `count` is clamped to the on-wire cap
+  // (kMaxWispPaletteColors) so an oversized payload silently truncates
+  // rather than overflowing the cache slot. Loop-task-only writer (drain
+  // of pendingWispPalette on Core 1); portMAX_DELAY take.
+  void cacheWispPalette(const uint8_t mac[6],
+                        const uint8_t* rgb, uint8_t count);
 
   // Light-touch presence ping: assert that we received a wisp-sourced
   // paint frame from [mac]. Same single-slot semantics as cacheWispHello

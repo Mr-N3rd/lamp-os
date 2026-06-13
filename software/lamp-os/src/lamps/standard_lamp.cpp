@@ -185,6 +185,7 @@ lamp::PendingTypedSlot<lamp::PendingRestoreColors>      pendingRestoreColors;
 lamp::PendingTypedSlot<lamp::PendingOverrideBrightness> pendingOverrideBrightness;
 lamp::PendingTypedSlot<lamp::PendingRestoreBrightness>  pendingRestoreBrightness;
 lamp::PendingTypedSlot<lamp::PendingWispHello>          pendingWispHello;
+lamp::PendingTypedSlot<lamp::PendingWispPalette>        pendingWispPalette;
 // MSG_EVENT slot — ShowReceiver's WiFi recv path resolves the per-peer
 // delayMs from the stagger list, memcpys the payload here, and the Core 1
 // drain hands off to expressionManager.tryHandleExpressionEvent which does
@@ -248,6 +249,7 @@ void postPendingRestoreColors(const PendingRestoreColors& src)           { pendi
 void postPendingOverrideBrightness(const PendingOverrideBrightness& src) { pendingOverrideBrightness.post(pendingMux, src); }
 void postPendingRestoreBrightness(const PendingRestoreBrightness& src)   { pendingRestoreBrightness.post(pendingMux, src); }
 void postPendingWispHello(const PendingWispHello& src)                   { pendingWispHello.post(pendingMux, src); }
+void postPendingWispPalette(const PendingWispPalette& src)               { pendingWispPalette.post(pendingMux, src); }
 void postPendingEvent(const PendingEvent& src)                           { pendingEvent.post(pendingMux, src); }
 void postPendingFirmwareControl(const PendingFirmwareControl& src)       { pendingFirmwareControl.post(pendingMux, src); }
 
@@ -791,6 +793,19 @@ void initBehaviors() {
       ws.shadeWispColor = lamp::colorToHexString(
           shadeColorOverride.lastWispColor());
     }
+#ifdef LAMP_DEBUG
+    // Pair with [wisp_state] notify ... in ble_control.cpp::notifyWispStatus.
+    // Same call site, different lens: this prints what the LIVE override
+    // state-machine is saying right now; the notify log prints what made
+    // it into the JSON. Catches a stale-cache-vs-current-state mismatch
+    // (none expected — they share the snapshot) and any sub-100ms races
+    // around test_expression complete + reassertHold().
+    Serial.printf("[wisp_state] provider isWispActive base=%d shade=%d hasBaseC=%d hasShadeC=%d\n",
+                  ws.controllingBase ? 1 : 0,
+                  ws.controllingShade ? 1 : 0,
+                  baseColorOverride.hasLastWispColor() ? 1 : 0,
+                  shadeColorOverride.hasLastWispColor() ? 1 : 0);
+#endif
     return ws;
   });
   // BrightnessOverride routes its change-driven callback into the
@@ -1676,6 +1691,23 @@ void loop() {
                                        cmd.carriedFwVersion);
     }
   }
+  {
+    // Wisp manualPalette drain. ShowReceiver's recv branch parsed +
+    // deduped + posted; here on Core 1 we update the NearbyLamps cache
+    // and push a BLE notify so subscribed apps see the new palette
+    // without round-tripping a read of CHAR_WISP_STATUS.
+    lamp::PendingWispPalette cmd;
+    if (pendingWispPalette.drain(pendingMux, cmd)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] drain wispPalette count=%u src=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                    (unsigned)cmd.count,
+                    cmd.sourceMac[0], cmd.sourceMac[1], cmd.sourceMac[2],
+                    cmd.sourceMac[3], cmd.sourceMac[4], cmd.sourceMac[5]);
+#endif
+      lamp::nearbyLamps.cacheWispPalette(cmd.sourceMac, cmd.rgb, cmd.count);
+      ble_control::notifyWispStatus();
+    }
+  }
   // Phase D wispOp drain — app wrote a wispOp via CHAR_WISP_OP; we
   // broadcast it as MSG_CONTROL_OP so the wisp(s) on the mesh pick it
   // up. NEVER applied locally — wispOp is wisp-only (lamps don't have a
@@ -1688,9 +1720,15 @@ void loop() {
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain wispOp len=%u\n", (unsigned)len);
 #endif
-    if (len > 0 && !showReceiver.isOtaInProgress()) {
-      // Mesh quiesce during gossip OTA — see the
-      // applyRemoteOpRouted() forward gate for the same rationale.
+    if (len > 0) {
+      // Removed the !isOtaInProgress() gate on 2026-06-13 after a sub-agent
+      // audit confirmed it silently dropped user-driven wispOps (e.g.
+      // `setSource off`) whenever a background gossip-OTA was in flight,
+      // and the wisp never received the broadcast. Config ops are low-rate
+      // and small; a few extra mesh bytes during OTA is acceptable in
+      // exchange for the ops actually reaching the wisp every time the
+      // user taps Save. The applyRemoteOpRouted() quiesce stays in place
+      // because that forward path is gossip-relay (much higher volume).
       static const uint8_t kBroadcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
       showReceiver.sendControlOp(kBroadcastMac,
                                  reinterpret_cast<const uint8_t*>(buf),

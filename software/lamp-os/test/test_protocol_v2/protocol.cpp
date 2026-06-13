@@ -498,6 +498,96 @@ void test_inspect_no_longer_masks_high_bit() {
   TEST_ASSERT_NOT_EQUAL(lp::MSG_CONTROL_OP, lp::inspect(buf, n));
 }
 
+// MSG_WISP_PALETTE — round-trip a representative palette + boundary
+// cases. Wisp truncates oversized palettes on emit (logged), so the
+// builder REJECTS over-the-cap input rather than silently truncating;
+// the parser mirrors the same guard.
+
+static void test_wisp_palette_roundtrip() {
+  uint8_t buf[lp::WISP_PALETTE_MAX_SIZE];
+  const uint8_t mac[6] = {0xE4, 0xB3, 0x23, 0xB4, 0x95, 0x20};
+  // 7 colors, mixed values, including 0 and 255 to catch byte-shift bugs.
+  const uint8_t rgb[] = {
+      0,   0,   0,
+      255, 255, 255,
+      199,   0,  16,
+      49, 155, 255,
+      0,   97, 255,
+      1,  205, 103,
+      36,  99,  39,
+  };
+  const size_t count = sizeof(rgb) / 3;
+
+  const size_t n = lp::buildWispPalette(buf, sizeof(buf), /*seq*/ 0x1234,
+                                        mac, rgb, count);
+  TEST_ASSERT_EQUAL(lp::WISP_PALETTE_FIXED_PREFIX + count * 3, n);
+
+  lp::ParsedWispPalette out;
+  TEST_ASSERT_TRUE(lp::parseWispPalette(buf, n, out));
+  TEST_ASSERT_EQUAL(0x1234, out.seq);
+  TEST_ASSERT_EQUAL_MEMORY(mac, out.sourceMac, 6);
+  TEST_ASSERT_EQUAL(count, out.count);
+  TEST_ASSERT_EQUAL_MEMORY(rgb, out.rgb, count * 3);
+}
+
+static void test_wisp_palette_empty_roundtrip() {
+  // Zero-color palette: header + count(=0), no body. Should round-trip
+  // cleanly so a Manual-mode wisp with no palette still emits.
+  uint8_t buf[lp::WISP_PALETTE_MAX_SIZE];
+  const uint8_t mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+  const size_t n = lp::buildWispPalette(buf, sizeof(buf), /*seq*/ 7, mac,
+                                        /*rgb*/ nullptr, /*count*/ 0);
+  TEST_ASSERT_EQUAL(lp::WISP_PALETTE_FIXED_PREFIX, n);
+
+  lp::ParsedWispPalette out;
+  TEST_ASSERT_TRUE(lp::parseWispPalette(buf, n, out));
+  TEST_ASSERT_EQUAL(0, out.count);
+  TEST_ASSERT_NULL(out.rgb);
+}
+
+static void test_wisp_palette_at_cap_roundtrip() {
+  // Worst-case (50 colors): pin both the builder size accounting and the
+  // parser length acceptance at the cap so a future cap bump is loud.
+  uint8_t buf[lp::WISP_PALETTE_MAX_SIZE];
+  const uint8_t mac[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+  uint8_t rgb[lp::kMaxWispPaletteColors * 3];
+  for (size_t i = 0; i < sizeof(rgb); ++i) rgb[i] = static_cast<uint8_t>(i);
+
+  const size_t n = lp::buildWispPalette(buf, sizeof(buf), /*seq*/ 0xFFFF, mac,
+                                        rgb, lp::kMaxWispPaletteColors);
+  TEST_ASSERT_EQUAL(lp::WISP_PALETTE_MAX_SIZE, n);
+
+  lp::ParsedWispPalette out;
+  TEST_ASSERT_TRUE(lp::parseWispPalette(buf, n, out));
+  TEST_ASSERT_EQUAL(lp::kMaxWispPaletteColors, out.count);
+  TEST_ASSERT_EQUAL_MEMORY(rgb, out.rgb, sizeof(rgb));
+}
+
+static void test_wisp_palette_over_cap_rejected_by_builder() {
+  uint8_t buf[lp::WISP_PALETTE_MAX_SIZE + 64];  // extra room so the failure
+                                                // is the count check, not
+                                                // the buffer size.
+  const uint8_t mac[6] = {0};
+  uint8_t rgb[(lp::kMaxWispPaletteColors + 1) * 3] = {0};
+  TEST_ASSERT_EQUAL(0,
+                    lp::buildWispPalette(buf, sizeof(buf), 0, mac, rgb,
+                                         lp::kMaxWispPaletteColors + 1));
+}
+
+static void test_wisp_palette_short_frame_rejected_by_parser() {
+  // Frame claims 4 colors but the buffer is truncated mid-color. Parser
+  // must reject — silently accepting would expose garbage data into the
+  // BLE-served JSON.
+  uint8_t buf[lp::WISP_PALETTE_MAX_SIZE];
+  const uint8_t mac[6] = {1, 2, 3, 4, 5, 6};
+  const uint8_t rgb[12] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120};
+  const size_t n = lp::buildWispPalette(buf, sizeof(buf), 0, mac, rgb, 4);
+  TEST_ASSERT_TRUE(n > 0);
+  // Trim one byte off the end → tail color is incomplete.
+  lp::ParsedWispPalette out;
+  TEST_ASSERT_FALSE(lp::parseWispPalette(buf, n - 1, out));
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -537,6 +627,12 @@ int main(int argc, char** argv) {
   RUN_TEST(test_event_parse_rejects_frame_with_stagger_count_high_bit_set);
 
   RUN_TEST(test_inspect_no_longer_masks_high_bit);
+
+  RUN_TEST(test_wisp_palette_roundtrip);
+  RUN_TEST(test_wisp_palette_empty_roundtrip);
+  RUN_TEST(test_wisp_palette_at_cap_roundtrip);
+  RUN_TEST(test_wisp_palette_over_cap_rejected_by_builder);
+  RUN_TEST(test_wisp_palette_short_frame_rejected_by_parser);
 
   return UNITY_END();
 }

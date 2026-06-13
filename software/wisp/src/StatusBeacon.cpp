@@ -357,6 +357,66 @@ void StatusBeacon::emitStatus() {
     return;
   }
   mesh_->broadcast(frame, frameLen);
+
+  // Piggyback the manualPalette broadcast on the same wispStatus tick.
+  // emitPalette() is broken out so WispOpDispatcher can also call it on a
+  // setManualPalette write for sub-30-s convergence.
+  emitPalette();
+}
+
+void StatusBeacon::emitPalette() {
+  if (!mesh_) return;
+
+  uint8_t srcMac[6] = {0};
+  mesh_->getMac(srcMac);
+
+  // Snapshot the palette under the WispConfig path. The vector returned
+  // by manualPalette() lives in WispConfig and is only mutated on the
+  // loop task (setManualPalette via op dispatcher), so a single critical
+  // section around the copy is enough.
+  static thread_local uint8_t rgb[lamp_protocol::kMaxWispPaletteColors *
+                                  lamp_protocol::WISP_PALETTE_ENTRY_SIZE];
+  size_t count = 0;
+  if (config_) {
+    const auto& palette = config_->manualPalette();
+    const size_t available = palette.size();
+    if (available > lamp_protocol::kMaxWispPaletteColors) {
+      // Truncation isn't catastrophic — the wisp keeps painting from the
+      // full local palette — but it does mean the app's view tops out at
+      // 50 colors. Log once per oversize burst so a 60-color Aurora
+      // palette gets noticed.
+      static bool truncWarned = false;
+      if (!truncWarned) {
+        Serial.printf("[wisp.beacon] manualPalette truncated: %u -> %u\n",
+                      (unsigned)available,
+                      (unsigned)lamp_protocol::kMaxWispPaletteColors);
+        truncWarned = true;
+      }
+      count = lamp_protocol::kMaxWispPaletteColors;
+    } else {
+      count = available;
+    }
+    for (size_t i = 0; i < count; ++i) {
+      rgb[i * 3 + 0] = palette[i].r;
+      rgb[i * 3 + 1] = palette[i].g;
+      rgb[i * 3 + 2] = palette[i].b;
+    }
+  }
+
+  uint8_t frame[lamp_protocol::WISP_PALETTE_MAX_SIZE];
+  size_t frameLen = 0;
+  uint16_t seq = 0;
+  STATUS_BEACON_PORTMUX_ENTER(&emitMux_);
+  seq = seqCounter_++;
+  frameLen = lamp_protocol::buildWispPalette(
+      frame, sizeof(frame), seq, srcMac,
+      count > 0 ? rgb : nullptr, count);
+  STATUS_BEACON_PORTMUX_EXIT(&emitMux_);
+  if (!frameLen) {
+    Serial.println("[wisp.beacon] buildWispPalette failed");
+    return;
+  }
+  mesh_->broadcast(frame, frameLen);
 }
 
 }  // namespace wisp

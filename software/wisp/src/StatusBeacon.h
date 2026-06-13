@@ -98,6 +98,7 @@ class StatusBeacon {
   // sanctioned API — call begin()+startTimer() from main.cpp and forget.
   void emit();         // MSG_WISP_HELLO + MSG_WISP_CLAIM (2s cadence)
   void emitStatus();   // MSG_CONTROL_OP wispStatus path (30s heartbeat)
+  void emitPalette();  // MSG_WISP_PALETTE (piggybacked on emitStatus)
 
  private:
   MeshLink* mesh_ = nullptr;
