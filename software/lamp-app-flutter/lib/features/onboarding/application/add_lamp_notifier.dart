@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/ble/ble_client_provider.dart';
@@ -8,6 +10,11 @@ import '../../inventory/domain/inventory_lamp.dart';
 import '../domain/add_lamp_state.dart';
 
 part 'add_lamp_notifier.g.dart';
+
+/// Pick a 1..8 critter index. Each lamp keeps its own random pick across
+/// the connecting view and the lamp preview so users associate the lamp
+/// with a consistent little friend.
+int _pickCritterIndex() => Random().nextInt(8) + 1;
 
 @Riverpod(keepAlive: true, name: 'addLampNotifierProvider')
 class AddLampNotifier extends _$AddLampNotifier {
@@ -58,6 +65,7 @@ class AddLampNotifier extends _$AddLampNotifier {
               id: state.deviceId,
               name: state.name,
               controlPassword: state.password,
+              critterIndex: _pickCritterIndex(),
             ),
           );
       await ref
@@ -82,7 +90,11 @@ class AddLampNotifier extends _$AddLampNotifier {
     state = state.copyWith(status: AddLampStatus.working, errorMessage: null);
     try {
       await ref.read(inventoryNotifierProvider.notifier).add(
-            InventoryLamp(id: deviceId, name: name),
+            InventoryLamp(
+              id: deviceId,
+              name: name,
+              critterIndex: _pickCritterIndex(),
+            ),
           );
       await ref.read(activeLampNotifierProvider.notifier).set(deviceId);
       state = state.copyWith(

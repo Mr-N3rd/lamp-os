@@ -38,6 +38,11 @@ abstract class BleClient {
     String serviceUuid,
     String charUuid,
   );
+
+  /// Emits the current connection state immediately on listen, then emits on
+  /// every change. Used by callers to react to unsolicited link drops
+  /// (e.g. LINK_SUPERVISION_TIMEOUT on Android).
+  Stream<bool> watchConnected(String deviceId);
 }
 
 /// Test/dev fake. Records writes per (device, service, char) key, lets tests
@@ -46,9 +51,17 @@ class InMemoryBleClient implements BleClient {
   final Set<String> _connected = {};
   final Map<String, Uint8List> _values = {};
   final Map<String, StreamController<Uint8List>> _streams = {};
+  final Map<String, StreamController<bool>> _connStreams = {};
   final Map<String, int> _pendingEncryptionFails = {};
 
   String _key(String d, String s, String c) => '$d|$s|$c';
+
+  StreamController<bool> _ensureConnStream(String deviceId) {
+    return _connStreams.putIfAbsent(
+      deviceId,
+      () => StreamController<bool>.broadcast(),
+    );
+  }
 
   void scheduleEncryptionFailure(String d, String s, String c) {
     final key = _key(d, s, c);
@@ -58,11 +71,13 @@ class InMemoryBleClient implements BleClient {
   @override
   Future<void> connect(String deviceId) async {
     _connected.add(deviceId);
+    _ensureConnStream(deviceId).add(true);
   }
 
   @override
   Future<void> disconnect(String deviceId) async {
     _connected.remove(deviceId);
+    _ensureConnStream(deviceId).add(false);
   }
 
   @override
@@ -98,5 +113,25 @@ class InMemoryBleClient implements BleClient {
       () => StreamController<Uint8List>.broadcast(),
     );
     return ctrl.stream;
+  }
+
+  @override
+  Stream<bool> watchConnected(String deviceId) {
+    final ctrl = _ensureConnStream(deviceId);
+    // Subscribe to the broadcast stream BEFORE emitting the initial value so
+    // that no events are dropped between the seed yield and yield*. Using a
+    // StreamController lets us prepend the current state without the async*
+    // generator's subscription-before-yield race condition.
+    final out = StreamController<bool>();
+    final sub = ctrl.stream.listen(
+      out.add,
+      onError: out.addError,
+      onDone: out.close,
+    );
+    out.onCancel = sub.cancel;
+    // Emit current state immediately so callers don't have to call isConnected
+    // separately to seed their state.
+    out.add(isConnected(deviceId));
+    return out.stream;
   }
 }

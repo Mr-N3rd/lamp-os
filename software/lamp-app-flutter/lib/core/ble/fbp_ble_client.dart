@@ -9,6 +9,13 @@ import 'ble_client.dart';
 /// resolves the device + service + characteristic from the plugin's live
 /// registry, errors out with a friendly exception type when it can't.
 class FbpBleClient implements BleClient {
+  /// Cache of discovered GATT services per device id. Populated lazily on the
+  /// first `read`/`write`/`subscribe` after a successful connect. Without this
+  /// every BLE write would re-run a full service discovery on the radio,
+  /// which is what tipped the lamp into LINK_SUPERVISION_TIMEOUT during rapid
+  /// slider drags. Cleared on disconnect so a reconnect gets a fresh discovery.
+  final Map<String, List<fbp.BluetoothService>> _serviceCache = {};
+
   @override
   Future<void> connect(String deviceId) async {
     final device = fbp.BluetoothDevice(
@@ -19,6 +26,10 @@ class FbpBleClient implements BleClient {
       autoConnect: false,
       mtu: 247,
     );
+    // Reset the cache on every connect — service handles can change after a
+    // reconnect, especially after a firmware reboot that re-registers the
+    // GATT database.
+    _serviceCache.remove(deviceId);
   }
 
   @override
@@ -26,6 +37,7 @@ class FbpBleClient implements BleClient {
     final device = fbp.BluetoothDevice(
       remoteId: fbp.DeviceIdentifier(deviceId),
     );
+    _serviceCache.remove(deviceId);
     await device.disconnect();
   }
 
@@ -47,7 +59,12 @@ class FbpBleClient implements BleClient {
           orElse: () => throw BleNotFound('device $deviceId not connected'),
         );
 
-    final services = await device.discoverServices();
+    // Reuse the cached service list when present — discoverServices() is a
+    // multi-round-trip GATT exchange and re-running it per write floods the
+    // link. Only call it on a cold cache (first I/O after connect).
+    final services = _serviceCache[deviceId] ??=
+        await device.discoverServices();
+
     final service = services.firstWhere(
       (s) => s.uuid.str128.toLowerCase() == serviceUuid.toLowerCase(),
       orElse: () => throw BleNotFound('service $serviceUuid on $deviceId'),
@@ -91,5 +108,14 @@ class FbpBleClient implements BleClient {
     final ch = await _resolve(d, s, c);
     await ch.setNotifyValue(true);
     yield* ch.lastValueStream.map(Uint8List.fromList);
+  }
+
+  @override
+  Stream<bool> watchConnected(String deviceId) {
+    final device = fbp.BluetoothDevice(
+      remoteId: fbp.DeviceIdentifier(deviceId),
+    );
+    return device.connectionState
+        .map((s) => s == fbp.BluetoothConnectionState.connected);
   }
 }
