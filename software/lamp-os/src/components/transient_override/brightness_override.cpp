@@ -24,6 +24,13 @@ void BrightnessOverride::apply(const uint8_t sourceMac[6],
                                lamp_protocol::OverrideSource source,
                                lamp_protocol::OverrideSurface surface,
                                uint8_t brightness, uint16_t fadeDurationMs) {
+  // Operator-priority lockout: while the brightness slider is being
+  // dragged the wisp's overrides lose. Social cascade (PeerSwap) still
+  // applies.
+  if (operatorEditing_ &&
+      source == lamp_protocol::OverrideSource::Wisp) {
+    return;
+  }
   // Snapshot the CURRENT effective value as the fade start so a mid-fade
   // re-apply (different source overtaking, or same source re-painting)
   // doesn't snap. effective() already reads the current millis() so we

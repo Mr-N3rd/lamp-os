@@ -66,6 +66,10 @@ class NotifyableBle implements BleClient {
       throw UnimplementedError();
 
   @override
+  Future<Uint8List> readSection(String deviceId, String name) async =>
+      throw UnimplementedError();
+
+  @override
   Future<void> write(String d, String s, String c, Uint8List v,
       {bool withoutResponse = false, bool allowLongWrite = false}) async {
     if (!_connected.contains(d)) throw BleNotConnected(d);

@@ -1,48 +1,81 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../application/control_notifier.dart';
 import '../../domain/lamp_color.dart';
 import 'color_picker_sheet.dart';
 import 'lamp_color_swatch.dart';
 
-class ShadeCard extends StatelessWidget {
-  const ShadeCard({
-    super.key,
-    required this.color,
-    required this.bpp,
-    required this.onChanged,
-  });
-
+/// Tiny slice of ControlState the shade card needs to render — used as
+/// the `.select` projection so sibling state changes don't rebuild us.
+class _ShadeSlice {
+  const _ShadeSlice(this.color, this.bpp);
   final LampColor color;
-
-  /// 4 (RGBW) exposes Warm White in the picker; 3 (RGB-only) hides it
-  /// and trims the displayed hex to `#RRGGBB`.
   final int bpp;
 
-  final ValueChanged<LampColor> onChanged;
+  @override
+  bool operator ==(Object other) =>
+      other is _ShadeSlice && other.color == color && other.bpp == bpp;
 
-  Future<void> _onTap(BuildContext context) async {
+  @override
+  int get hashCode => Object.hash(color, bpp);
+}
+
+class ShadeCard extends ConsumerWidget {
+  const ShadeCard({
+    super.key,
+    required this.lampId,
+    this.onEditSessionChanged,
+  });
+
+  final String lampId;
+
+  /// Fires `true` when the picker opens and `false` when it closes
+  /// (Save, Cancel, dismiss). Wired into `ControlNotifier.setEditSession`
+  /// upstream so the lamp can lock out wisp paints to the shade surface
+  /// while the operator is actively picking. Optional — non-control-
+  /// screen consumers (none today) can leave it null.
+  final ValueChanged<bool>? onEditSessionChanged;
+
+  Future<void> _onTap(BuildContext context, WidgetRef ref, LampColor color,
+      int bpp) async {
+    final notifier = ref.read(controlNotifierProvider(lampId).notifier);
     final original = color;
-    final picked = await showColorPickerSheet(
-      context,
-      initial: color,
-      title: 'Pick a shade color',
-      bpp: bpp,
-      onLive: onChanged, // every drag tick streams to the notifier
-    );
-    if (picked == null) {
-      // User cancelled — revert the lamp to the color before picker opened.
-      onChanged(original);
-    } else {
-      // Save tap: commit the final color (idempotent with last live update).
-      onChanged(picked);
+    onEditSessionChanged?.call(true);
+    try {
+      final picked = await showColorPickerSheet(
+        context,
+        initial: color,
+        title: 'Pick a shade color',
+        bpp: bpp,
+        // every drag tick streams to the notifier
+        onLive: notifier.setShadeColor,
+      );
+      if (picked == null) {
+        notifier.setShadeColor(original);
+      } else {
+        notifier.setShadeColor(picked);
+      }
+    } finally {
+      onEditSessionChanged?.call(false);
     }
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final slice = ref.watch(
+      controlNotifierProvider(lampId).select((async) {
+        final state = async.value;
+        if (state == null) return const _ShadeSlice(LampColor.black, 4);
+        final color = state.shade.colors.isEmpty
+            ? LampColor.black
+            : state.shade.colors.single;
+        return _ShadeSlice(color, state.shade.bpp);
+      }),
+    );
     return InkWell(
-      onTap: () => _onTap(context),
+      onTap: () => _onTap(context, ref, slice.color, slice.bpp),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -54,7 +87,11 @@ class ShadeCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            LampColorSwatch(color: color, size: 56, shape: LampSwatchShape.roundedSquare, borderRadius: 14),
+            LampColorSwatch(
+                color: slice.color,
+                size: 56,
+                shape: LampSwatchShape.roundedSquare,
+                borderRadius: 14),
             const SizedBox(width: 16),
             Expanded(
               child: Column(

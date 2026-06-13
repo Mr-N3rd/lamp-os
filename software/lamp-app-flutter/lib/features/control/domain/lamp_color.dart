@@ -15,6 +15,11 @@ class LampColor {
   final int b;
   final int w;
 
+  /// Sentinel used in places like the shade preview that need a "no
+  /// colors yet" baseline. Kept on `LampColor` so both
+  /// `ControlNotifier` and `ControlScreen` can share the same instance.
+  static const black = LampColor(r: 0, g: 0, b: 0, w: 0);
+
   factory LampColor.fromHex(String input) {
     var s = input.startsWith('#') ? input.substring(1) : input;
     if (s.length != 8) {

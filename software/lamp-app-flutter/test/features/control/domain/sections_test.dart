@@ -123,6 +123,39 @@ void main() {
     expect(s.expressions[1].target, 3);
   });
 
+  group('ExpressionConfig.disabledDuringWispOverride type-aware default', () {
+    // Pins the contract that mirrors firmware-side
+    // `software/lamp-os/src/config/config.cpp`: when the JSON key is
+    // missing (old pre-feature NVS), `breathing` and `shifty` default
+    // to true; everything else defaults to false. Without this, a
+    // round-trip through fromJson would silently drop the gate flag.
+    test('breathing defaults to true when key is missing', () {
+      final e = ExpressionConfig.fromJson(<String, dynamic>{
+        'type': 'breathing',
+      });
+      expect(e.disabledDuringWispOverride, isTrue);
+    });
+    test('shifty defaults to true when key is missing', () {
+      final e = ExpressionConfig.fromJson(<String, dynamic>{
+        'type': 'shifty',
+      });
+      expect(e.disabledDuringWispOverride, isTrue);
+    });
+    test('glitchy defaults to false when key is missing', () {
+      final e = ExpressionConfig.fromJson(<String, dynamic>{
+        'type': 'glitchy',
+      });
+      expect(e.disabledDuringWispOverride, isFalse);
+    });
+    test('explicit key wins over type-aware default', () {
+      final e = ExpressionConfig.fromJson(<String, dynamic>{
+        'type': 'breathing',
+        'disabledDuringWispOverride': false,
+      });
+      expect(e.disabledDuringWispOverride, isFalse);
+    });
+  });
+
   group('value-class equality (audit cq-H / W7.7)', () {
     // The point of overriding ==/hashCode on these is so Riverpod's
     // `.select` and AsyncValue equality can short-circuit on unchanged

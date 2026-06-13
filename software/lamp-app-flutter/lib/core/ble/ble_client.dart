@@ -133,11 +133,36 @@ abstract class BleClient {
     String charUuid,
   );
 
+  /// Reads a named section from the lamp via the page protocol. Writes
+  /// the section name to CHAR_PAGE_CTRL, then loops reading CHAR_PAGE_DATA
+  /// until a short chunk (< kPageChunkSize) arrives. Returns the
+  /// concatenated bytes; the caller jsonDecodes them.
+  ///
+  /// Known section names match the lamp's dispatch table: "lamp", "base",
+  /// "shade", "expr", "home", "nearby". An unknown name results in
+  /// 0 bytes (the lamp's CHAR_PAGE_DATA returns empty when the snapshot
+  /// is empty); the caller will see an empty Uint8List which jsonDecode
+  /// rejects.
+  ///
+  /// Throws [BleDisconnectedException] mid-stream if the link drops
+  /// between the CTRL write and the final DATA read. Partial bytes are
+  /// discarded — the caller should let the surrounding reconnect ladder
+  /// retry the whole section.
+  Future<Uint8List> readSection(String deviceId, String name);
+
   /// Emits the current connection state immediately on listen, then emits on
   /// every change. Used by callers to react to unsolicited link drops
   /// (e.g. LINK_SUPERVISION_TIMEOUT on Android).
   Stream<bool> watchConnected(String deviceId);
 }
+
+/// Per-chunk payload size on the BLE page protocol. Pinned to ATT_MTU
+/// 247 minus the 3-byte ATT header. Both sides have this hardcoded so
+/// the helper's "short chunk = done" heuristic doesn't need to thread
+/// the negotiated MTU through the app — flutter_blue_plus 2.x doesn't
+/// reliably surface that value anyway. If the firmware-side
+/// kPageMaxChunkSize ever changes, this constant moves in lockstep.
+const int kPageChunkSize = 244;
 
 /// Test/dev fake. Records writes per (device, service, char) key, lets tests
 /// schedule encryption failures, and broadcasts writes to subscribers.
@@ -147,6 +172,13 @@ class InMemoryBleClient implements BleClient {
   final Map<String, StreamController<Uint8List>> _streams = {};
   final Map<String, StreamController<bool>> _connStreams = {};
   final Map<String, int> _pendingEncryptionFails = {};
+  // Page-protocol section bytes keyed by 'deviceId|sectionName'. Tests
+  // seed entries via [seedSection] (or the `seedControlBle` helper);
+  // [readSection] returns the seeded bytes verbatim. Modelling the
+  // wire CTRL+DATA cursor in the fake adds bugs without value — the
+  // observable contract is "given a section name, return its bytes",
+  // matching the production helper's caller-visible behavior.
+  final Map<String, Uint8List> _sectionValues = {};
 
   String _key(String d, String s, String c) => '$d|$s|$c';
 
@@ -163,6 +195,12 @@ class InMemoryBleClient implements BleClient {
   void scheduleEncryptionFailure(String d, String s, String c) {
     final key = _key(d, s, c);
     _pendingEncryptionFails[key] = (_pendingEncryptionFails[key] ?? 0) + 1;
+  }
+
+  /// Seed the bytes [readSection] will return for the given device + name.
+  /// Used by `seedControlBle` and tests that drive the per-section sweep.
+  void seedSection(String deviceId, String name, Uint8List bytes) {
+    _sectionValues['$deviceId|$name'] = bytes;
   }
 
   @override
@@ -196,6 +234,16 @@ class InMemoryBleClient implements BleClient {
       throw BleReadTooLarge(d, v.length, kBleMaxReadBytes);
     }
     return v;
+  }
+
+  @override
+  Future<Uint8List> readSection(String deviceId, String name) async {
+    if (!_connected.contains(deviceId)) throw BleNotConnected(deviceId);
+    final v = _sectionValues['$deviceId|$name'];
+    // Fake parity: an unseeded section returns 0 bytes — matches the
+    // firmware behavior of returning empty when the snapshot is empty
+    // (e.g. unknown section name).
+    return v ?? Uint8List(0);
   }
 
   @override

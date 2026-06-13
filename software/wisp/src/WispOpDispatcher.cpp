@@ -101,6 +101,36 @@ DispatchResult WispOpDispatcher::dispatch(const uint8_t* payload, size_t len) {
     return DispatchResult::AppliedSourceChange;
   }
 
+  if (strcmp(op, "setOffColor") == 0) {
+    // Wisp-only color shown on the ring when sourceMode == Off. Does not
+    // touch the manual palette and does not broadcast to lamps. Accepts
+    // the tuple shape `"color":[r,g,b]` or the flat fields `"r"/"g"/"b"`.
+    ManualPaletteColor c;
+    bool ok = false;
+    JsonVariantConst v = doc["color"];
+    if (v.is<JsonArrayConst>()) {
+      JsonArrayConst tup = v.as<JsonArrayConst>();
+      if (tup.size() >= 3) {
+        c.r = static_cast<uint8_t>(tup[0].as<int>() & 0xFF);
+        c.g = static_cast<uint8_t>(tup[1].as<int>() & 0xFF);
+        c.b = static_cast<uint8_t>(tup[2].as<int>() & 0xFF);
+        ok = true;
+      }
+    } else if (doc["r"].is<int>() && doc["g"].is<int>() && doc["b"].is<int>()) {
+      c.r = static_cast<uint8_t>(doc["r"].as<int>() & 0xFF);
+      c.g = static_cast<uint8_t>(doc["g"].as<int>() & 0xFF);
+      c.b = static_cast<uint8_t>(doc["b"].as<int>() & 0xFF);
+      ok = true;
+    }
+    if (!ok) {
+      Serial.println("[wisp.op] setOffColor missing/invalid 'color'");
+      return DispatchResult::Malformed;
+    }
+    Serial.printf("[wisp.op] setOffColor %u,%u,%u\n", c.r, c.g, c.b);
+    config_.setOffColor(c);
+    return DispatchResult::AppliedOffColor;
+  }
+
   if (strcmp(op, "setManualPalette") == 0) {
     // Accept "colors":[[r,g,b],[r,g,b],...] OR "colors":[{"r":..,"g":..,"b":..}]
     // The Flutter side emits the tuple shape; the object shape is

@@ -31,6 +31,7 @@ bool inflateInto(const uint8_t* d, size_t n, bool parseZlibHeader,
 
 namespace Compression {
 
+namespace {
 bool isGzip(const uint8_t* d, size_t n) {
     return n >= 2 && d[0] == 0x1f && d[1] == 0x8b;
 }
@@ -43,6 +44,7 @@ bool isLikelyZlib(const uint8_t* d, size_t n) {
     if (((cmf << 8) + flg) % 31 != 0) return false;
     return true;
 }
+}  // namespace
 
 bool maybeInflate(const uint8_t* d, size_t n, std::vector<uint8_t>& out) {
     if (isGzip(d, n)) {

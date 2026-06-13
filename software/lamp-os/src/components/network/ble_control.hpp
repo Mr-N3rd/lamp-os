@@ -35,22 +35,33 @@ constexpr const char* CHAR_EXPRESSION_OP   = "5f64f4d9-d6d9-4a44-9b3f-3a8d6f7e6b
 // wifi_op (write-with-response): JSON op for WiFi management. Reduced to:
 //   {"op":"scan"}    — kick off an async scan (results notified via
 //                       CHAR_WIFI_STATE).
-//   {"op":"forget"}  — clear config.homeMode.ssid and persist. No STA
-//                       association ever happens (presence-only mode),
-//                       so there's no "connect" op anymore.
+// setHomeSsid + forget moved into the unified settings_blob path; the
+// only remaining wifi_op operation is `scan`. Presence-only mode means
+// the lamp never associates, so there's no "connect" op either.
 constexpr const char* CHAR_WIFI_OP         = "5f64f4da-d6d9-4a44-9b3f-3a8d6f7e6b40";
 // wifi_state (read + notify): JSON snapshot of WiFi state
 constexpr const char* CHAR_WIFI_STATE      = "5f64f4db-d6d9-4a44-9b3f-3a8d6f7e6b40";
-// Per-section settings characteristics (read + notify). Replace the single
-// settings_blob read path — each stays well under MTU on its own.
-constexpr const char* CHAR_LAMP_SECTION    = "5f64f4dc-d6d9-4a44-9b3f-3a8d6f7e6b40";
-constexpr const char* CHAR_BASE_SECTION    = "5f64f4dd-d6d9-4a44-9b3f-3a8d6f7e6b40";
-constexpr const char* CHAR_SHADE_SECTION   = "5f64f4de-d6d9-4a44-9b3f-3a8d6f7e6b40";
-constexpr const char* CHAR_EXPR_SECTION    = "5f64f4df-d6d9-4a44-9b3f-3a8d6f7e6b40";
-constexpr const char* CHAR_HOME_SECTION    = "5f64f4e0-d6d9-4a44-9b3f-3a8d6f7e6b40";
-// nearby_lamps (read + notify): JSON array of every lamp this lamp has
-// heard via either transport (BLE manufacturer-data adv or ESP-NOW HELLO).
-constexpr const char* CHAR_NEARBY_LAMPS    = "5f64f4e3-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// Page protocol (auth-gated): paginated lamp→app reads of named sections.
+// Replaces the previous per-section read characteristics (lamp/base/shade/
+// expr/home/nearby), which were each capped at 512 B by NimBLE's vendored
+// ble_att.h spec ceiling — jacko's 3-expression config serialized to 579
+// B and rejected at boot-time setValue. The CTRL+DATA pair sidesteps the
+// cap by streaming MTU-sized chunks from a per-connection snapshot.
+//
+//   CHAR_PAGE_CTRL (write): app writes a UTF-8 section name (e.g. "expr").
+//     Lamp snapshots that section's cached JSON into the connection slot
+//     and resets a cursor. Subsequent CTRL writes replace the snapshot.
+//     Known names: "lamp", "base", "shade", "expr", "home", "nearby".
+//   CHAR_PAGE_DATA (read): each read returns the next chunk of bytes
+//     starting at the cursor. A read returning fewer bytes than the
+//     hardcoded chunk size (244 = ATT_MTU 247 - 3 ATT header) signals
+//     "done". App reads until short, then jsonDecodes the concatenated
+//     bytes.
+//
+// Direction-inverse of the OTA CHAR_FW_CONTROL/CHAR_FW_CHUNK pair: OTA
+// streams host→lamp (write), pagination streams lamp→host (read).
+constexpr const char* CHAR_PAGE_CTRL       = "5f64f4dc-d6d9-4a44-9b3f-3a8d6f7e6b40";
+constexpr const char* CHAR_PAGE_DATA       = "5f64f4dd-d6d9-4a44-9b3f-3a8d6f7e6b40";
 // remote_op (write-with-response, encrypted): forward a BLE control write
 // to a far lamp via ESP-NOW.
 constexpr const char* CHAR_REMOTE_OP       = "5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b40";
@@ -102,6 +113,16 @@ constexpr const char* CHAR_FW_CONTROL      = "5f64f4e7-d6d9-4a44-9b3f-3a8d6f7e6b
 // the ESP-NOW chunk handler.
 constexpr const char* CHAR_FW_CHUNK        = "5f64f4e8-d6d9-4a44-9b3f-3a8d6f7e6b40";
 
+// CHAR_EDIT_SESSION (auth-gated, WRITE_NR): app signals "operator has
+// the colour-picker / brightness-slider for surface X open" so the
+// lamp can drop wisp-sourced overrides for that surface until the
+// picker closes. Payload is 2 bytes [surface, state] with:
+//   surface: 0x01 = Base, 0x02 = Shade, 0x04 = Brightness
+//   state:   0x00 = closed (clear flag), 0x01 = open (set flag)
+// Multiple-surface picker sessions are handled by sending one frame
+// per surface. Cleared on BLE disconnect as a defensive sweep.
+constexpr const char* CHAR_EDIT_SESSION    = "5f64f4e9-d6d9-4a44-9b3f-3a8d6f7e6b40";
+
 /**
  * @brief Start the BLE GATT control service.
  */
@@ -135,16 +156,6 @@ void notifyStateChange();
  * @brief Send a WiFi-state-change notification on CHAR_WIFI_STATE.
  */
 void notifyWifiState();
-
-/**
- * @brief Notify subscribers that the lamp section changed.
- */
-void notifyLampSection();
-
-/**
- * @brief Notify subscribers that the nearby-lamp list changed.
- */
-void notifyNearbyLamps();
 
 /**
  * @brief Push a CHAR_WISP_STATUS notification. Called from the loop

@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -11,6 +11,8 @@ import '../../features/lamp_shell/presentation/bt_only_lamp_screen.dart';
 import '../../features/lamp_shell/presentation/expression_editor_screen.dart';
 import '../../features/lamp_shell/presentation/home_mode_screen.dart';
 import '../../features/lamp_shell/presentation/lamp_shell.dart';
+import '../../features/lamp_shell/presentation/setup_screen.dart';
+import '../widgets/back_button_leading.dart';
 import '../../features/nearby/presentation/nearby_lamps_screen.dart';
 import '../../features/onboarding/presentation/add_lamp_shell.dart';
 import '../../features/onboarding/presentation/onboarding_placeholder.dart';
@@ -84,19 +86,29 @@ GoRouter appRouter(Ref ref) {
           initialTab: LampTab.expressions,
         ),
       ),
+      // Configuration drilldown — pushed from the gear icon in the
+      // LampShell AppBar (so it stacks on top of the shell instead of
+      // mode-replacing). Bundles the old standalone "Setup" tab body +
+      // the old "Info" tab content as an About section at the bottom.
+      // Bottom nav no longer carries Setup/Info; this route is the
+      // single point of entry.
       GoRoute(
         path: '/lamp/:id/setup',
-        builder: (_, state) => LampShell(
-          lampId: state.pathParameters['id']!,
-          initialTab: LampTab.setup,
+        builder: (_, state) => Scaffold(
+          appBar: AppBar(
+            leading: const BackButtonLeading(),
+            title: const Text('Configuration'),
+          ),
+          body: SetupScreen(lampId: state.pathParameters['id']!),
         ),
       ),
+      // /info kept as a redirect to /setup — there's no separate Info
+      // screen any more; About content lives at the bottom of /setup.
+      // Pre-existing routes / deep-links still resolve.
       GoRoute(
         path: '/lamp/:id/info',
-        builder: (_, state) => LampShell(
-          lampId: state.pathParameters['id']!,
-          initialTab: LampTab.info,
-        ),
+        redirect: (_, state) =>
+            '/lamp/${state.pathParameters['id']}/setup',
       ),
       // /setup/wifi was the old Home Wi-Fi pane; its UI was merged into
       // the Home Mode pane below. Keep the route pointed at HomeModeScreen

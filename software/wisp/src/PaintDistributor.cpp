@@ -85,24 +85,62 @@ void PaintDistributor::beginWalk(Mode mode) {
 
 void PaintDistributor::sendPaintToPeer(const uint8_t mac[6]) {
   if (!mesh_ || !palette_) return;
-  ColorTuple t = sampleTupleForMac(*palette_, mac);
-  uint8_t colorsRGBW[8];
-  colorsRGBW[0] = t.r[0]; colorsRGBW[1] = t.g[0]; colorsRGBW[2] = t.b[0]; colorsRGBW[3] = t.w[0];
-  colorsRGBW[4] = t.r[1]; colorsRGBW[5] = t.g[1]; colorsRGBW[6] = t.b[1]; colorsRGBW[7] = t.w[1];
+  // Defensive: don't blast a peer with a zero-palette paint frame.
+  // The Aurora-default boot path flips paintMode on BEFORE any
+  // Aurora callback has populated currentPalette — without this
+  // gate the 10 s backstop walks every peer with an all-zero
+  // (black, fade=1500 ms) OVERRIDE_COLORS frame, which on the lamp
+  // side fights every BLE base-color edit the operator makes.
+  if (palette_->colors().empty()) return;
 
+  // TupleSampler produces two RGBW samples per peer at decorrelated
+  // positions on the palette (FNV-1a + golden-ratio salt). The intent
+  // of the pair has always been one for base + one for shade — but the
+  // pre-fix code shipped both as `numColors=2` to surface=Base, so
+  // shade got nothing and base got a 2-stop gradient nobody asked for.
+  // Split into two frames now: t[0] → Base, t[1] → Shade, single colour
+  // per surface.
+  ColorTuple t = sampleTupleForMac(*palette_, mac);
   uint8_t srcMac[6] = {0};
   mesh_->getMac(srcMac);
 
-  uint8_t buf[lamp_protocol::OVERRIDE_COLORS_MAX_SIZE];
-  size_t n = lamp_protocol::buildOverrideColors(
-      buf, sizeof(buf), seqCounter_++,
-      srcMac, mac,
-      lamp_protocol::OverrideSurface::Base,
-      lamp_protocol::OverrideSource::Wisp,
-      kDefaultFadeDurationMs,
-      colorsRGBW, /*numColors=*/2);
-  if (!n) return;
-  mesh_->send(mac, buf, n);
+  // Frame 1 — Base, t[0]
+  {
+    uint8_t colorsRGBW[4] = {t.r[0], t.g[0], t.b[0], t.w[0]};
+    uint8_t buf[lamp_protocol::OVERRIDE_COLORS_MAX_SIZE];
+    size_t n = lamp_protocol::buildOverrideColors(
+        buf, sizeof(buf), seqCounter_++,
+        srcMac, mac,
+        lamp_protocol::OverrideSurface::Base,
+        lamp_protocol::OverrideSource::Wisp,
+        kDefaultFadeDurationMs,
+        colorsRGBW, /*numColors=*/1);
+    if (n) mesh_->send(mac, buf, n);
+  }
+  // ESP-NOW needs a breather between back-to-back unicasts to the same
+  // MAC. Without it the second send queues while the first frame's ACK
+  // is still in-flight; the radio surfaces ESP_NOW_SEND_FAIL in the
+  // first frame's trampoline callback and the lamp only sees the
+  // second frame. Empirically jacko was seeing only the Shade frame
+  // (sent second) and the Base trampoline logged FAIL. 10 ms is enough
+  // headroom for the C6 radio's send → ACK → callback cycle at this
+  // distance + RSSI on the local mesh; bump higher if FAIL lines come
+  // back. Outside `kPerPeerPaceMs` (5 ms) but still under the human
+  // perception threshold for the paint walk pace.
+  delay(10);
+  // Frame 2 — Shade, t[1]
+  {
+    uint8_t colorsRGBW[4] = {t.r[1], t.g[1], t.b[1], t.w[1]};
+    uint8_t buf[lamp_protocol::OVERRIDE_COLORS_MAX_SIZE];
+    size_t n = lamp_protocol::buildOverrideColors(
+        buf, sizeof(buf), seqCounter_++,
+        srcMac, mac,
+        lamp_protocol::OverrideSurface::Shade,
+        lamp_protocol::OverrideSource::Wisp,
+        kDefaultFadeDurationMs,
+        colorsRGBW, /*numColors=*/1);
+    if (n) mesh_->send(mac, buf, n);
+  }
 }
 
 void PaintDistributor::sendRestoreToPeer(const uint8_t mac[6]) {

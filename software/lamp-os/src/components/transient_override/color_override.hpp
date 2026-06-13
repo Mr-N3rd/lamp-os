@@ -86,9 +86,34 @@ class ColorOverride {
   // no override to update).
   void rebaseline(const std::vector<Color>& currentSavedColors);
 
+  // Cross-touch the watchdog without running a fade. Wisp paint is sent as
+  // a Base+Shade pair 10 ms apart but lands in a single-slot mailbox
+  // (PendingTypedSlot, newest writer wins). If Core 1 doesn't drain
+  // between the two posts the Shade frame silently drops the Base frame
+  // and Base's lastApplyMs_ never advances — after 60 s the watchdog
+  // auto-restores Base, expressions un-pause, and the next surviving
+  // wisp Base frame snapshots the expression-painted buffer as the new
+  // savedColors_, leaving the lamp visibly "stopped listening" to wisp.
+  // Cross-touch from the Shade-side drain (and vice versa) is proof of
+  // a healthy mesh and keeps both surfaces' watchdogs honest.
+  void touchApply(uint32_t nowMs) {
+    if (state_ == FadeState::FadingIn || state_ == FadeState::Holding) {
+      lastApplyMs_ = nowMs;
+    }
+  }
+
   bool isActive() const { return state_ != FadeState::Idle; }
   FadeState state() const { return state_; }
   lamp_protocol::OverrideSource activeSource() const { return activeSource_; }
+
+  // Operator-priority lockout. While set, apply() drops wisp-sourced
+  // overrides on the floor (PeerSwap/social cascade still applies — a
+  // greeting takes precedence over a quiet edit). Set on by the app
+  // when the colour-picker / brightness-slider for this surface opens;
+  // cleared when the picker closes. Bounded entirely by picker
+  // lifecycle, no timer.
+  void setOperatorEditing(bool editing) { operatorEditing_ = editing; }
+  bool operatorEditing() const { return operatorEditing_; }
 
   // Auto-restore watchdog. If the wisp goes silent (or a peer-swap source
   // crashes) the override transitions out so the lamp can't be painted
@@ -117,6 +142,9 @@ class ColorOverride {
   // The baseline we'll restore to. Snapshotted from the configurator's
   // `colors` at apply() time, and replaced by rebaseline() during Holding.
   std::vector<Color> savedColors_;
+
+  // Operator-editing lock — see setOperatorEditing() above.
+  bool operatorEditing_ = false;
 };
 
 }  // namespace lamp

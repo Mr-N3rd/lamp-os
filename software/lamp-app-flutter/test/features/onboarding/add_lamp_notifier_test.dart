@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
-import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/inventory/application/active_lamp_notifier.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/onboarding/application/add_lamp_notifier.dart';
@@ -55,15 +54,12 @@ void main() {
   test('submit() with valid post-claim lampSection persists + sets active',
       () async {
     final ble = InMemoryBleClient();
-    // Seed the lampSection so the post-claim probe finds a valid JSON.
-    await ble.connect('dev1');
-    await ble.write(
+    // Seed the lamp section so the post-claim probe finds a valid JSON.
+    ble.seedSection(
       'dev1',
-      BleUuids.controlService,
-      BleUuids.lampSection,
+      'lamp',
       Uint8List.fromList(utf8.encode('{"name":"jacko","brightness":50}')),
     );
-    await ble.disconnect('dev1');
 
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
@@ -97,14 +93,8 @@ void main() {
     // notifier throws FormatException('auth-rejected'), which the typed
     // catch maps to AddLampError.wrongPassword.
     final ble = InMemoryBleClient();
-    await ble.connect('dev1');
-    await ble.write(
-      'dev1',
-      BleUuids.controlService,
-      BleUuids.lampSection,
-      Uint8List(0), // empty bytes simulate unauthenticated read result
-    );
-    await ble.disconnect('dev1');
+    // Empty bytes simulate the firmware's auth-gated empty response.
+    ble.seedSection('dev1', 'lamp', Uint8List(0));
 
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
@@ -129,10 +119,13 @@ void main() {
         reason: 'wrong password must not persist the lamp');
   });
 
-  test('submit() surfaces connectFailed when post-claim read errors out',
+  test('submit() surfaces wrongPassword when post-claim read returns empty',
       () async {
-    // Don't seed anything — the read throws BleNotFound, which is caught
-    // as a generic Exception and surfaced as connectFailed.
+    // Don't seed the lamp section — readSection returns Uint8List(0)
+    // which jsonDecode rejects with FormatException, which the
+    // notifier maps to wrongPassword. Under the page protocol an
+    // unseeded section is indistinguishable from an auth-gated empty
+    // response on the firmware side; both surface as wrongPassword.
     final ble = InMemoryBleClient();
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
@@ -150,7 +143,7 @@ void main() {
     final s = c.read(addLampNotifierProvider);
     expect(s.step, AddLampStep.password);
     expect(s.status, AddLampStatus.error);
-    expect(s.error, AddLampError.connectFailed);
+    expect(s.error, AddLampError.wrongPassword);
     final inv = await c.read(inventoryNotifierProvider.future);
     expect(inv, isEmpty);
   });
@@ -300,6 +293,15 @@ class _HangingBleClient implements BleClient {
 
   @override
   Future<Uint8List> read(String d, String s, String c) {
+    if (hangOn == _HangOp.read) return Completer<Uint8List>().future;
+    return Future.value(Uint8List(0));
+  }
+
+  @override
+  Future<Uint8List> readSection(String deviceId, String name) {
+    // Same hang semantics as raw read — the test exercises the verify
+    // probe through the readSection helper now that lampSection moved
+    // behind it.
     if (hangOn == _HangOp.read) return Completer<Uint8List>().future;
     return Future.value(Uint8List(0));
   }

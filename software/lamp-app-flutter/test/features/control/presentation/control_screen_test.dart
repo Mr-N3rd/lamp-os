@@ -10,7 +10,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/core/ble/ble_scanner.dart';
-import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/control/presentation/control_screen.dart';
 import 'package:lamp_app/features/control/presentation/widgets/base_card.dart';
 import 'package:lamp_app/features/control/presentation/widgets/brightness_card.dart';
@@ -48,11 +47,8 @@ Future<(ProviderContainer, InMemoryBleClient)> _withAuthGatedLamp() async {
   SharedPreferences.setMockInitialValues({});
   final ble = InMemoryBleClient();
   await seedControlBle(ble, deviceId: _devId, name: 'jacko');
-  // Wipe lampSection so the canary read returns empty bytes.
-  await ble.connect(_devId);
-  await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-      Uint8List(0));
-  await ble.disconnect(_devId);
+  // Wipe the lamp section so the canary read returns empty bytes.
+  ble.seedSection(_devId, 'lamp', Uint8List(0));
   final c = ProviderContainer(
     overrides: [
       bleClientProvider.overrideWithValue(ble),
@@ -203,15 +199,15 @@ void main() {
     ));
     await _pumpUntil(tester, find.text('Enter password'));
 
-    // Simulate firmware "unlock": now reads of lampSection return real bytes.
-    await ble.connect(_devId);
-    await ble.write(
-        _devId,
-        BleUuids.controlService,
-        BleUuids.lampSection,
-        Uint8List.fromList(utf8.encode(
-          '{"name":"jacko","brightness":50,"advancedEnabled":false}',
-        )));
+    // Simulate firmware "unlock": now reads of the lamp section return
+    // real bytes.
+    ble.seedSection(
+      _devId,
+      'lamp',
+      Uint8List.fromList(utf8.encode(
+        '{"name":"jacko","brightness":50,"advancedEnabled":false}',
+      )),
+    );
 
     await tester.enterText(find.byType(TextField), 'alpha');
     await tester.tap(find.widgetWithText(FilledButton, 'Connect'));

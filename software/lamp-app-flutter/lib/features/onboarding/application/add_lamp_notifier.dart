@@ -233,11 +233,7 @@ class AddLampNotifier extends _$AddLampNotifier {
             )
             .timeout(verifyOpTimeout);
         final bytes = await ble
-            .read(
-              state.deviceId,
-              BleUuids.controlService,
-              BleUuids.lampSection,
-            )
+            .readSection(state.deviceId, 'lamp')
             .timeout(verifyOpTimeout);
         if (bytes.isEmpty) {
           throw const FormatException('auth-rejected');

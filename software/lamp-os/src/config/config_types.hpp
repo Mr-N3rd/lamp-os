@@ -101,6 +101,17 @@ class ExpressionConfig {
   uint32_t intervalMax = 900;      // Max interval in seconds
   uint8_t target = 3;              // TARGET_SHADE=1, TARGET_BASE=2, TARGET_BOTH=3
 
+  // When true, ExpressionManager skips this expression's auto-trigger
+  // while the wisp is actively overriding the lamp's base or shade
+  // surface (baseColorOverride.isActive() && activeSource() == Wisp,
+  // or same for shade). Set to true on `breathing` and `shifty` by
+  // default at parse time — they paint continuously into the frame
+  // buffer and visibly fight the wisp's hold colour. Brief / discrete
+  // expressions like `glitchy` and `pulse` default to false because
+  // their flashes / waves coexist nicely with a held wisp colour.
+  // Operator can flip per-expression in the app's editor.
+  bool disabledDuringWispOverride = false;
+
   // Generic parameter storage for expression-specific values
   std::map<std::string, uint32_t> parameters;
 

@@ -277,6 +277,18 @@ void StatusBeacon::emitStatus() {
   doc["paletteIdPrefix"] = paletteIdPrefix;
   doc["lastSeenMs"]      = lastSeenMs;
   doc["source"]          = sourceName;
+  // Off-mode wisp-ring color. Three integers in [0..255]. Small enough
+  // (~25 bytes JSON) to ride alongside the other fields without
+  // jeopardising the CONTROL_MAX_PAYLOAD budget. Defaults are baked into
+  // WispConfig so a pre-feature wisp still emits sensible bytes when
+  // upgraded.
+  if (config_) {
+    const auto off = config_->offColor();
+    JsonArray offArr = doc["offColor"].to<JsonArray>();
+    offArr.add(off.r);
+    offArr.add(off.g);
+    offArr.add(off.b);
+  }
 
   char jsonBuf[kStatusJsonBufLen];
   const size_t jsonLen = serializeJson(doc, jsonBuf, sizeof(jsonBuf));

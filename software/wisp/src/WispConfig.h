@@ -108,6 +108,15 @@ class WispConfig {
   }
   void setManualPalette(const std::vector<ManualPaletteColor>& colors);
 
+  // Off-mode color. When sourceMode is Off, the wisp does NOT broadcast
+  // a palette to the lamp grid (PaintDistributor stays held off) — but
+  // it still has its own 30-pixel ring to drive. This color is what
+  // that ring shows in Off. Defaults to a warm-white candle-amber tint
+  // matching the pre-existing fallback so a fresh wisp boots
+  // identically. Persisted as 3 NVS bytes.
+  ManualPaletteColor offColor() const { return offColor_; }
+  void setOffColor(ManualPaletteColor c);
+
  private:
   Preferences prefs_;
   bool        opened_ = false;
@@ -117,6 +126,7 @@ class WispConfig {
   String wifiPw_;
   WispSourceMode sourceMode_ = WispSourceMode::Off;
   std::vector<ManualPaletteColor> manualPalette_;
+  ManualPaletteColor offColor_ = {255, 150, 50};
 };
 
 }  // namespace wisp

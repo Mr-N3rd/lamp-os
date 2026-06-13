@@ -16,12 +16,19 @@ abstract class BleUuids {
   static const expressionOp   = '5f64f4d9-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const wifiOp         = '5f64f4da-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const wifiState      = '5f64f4db-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const lampSection    = '5f64f4dc-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const baseSection    = '5f64f4dd-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const shadeSection   = '5f64f4de-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const exprSection    = '5f64f4df-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const homeSection    = '5f64f4e0-d6d9-4a44-9b3f-3a8d6f7e6b40';
-  static const nearbyLamps    = '5f64f4e3-d6d9-4a44-9b3f-3a8d6f7e6b40';
+  // Page protocol — paginated lamp→app reads of named sections. Replaces
+  // the previous per-section chars (lampSection/baseSection/shadeSection/
+  // exprSection/homeSection/nearbyLamps), all of which were capped at 512
+  // bytes by NimBLE's vendored ble_att.h spec ceiling. The CTRL+DATA
+  // pair streams MTU-sized chunks from a per-connection snapshot.
+  //
+  // Use BleClient.readSection(deviceId, sectionName) — not the raw chars
+  // — for any section read. Known names: "lamp", "base", "shade",
+  // "expr", "home", "nearby". Chunk size is pinned to kPageChunkSize
+  // (244 bytes = ATT_MTU 247 - 3 ATT header) on both sides; a read
+  // returning fewer than that signals "done".
+  static const pageCtrl       = '5f64f4dc-d6d9-4a44-9b3f-3a8d6f7e6b40';
+  static const pageData       = '5f64f4dd-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const remoteOp       = '5f64f4e4-d6d9-4a44-9b3f-3a8d6f7e6b40';
   // home_mode_focus (write-without-response): single u8 bool. App writes
   // 1 while on the Home Mode setup page, 0 when leaving. Firmware uses
@@ -33,6 +40,17 @@ abstract class BleUuids {
   // returns the full map; write replaces it. Persisted firmware-side in
   // a separate NVS key so it doesn't bloat CHAR_LAMP_SECTION.
   static const socialDispositions = '5f64f4e6-d6d9-4a44-9b3f-3a8d6f7e6b40';
+
+  // edit_session (auth-gated, write-without-response): 2-byte payload
+  // [surface, state] tells the lamp that the operator is actively
+  // editing colors (or brightness) for the given surface. While the
+  // flag is set, the lamp drops wisp-sourced overrides on that surface
+  // so the user's edits aren't trampled by the show. Social-cascade
+  // (PeerSwap) overrides still apply — greetings outrank quiet edits.
+  //   surface: 0x01 = Base, 0x02 = Shade, 0x04 = Brightness
+  //   state:   0x00 = closed, 0x01 = open
+  // Cleared automatically on BLE disconnect as a defensive sweep.
+  static const editSession    = '5f64f4e9-d6d9-4a44-9b3f-3a8d6f7e6b40';
 
   // wisp_op (write-with-response, plaintext): JSON op forwarded to the
   // wisp via MSG_CONTROL_OP broadcast. Shape:

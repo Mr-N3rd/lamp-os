@@ -13,6 +13,8 @@
 #include "config/config.hpp"
 #include "behaviors/configurator.hpp"
 #include "behaviors/fade_out.hpp"  // fadeOutRebootRequested flag
+#include "components/transient_override/brightness_override.hpp"
+#include "components/transient_override/color_override.hpp"
 #include "util/color.hpp"
 #include "lamps/standard_lamp.hpp"
 #include "bluetooth.hpp"  // for BLE_GAP_SCAN_TIME_MS
@@ -48,6 +50,20 @@ void postPendingApplyEffectiveBrightness();
 // onDisconnect posts this flag; the loop drain on Core 1 force-flushes
 // dispositions so a phone walk-off still persists the user's slider value.
 void postPendingFlushDispositions();
+
+// Override globals defined in standard_lamp.cpp. The EditSessionCallback
+// flips their per-surface `operatorEditing_` bool from Core 0 (BLE host
+// task) while the override's apply() consumer runs on Core 1. The flag
+// is a single-byte bool — atomic on ESP32 — and is read with relaxed
+// semantics inside apply(); eventual consistency is fine (next override
+// frame within ~10 s observes the new value).
+namespace lamp {
+class ColorOverride;
+class BrightnessOverride;
+}
+extern lamp::ColorOverride baseColorOverride;
+extern lamp::ColorOverride shadeColorOverride;
+extern lamp::BrightnessOverride brightnessOverride;
 static constexpr size_t MAX_PENDING_JSON = 256;
 static constexpr size_t MAX_PENDING_OP_JSON = 512;
 
@@ -57,17 +73,11 @@ namespace ble_control {
 // Module-level state
 // ---------------------------------------------------------------------------
 
-static NimBLEServer*         s_server      = nullptr;
-static NimBLEService*        s_service     = nullptr;
-static NimBLECharacteristic* s_stateNotify = nullptr;
-static NimBLECharacteristic* s_wifiStateChar = nullptr;
-static NimBLECharacteristic* s_lampSectionChar  = nullptr;
-static NimBLECharacteristic* s_baseSectionChar  = nullptr;
-static NimBLECharacteristic* s_shadeSectionChar = nullptr;
-static NimBLECharacteristic* s_exprSectionChar  = nullptr;
-static NimBLECharacteristic* s_homeSectionChar  = nullptr;
-static NimBLECharacteristic* s_nearbyLampsChar  = nullptr;
-static NimBLECharacteristic* s_wispStatusChar   = nullptr;
+static NimBLEServer*         s_server          = nullptr;
+static NimBLEService*        s_service         = nullptr;
+static NimBLECharacteristic* s_stateNotify     = nullptr;
+static NimBLECharacteristic* s_wifiStateChar   = nullptr;
+static NimBLECharacteristic* s_wispStatusChar  = nullptr;
 static lamp::Config*         s_config      = nullptr;
 static Preferences*          s_prefs       = nullptr;
 static bool                  s_running     = false;
@@ -148,18 +158,36 @@ bool isScanPaused()        { return s_scanPausedForGattClient; }
 //                             a successful GCM decrypt (GCM tag IS auth)
 //   crypto                  → per-connection nonce replay window, lazy-init
 //                             on first ciphertext write
+//   pageSnapshot/Cursor/Mtu → per-conn paginated read state. snapshot is
+//                             populated on CHAR_PAGE_CTRL onWrite; cursor
+//                             advances on CHAR_PAGE_DATA onRead. assign()
+//                             keeps the std::string's existing capacity
+//                             across sections so the heap sees growth-only,
+//                             not churn.
 struct ConnSlot {
   uint16_t                    handle;
   bool                        authed;
   lamp::crypto::PerConnState  crypto;
+  std::string                 pageSnapshot;
+  uint16_t                    pageCursor;
+  uint16_t                    pageMtu;
 };
 static constexpr uint16_t kUnusedHandle = 0xFFFF;
 static constexpr size_t   kMaxConns     = 3;
 static std::array<ConnSlot, kMaxConns> s_conn{{
-  {kUnusedHandle, false, {}},
-  {kUnusedHandle, false, {}},
-  {kUnusedHandle, false, {}},
+  {kUnusedHandle, false, {}, {}, 0, 0},
+  {kUnusedHandle, false, {}, {}, 0, 0},
+  {kUnusedHandle, false, {}, {}, 0, 0},
 }};
+
+// Hard ceiling on the chunk size returned by CHAR_PAGE_DATA. We pin this
+// to the app's requested ATT_MTU 247 minus the 3-byte ATT header, rather
+// than reading the per-conn negotiated MTU at runtime — flutter_blue_plus
+// 2.x doesn't reliably surface the negotiated value, and pinning a wire
+// constant means the helper can hardcode "short = done" without threading
+// MTU state. If the negotiated MTU is smaller for a given conn, we use
+// that instead (see PageDataCallback::onRead below).
+static constexpr uint16_t kPageMaxChunkSize = 244;
 
 // Find the slot owned by [handle], or nullptr if none. Linear scan over
 // kMaxConns (=3) entries. static so the compiler can inline it into every
@@ -185,6 +213,9 @@ static ConnSlot* findOrAllocSlot(uint16_t handle) {
     freeSlot->handle = handle;
     freeSlot->authed = false;
     freeSlot->crypto = lamp::crypto::PerConnState{};
+    freeSlot->pageSnapshot.clear();  // keeps capacity
+    freeSlot->pageCursor = 0;
+    freeSlot->pageMtu    = 0;
   }
   return freeSlot;
 }
@@ -196,6 +227,9 @@ static void freeSlot(uint16_t handle) {
     s->handle = kUnusedHandle;
     s->authed = false;
     s->crypto = lamp::crypto::PerConnState{};
+    s->pageSnapshot.clear();  // keeps capacity
+    s->pageCursor = 0;
+    s->pageMtu    = 0;
   }
 }
 
@@ -205,6 +239,9 @@ static void clearAllSlots() {
     s.handle = kUnusedHandle;
     s.authed = false;
     s.crypto = lamp::crypto::PerConnState{};
+    s.pageSnapshot.clear();
+    s.pageCursor = 0;
+    s.pageMtu    = 0;
   }
 }
 
@@ -353,6 +390,13 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
 
     s_clientConnected = false;
     s_homeModePageActive = false;
+    // Defensive sweep: clear all operator-editing flags so a stale flag
+    // from a crashed / backgrounded app can't keep the wisp's overrides
+    // locked out for this surface forever. Reconnected sessions can
+    // re-open whatever they actually want via CHAR_EDIT_SESSION.
+    baseColorOverride.setOperatorEditing(false);
+    shadeColorOverride.setOperatorEditing(false);
+    brightnessOverride.setOperatorEditing(false);
     // Clear adaptive-conn-params state. Next connect re-seeds it; tick()
     // is a no-op when s_currentConnHandle is INVALID.
     s_currentConnHandle = 0xFFFF;
@@ -448,6 +492,30 @@ class BrightnessCallback : public NimBLECharacteristicCallbacks {
 // ControlServerCallbacks::onDisconnect).
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Edit-session callback — operator-priority lockout for wisp overrides.
+// 2-byte payload: [surface, state]. See CHAR_EDIT_SESSION docstring in
+// the .hpp for the bitmask values.
+// ---------------------------------------------------------------------------
+
+class EditSessionCallback : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
+    if (!isAuthed(connInfo.getConnHandle())) return;
+    std::string val = c->getValue();
+    if (val.size() < 2) return;
+    const uint8_t surface = static_cast<uint8_t>(val[0]);
+    const bool   open    = (val[1] != 0);
+    if (surface & 0x01) baseColorOverride.setOperatorEditing(open);
+    if (surface & 0x02) shadeColorOverride.setOperatorEditing(open);
+    if (surface & 0x04) brightnessOverride.setOperatorEditing(open);
+#ifdef LAMP_DEBUG
+    Serial.printf("[ble_control] editSession surface=0x%02x %s\n",
+                  surface, open ? "open" : "closed");
+#endif
+  }
+};
+
 class HomeModeFocusCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     markActivity();
@@ -532,12 +600,6 @@ static std::string buildNearbyLampsJson() {
   return out;
 }
 
-class NearbyLampsCallback : public NimBLECharacteristicCallbacks {
-  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(buildNearbyLampsJson());
-  }
-};
-
 // Social dispositions — read returns the full per-peer map; write replaces
 // it. Auth-gated on both directions: even though the disposition values
 // aren't sensitive (they're not credentials), exposing the friendship map
@@ -565,13 +627,6 @@ class SocialDispositionsCallback : public NimBLECharacteristicCallbacks {
     postPendingSocialDispositionsJson(val.data(), val.size());
   }
 };
-
-void notifyNearbyLamps() {
-  if (!s_nearbyLampsChar) return;
-  auto json = buildNearbyLampsJson();
-  s_nearbyLampsChar->setValue(json);
-  s_nearbyLampsChar->notify();
-}
 
 // ── Wisp status: read+notify the cached wispStatus JSON merged with the
 // last MSG_WISP_HELLO payload. Auth-gated — a wisp's runtime state
@@ -739,64 +794,130 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
 };
 
 // ---------------------------------------------------------------------------
-// Per-section settings reads — split the old settings_blob into 5 smaller
-// characteristics so each stays well under MTU and can grow independently.
+// Page protocol — paginated lamp→app section reads.
 // ---------------------------------------------------------------------------
+//
+// Replaces the per-section read characteristics that used to live here
+// (lamp/base/shade/expr/home/nearby). Each of those exposed its full
+// JSON via a single NimBLE characteristic value, capped at the BLE 4.x
+// ATT spec ceiling of 512 bytes — the vendored ble_att.h `#define
+// BLE_ATT_ATTR_MAX_LEN 512` overrides our `-D BLE_ATT_ATTR_MAX_LEN=1024`
+// build flag because it has no `#ifndef` guard. A 3-expression lamp
+// serialises the expressions section to 579 bytes; setValue() rejected
+// it at boot and the characteristic came up empty.
+//
+// The CTRL+DATA pair sidesteps the cap by streaming MTU-sized chunks
+// from a per-connection snapshot. The wire mechanic relies on NimBLE's
+// onRead firing once per app-level GATT_READ_REQ (not once per ATT PDU
+// — the host stack continues long values via ATT_READ_BLOB_REQ against
+// the cached AttValue without re-firing onRead). By seeding the
+// AttValue with ≤ kPageMaxChunkSize bytes, the host has no
+// continuation to do, the next app `read()` re-fires onRead, the
+// cursor advances.
+//
+// CHAR_WISP_STATUS still has its own read+notify path — the notify
+// channel is live (standard_lamp.cpp calls notifyWispStatus()) and
+// retiring the char would delete a working push surface. Its payload
+// also fits comfortably under 512.
 
-// Audit fix #6/#7: the section onRead callbacks used to call asXJson() on
-// every BLE read, which (a) re-serialised a fresh JsonDocument on Core 0
-// and (b) walked config.base.colors / knockoutPixels / expressions while
-// Core 1's loop drain could be reallocating the same vectors. The fix is
-// the per-section JSON cache on Config: Core 1 rebuilds the cached string
-// inside ble_control::tick() after any mutation, then pushes the bytes
-// into the NimBLE characteristic via setValue() (NimBLE copies into its
-// own internal buffer). After the push, subsequent GATT reads return
-// NimBLE's copy without re-entering this callback at all — so these
-// onRead bodies are now defensive backstops only, used if a read sneaks
-// in before the first tick push (e.g. during ble_control::start() between
-// service-create and first loop iteration).
-class LampSectionCallback : public NimBLECharacteristicCallbacks {
-  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    // asLampJson() embeds `lamp.password` when one is set — same auth gate
-    // as SettingsBlobCallback. Other section reads (base/shade/expr/home)
-    // carry no secrets and stay open.
-    if (!isAuthed(connInfo.getConnHandle())) {
-      c->setValue("");
-      return;
-    }
-    c->setValue(s_config->lampSectionJsonCached());
+using SectionSerializer = void(*)(std::string&);
+
+struct SectionEntry {
+  const char*       name;
+  SectionSerializer fn;
+};
+
+// Six paginatable sections. Lambdas capture only globals → decay to
+// plain function pointers, no std::function footprint. The cached-JSON
+// accessors do their own rebuild on Core 1 via ble_control::tick(), so
+// the CTRL onWrite body is just a string assignment on Core 0.
+static const std::array<SectionEntry, 6> kSections = {{
+  {"lamp",   [](std::string& out) { out = s_config->lampSectionJsonCached(); }},
+  {"base",   [](std::string& out) { out = s_config->baseSectionJsonCached(); }},
+  {"shade",  [](std::string& out) { out = s_config->shadeSectionJsonCached(); }},
+  {"expr",   [](std::string& out) { out = s_config->expressionsSectionJsonCached(); }},
+  {"home",   [](std::string& out) { out = s_config->homeSectionJsonCached(); }},
+  {"nearby", [](std::string& out) { out = buildNearbyLampsJson(); }},
+}};
+
+class PageCtrlCallback : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    markActivity();
+    const uint16_t handle = connInfo.getConnHandle();
+    if (!isAuthed(handle)) return;
+    const std::string name = c->getValue();
+    if (name.empty() || name.size() > 16) return;
+
+    ConnSlot* slot = findSlot(handle);
+    if (!slot) return;
+
+    for (const auto& entry : kSections) {
+      if (name == entry.name) {
+        // Reuse the std::string's capacity across sections — heap sees
+        // growth, not churn. Capture the negotiated MTU at snapshot
+        // time so the chunk size is stable for this read sweep even if
+        // the conn-params shift mid-stream.
+        entry.fn(slot->pageSnapshot);
+        slot->pageCursor = 0;
+        // connInfo.getMTU() returns the negotiated ATT MTU. Floor it
+        // against our hardcoded wire constant so the app's "short =
+        // done" heuristic stays correct even on peers that negotiate
+        // higher than 247.
+        const uint16_t mtu = connInfo.getMTU();
+        const uint16_t cap = mtu > 3 ? mtu - 3 : 0;
+        slot->pageMtu = (cap > 0 && cap < kPageMaxChunkSize) ? cap
+                                                              : kPageMaxChunkSize;
 #ifdef LAMP_DEBUG
-    // Diagnostic for "save+reload didn't actually persist" reports — log
-    // the byte length + a snippet so we can correlate what the app sees
-    // post-reboot with what settingsBlob persisted pre-reboot.
-    const auto& json = s_config->lampSectionJsonCached();
-    Serial.printf("[ble_control] READ lampSection len=%u json=%.180s\n",
-                  (unsigned)json.size(), json.c_str());
+        Serial.printf("[ble_control] page CTRL section=%s len=%u mtu=%u chunk=%u\n",
+                      entry.name, (unsigned)slot->pageSnapshot.size(),
+                      (unsigned)mtu, (unsigned)slot->pageMtu);
+#endif
+        return;
+      }
+    }
+
+    // Unknown section name — clear any prior snapshot so the next
+    // DATA read returns empty (the app will interpret as "section
+    // not found" downstream).
+    slot->pageSnapshot.clear();
+    slot->pageCursor = 0;
+    slot->pageMtu    = 0;
+#ifdef LAMP_DEBUG
+    Serial.printf("[ble_control] page CTRL unknown section='%.*s'\n",
+                  (int)name.size(), name.data());
 #endif
   }
 };
 
-class BaseSectionCallback : public NimBLECharacteristicCallbacks {
+class PageDataCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->baseSectionJsonCached());
-  }
-};
-
-class ShadeSectionCallback : public NimBLECharacteristicCallbacks {
-  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->shadeSectionJsonCached());
-  }
-};
-
-class ExprSectionCallback : public NimBLECharacteristicCallbacks {
-  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->expressionsSectionJsonCached());
-  }
-};
-
-class HomeSectionCallback : public NimBLECharacteristicCallbacks {
-  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    c->setValue(s_config->homeSectionJsonCached());
+    const uint16_t handle = connInfo.getConnHandle();
+    if (!isAuthed(handle)) {
+      c->setValue("");
+      return;
+    }
+    ConnSlot* slot = findSlot(handle);
+    if (!slot || slot->pageMtu == 0 ||
+        slot->pageCursor >= slot->pageSnapshot.size()) {
+      // No active page session, or cursor already past the end. Empty
+      // response — the app's "short chunk = done" heuristic interprets
+      // 0 bytes as the end.
+      c->setValue("");
+      return;
+    }
+    const size_t remaining = slot->pageSnapshot.size() - slot->pageCursor;
+    const size_t take      = remaining < slot->pageMtu ? remaining
+                                                       : slot->pageMtu;
+    c->setValue(reinterpret_cast<const uint8_t*>(slot->pageSnapshot.data() +
+                                                  slot->pageCursor),
+                static_cast<size_t>(take));
+    slot->pageCursor += static_cast<uint16_t>(take);
+#ifdef LAMP_DEBUG
+    Serial.printf("[ble_control] page DATA cursor=%u/%u take=%u\n",
+                  (unsigned)slot->pageCursor,
+                  (unsigned)slot->pageSnapshot.size(),
+                  (unsigned)take);
+#endif
   }
 };
 
@@ -915,58 +1036,18 @@ class FwChunkCallback : public NimBLECharacteristicCallbacks {
   }
 };
 
-static void notifySection(NimBLECharacteristic* c, const std::string& json) {
-  if (!c) return;
-  c->setValue(json);
-  c->notify();
-}
-
-// Notify helpers — push the cached section JSON to subscribers. These
-// implicitly refresh the cache if dirty (cached accessor rebuilds on
-// demand), so a caller that mutates config + immediately calls notify*
-// always sends the post-mutation value.
-void notifyLampSection()        { notifySection(s_lampSectionChar,  s_config->lampSectionJsonCached());        }
-void notifyBaseSection()        { notifySection(s_baseSectionChar,  s_config->baseSectionJsonCached());        }
-void notifyShadeSection()       { notifySection(s_shadeSectionChar, s_config->shadeSectionJsonCached());       }
-void notifyExpressionsSection() { notifySection(s_exprSectionChar,  s_config->expressionsSectionJsonCached()); }
-void notifyHomeModeSection()    { notifySection(s_homeSectionChar,  s_config->homeSectionJsonCached());        }
-
-// Audit fix #6/#7: per-loop housekeeping on Core 1. For each section
-// whose cache is dirty, rebuild the cached JSON (cheap because it just
-// runs the existing asXJson() builder once) and push to the
-// corresponding NimBLE characteristic via setValue() so subsequent BLE
-// reads on Core 0 are served from NimBLE's own internal buffer copy
-// without re-touching Config.
+// Per-loop housekeeping on Core 1. Sections are now served via the page
+// protocol — the section's JSON is built on-demand at CHAR_PAGE_CTRL
+// onWrite time and held in the connection's snapshot. tick() no longer
+// pushes cached section values into NimBLE characteristics; the
+// per-section dirty flags still mark Config state but the cache itself
+// is rebuilt lazily by the next `*SectionJsonCached()` call (typically
+// from a CTRL-write triggered by the app's next section sweep).
 //
-// Cheap when nothing is dirty: six bool checks. Hot path runs ~once per
-// loop iteration; mutation-to-push latency is ~1 loop tick (≤ 5 ms in
-// practice).
-//
-// Requires ble_control::tick() to be invoked from the main loop on
-// Core 1. See standard_lamp.cpp::loop().
+// Adaptive conn-interval housekeeping stays — see block comment at
+// s_lastBleWriteMs declaration for the why.
 void tick() {
   if (!s_running || !s_config) return;
-  if (s_config->lampSectionDirty() && s_lampSectionChar) {
-    s_lampSectionChar->setValue(s_config->lampSectionJsonCached());
-  }
-  if (s_config->baseSectionDirty() && s_baseSectionChar) {
-    s_baseSectionChar->setValue(s_config->baseSectionJsonCached());
-  }
-  if (s_config->shadeSectionDirty() && s_shadeSectionChar) {
-    s_shadeSectionChar->setValue(s_config->shadeSectionJsonCached());
-  }
-  if (s_config->expressionsSectionDirty() && s_exprSectionChar) {
-    s_exprSectionChar->setValue(s_config->expressionsSectionJsonCached());
-  }
-  if (s_config->homeSectionDirty() && s_homeSectionChar) {
-    s_homeSectionChar->setValue(s_config->homeSectionJsonCached());
-  }
-  // settingsBlob has no read characteristic of its own (CHAR_SETTINGS_BLOB
-  // is write-only; the read path was split into per-section chars). Its
-  // cached accessor is still consumed by SettingsBlobCallback::onRead as
-  // a defensive backstop — left cached so the next read triggers a
-  // single rebuild rather than a per-tick rebuild for a value nobody is
-  // currently asking for.
 
   // ── Adaptive BLE connection interval ──────────────────────────────────
   // See block comment at s_lastBleWriteMs declaration for the why.
@@ -1074,6 +1155,9 @@ void start(lamp::Config* config, Preferences* prefs) {
   // setup page. See HomeModeFocusCallback above.
   s_service->createCharacteristic(CHAR_HOME_MODE_FOCUS, LIVE_WRITE_PROPS)
       ->setCallbacks(new HomeModeFocusCallback());
+  // Operator-priority lockout signal — see EditSessionCallback above.
+  s_service->createCharacteristic(CHAR_EDIT_SESSION, LIVE_WRITE_PROPS)
+      ->setCallbacks(new EditSessionCallback());
   // CHAR_EXPRESSION_TEST: empty payload is the "test complete" sentinel
   // and MUST reach the loop drain — allowEmpty(true) on the router.
   s_service->createCharacteristic(CHAR_EXPRESSION_TEST, NIMBLE_PROPERTY::WRITE)
@@ -1100,45 +1184,16 @@ void start(lamp::Config* config, Preferences* prefs) {
   s_wifiStateChar->setCallbacks(new WifiStateCallback());
   s_wifiStateChar->setValue(buildWifiStateJson(false));
 
-  // Per-section settings characteristics — read + notify. Each onRead refreshes
-  // the cached value from live config. NimBLE returns the cached value on a
-  // GATT read, so we also seed the initial values here to handle the first read
-  // before any onRead fires.
-  //
-  // The default per-characteristic ATT cap is set to 1024 via
-  // `-D BLE_ATT_ATTR_MAX_LEN=1024` in platformio.ini — the persisted-knockout
-  // base section can reach ~672 bytes, exceeding NimBLE's stock 512 cap.
-  s_lampSectionChar = s_service->createCharacteristic(
-      CHAR_LAMP_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  s_lampSectionChar->setCallbacks(new LampSectionCallback());
-  // Seed via cached accessor: builds the cache once, then NimBLE owns the
-  // copy. Subsequent reads served from NimBLE's buffer without re-walking.
-  s_lampSectionChar->setValue(s_config->lampSectionJsonCached());
-
-  s_baseSectionChar = s_service->createCharacteristic(
-      CHAR_BASE_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  s_baseSectionChar->setCallbacks(new BaseSectionCallback());
-  s_baseSectionChar->setValue(s_config->baseSectionJsonCached());
-
-  s_shadeSectionChar = s_service->createCharacteristic(
-      CHAR_SHADE_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  s_shadeSectionChar->setCallbacks(new ShadeSectionCallback());
-  s_shadeSectionChar->setValue(s_config->shadeSectionJsonCached());
-
-  s_exprSectionChar = s_service->createCharacteristic(
-      CHAR_EXPR_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  s_exprSectionChar->setCallbacks(new ExprSectionCallback());
-  s_exprSectionChar->setValue(s_config->expressionsSectionJsonCached());
-
-  s_homeSectionChar = s_service->createCharacteristic(
-      CHAR_HOME_SECTION, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  s_homeSectionChar->setCallbacks(new HomeSectionCallback());
-  s_homeSectionChar->setValue(s_config->homeSectionJsonCached());
-
-  s_nearbyLampsChar = s_service->createCharacteristic(
-      CHAR_NEARBY_LAMPS, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  s_nearbyLampsChar->setCallbacks(new NearbyLampsCallback());
-  s_nearbyLampsChar->setValue(buildNearbyLampsJson());
+  // Page protocol: paginated lamp→app section reads (replaces the
+  // previous per-section read characteristics). CHAR_PAGE_CTRL onWrite
+  // snapshots the named section into the connection's slot + resets a
+  // cursor; CHAR_PAGE_DATA onRead returns the next chunk. App reads
+  // CHAR_PAGE_DATA until a short chunk (< kPageMaxChunkSize) lands.
+  // See the block comment above PageCtrlCallback for the why.
+  s_service->createCharacteristic(CHAR_PAGE_CTRL, NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks(new PageCtrlCallback());
+  s_service->createCharacteristic(CHAR_PAGE_DATA, NIMBLE_PROPERTY::READ)
+      ->setCallbacks(new PageDataCallback());
 
   // Social dispositions — read + write, both auth-gated. Initial seed
   // shows whatever was loaded from NVS at boot.
@@ -1222,16 +1277,10 @@ void stop() {
 
   if (s_server && s_service) {
     s_server->removeService(s_service, true);
-    s_service     = nullptr;
-    s_stateNotify = nullptr;
-    s_wifiStateChar = nullptr;
-    s_lampSectionChar = nullptr;
-    s_baseSectionChar = nullptr;
-    s_shadeSectionChar = nullptr;
-    s_exprSectionChar = nullptr;
-    s_homeSectionChar = nullptr;
-    s_nearbyLampsChar = nullptr;
-    s_wispStatusChar  = nullptr;
+    s_service        = nullptr;
+    s_stateNotify    = nullptr;
+    s_wifiStateChar  = nullptr;
+    s_wispStatusChar = nullptr;
   }
 
   s_server  = nullptr;

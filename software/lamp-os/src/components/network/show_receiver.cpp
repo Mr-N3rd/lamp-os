@@ -55,43 +55,6 @@ void ShowReceiver::setControlOpHandler(ControlOpHandler h) {
   controlOpHandler_ = std::move(h);
 }
 
-bool ShowReceiver::sendExpressionTo(const std::string& peerName,
-                                    const ExpressionInvocation& inv) {
-  // Single-peer named unicast. The MSG_EVENT cascade path covers the
-  // "fan out to every peer with RSSI-ordered stagger" case; this entry
-  // point is preserved for callers that explicitly want to address one
-  // lamp by name (BLE remoteOp targeted at a specific peer, etc.).
-  auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
-  for (const auto& p : peers) {
-    if (p.name != peerName) continue;
-    if (!p.hasMac) {
-#ifdef LAMP_DEBUG
-      Serial.printf("[show] sendExpressionTo: peer '%s' has no MAC yet\n",
-                    peerName.c_str());
-#endif
-      continue;
-    }
-    std::string json;
-    serializeInvocation(inv, json);
-    if (json.size() > lamp_protocol::CONTROL_MAX_PAYLOAD) {
-#ifdef LAMP_DEBUG
-      Serial.printf("[show] sendExpressionTo payload %u > max %u, dropping\n",
-                    (unsigned)json.size(),
-                    (unsigned)lamp_protocol::CONTROL_MAX_PAYLOAD);
-#endif
-      return false;
-    }
-    return sendControlOp(p.mac,
-                         reinterpret_cast<const uint8_t*>(json.data()),
-                         json.size());
-  }
-#ifdef LAMP_DEBUG
-  Serial.printf("[show] sendExpressionTo: peer '%s' not reachable\n",
-                peerName.c_str());
-#endif
-  return false;
-}
-
 bool ShowReceiver::sendControlOp(const uint8_t targetMac[6],
                                  const uint8_t* payload, size_t payloadLen) {
   if (payloadLen > lamp_protocol::CONTROL_MAX_PAYLOAD) return false;

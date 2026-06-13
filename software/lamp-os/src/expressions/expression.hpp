@@ -11,6 +11,13 @@
 
 namespace lamp {
 
+// True iff the wisp is currently holding an override on either the
+// base or shade surface. Defined in expression.cpp. Used by
+// Expression::control() and any continuous subclass that overrides
+// control() to honour `disabledDuringWispOverride`. See
+// `docs/expressions.md` for the semantics.
+bool isWispCurrentlyOverriding();
+
 enum ExpressionTarget {
   TARGET_SHADE = 1,
   TARGET_BASE = 2,
@@ -106,6 +113,15 @@ class Expression : public AnimatedBehavior {
   // Suppresses auto-trigger from control() while true. Manual trigger() and
   // chain-triggered firing still work. Listing's enabled toggle drives this.
   bool autoTriggerEnabled = true;
+
+  // Suppresses auto-trigger from control() while the wisp is actively
+  // overriding the lamp's base or shade surface. Manual trigger() (the
+  // app's "Test" button + chain triggers) still fires. Mirrors
+  // ExpressionConfig::disabledDuringWispOverride; set by
+  // ExpressionManager when an entry is loaded / upserted from config.
+  // The control() implementation queries the override state via
+  // `isWispCurrentlyOverriding()` (declared in expression.cpp).
+  bool disabledDuringWispOverride = false;
 
 protected:
   /**

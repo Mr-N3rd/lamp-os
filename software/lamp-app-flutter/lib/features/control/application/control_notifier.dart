@@ -21,6 +21,20 @@ import 'lamp_save_status.dart';
 
 part 'control_notifier.g.dart';
 
+/// Per-surface enum for [ControlNotifier.setEditSession]. Bit values
+/// match the firmware-side CHAR_EDIT_SESSION mask:
+///   - base = 0x01
+///   - shade = 0x02
+///   - brightness = 0x04
+enum EditSurface {
+  base(0x01),
+  shade(0x02),
+  brightness(0x04);
+
+  const EditSurface(this.bit);
+  final int bit;
+}
+
 /// Marker error type set by ControlNotifier.factoryReset so callers can
 /// distinguish "user reset this lamp" from genuine BLE / parse failures.
 class FactoryResetSentinel implements Exception {
@@ -47,7 +61,6 @@ const _writeDebounce = Duration(milliseconds: 60);
 /// payload (or a future firmware change) could yield 0 or 2+ — defensive
 /// fallback avoids a `StateError` from `.single` blowing up the connect /
 /// post-save reconnect paths.
-const _blackShade = LampColor(r: 0, g: 0, b: 0, w: 0);
 
 /// Disables Riverpod's framework-level auto-retry for the control notifier.
 /// We run our own reconnect loop with explicit backoff (`_reconnectDelays`)
@@ -273,8 +286,7 @@ class ControlNotifier extends _$ControlNotifier {
     // credential is missing or stale, surface that as a typed sentinel the
     // UI can catch and convert into a password prompt — otherwise the empty
     // bytes propagate into jsonDecode and surface as a generic FormatException.
-    final canaryBytes = await ble.read(
-        deviceId, BleUuids.controlService, BleUuids.lampSection);
+    final canaryBytes = await ble.readSection(deviceId, 'lamp');
     if (canaryBytes.isEmpty) {
       throw const LampAuthRequiredException();
     }
@@ -357,7 +369,7 @@ class ControlNotifier extends _$ControlNotifier {
 
     await _updateSeen(
       shade: fresh.shade.colors.isEmpty
-          ? _blackShade
+          ? LampColor.black
           : fresh.shade.colors.first,
       base: fresh.base.colors[fresh.base.ac],
     );
@@ -381,27 +393,25 @@ class ControlNotifier extends _$ControlNotifier {
     return fresh;
   }
 
-  /// Reads every section characteristic and returns a fresh ControlState.
-  /// Assumes the BLE link is connected and authenticated. Used by both
-  /// build() (initial load) and save() (post-reboot reload).
+  /// Reads every section via the page protocol and returns a fresh
+  /// ControlState. Assumes the BLE link is connected and authenticated.
+  /// Used by both build() (initial load) and save() (post-reboot reload).
   Future<ControlState> _readSections(BleClient ble) async {
-    Future<Map<String, dynamic>> readJson(String charUuid) async {
-      final bytes =
-          await ble.read(_deviceId, BleUuids.controlService, charUuid);
+    Future<Map<String, dynamic>> readJsonSection(String name) async {
+      final bytes = await ble.readSection(_deviceId, name);
       return jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
     }
 
-    Future<List<dynamic>> readJsonList(String charUuid) async {
-      final bytes =
-          await ble.read(_deviceId, BleUuids.controlService, charUuid);
+    Future<List<dynamic>> readJsonListSection(String name) async {
+      final bytes = await ble.readSection(_deviceId, name);
       return jsonDecode(utf8.decode(bytes)) as List<dynamic>;
     }
 
-    final lampJson = await readJson(BleUuids.lampSection);
-    final baseJson = await readJson(BleUuids.baseSection);
-    final shadeJson = await readJson(BleUuids.shadeSection);
-    final homeJson = await readJson(BleUuids.homeSection);
-    final exprList = await readJsonList(BleUuids.exprSection);
+    final lampJson = await readJsonSection('lamp');
+    final baseJson = await readJsonSection('base');
+    final shadeJson = await readJsonSection('shade');
+    final homeJson = await readJsonSection('home');
+    final exprList = await readJsonListSection('expr');
     return ControlState(
       lamp: LampSection.fromJson(lampJson),
       base: BaseSection.fromJson(baseJson),
@@ -425,25 +435,6 @@ class ControlNotifier extends _$ControlNotifier {
         _isHomeDirty(cur.home, _original.home) ||
         _isExpressionsDirty(
             cur.expressions.expressions, _original.expressions.expressions);
-  }
-
-  /// Diagnostic: returns the name of the first section that's dirty, or
-  /// `null` when everything's clean. Useful for tracking down false-positive
-  /// `isDirty` reports (e.g. "Save changes pill appeared on a fresh
-  /// connect" — call this from a logging hook to see WHICH section drifted).
-  /// Cheap; same comparisons as `isDirty`, just labelled.
-  String? get dirtyReason {
-    final cur = state.value;
-    if (cur == null) return null;
-    if (_isLampDirty(cur.lamp, _original.lamp)) return 'lamp';
-    if (_isBaseDirty(cur.base, _original.base)) return 'base';
-    if (_isShadeDirty(cur.shade, _original.shade)) return 'shade';
-    if (_isHomeDirty(cur.home, _original.home)) return 'home';
-    if (_isExpressionsDirty(
-        cur.expressions.expressions, _original.expressions.expressions)) {
-      return 'expressions';
-    }
-    return null;
   }
 
   bool _isLampDirty(LampSection a, LampSection b) =>
@@ -653,7 +644,7 @@ class ControlNotifier extends _$ControlNotifier {
       postReload: (fresh) async {
         await _updateSeen(
           shade: fresh.shade.colors.isEmpty
-              ? _blackShade
+              ? LampColor.black
               : fresh.shade.colors.first,
           base: fresh.base.colors[fresh.base.ac],
         );
@@ -663,6 +654,34 @@ class ControlNotifier extends _$ControlNotifier {
         await _inv.updateName(_deviceId, fresh.lamp.name);
       },
     ));
+  }
+
+  /// Signal to the lamp that the operator is actively editing colours
+  /// (or brightness) for [surface]. The lamp uses this to drop
+  /// wisp-sourced overrides on that surface for the duration of the
+  /// session, so a wisp paint frame mid-drag doesn't fight the user's
+  /// pick. Always pair an `open=true` call with a matching `open=false`
+  /// when the picker / drag closes (use `try/finally`). The lamp's
+  /// own onDisconnect handler also clears every flag as a defensive
+  /// sweep, so a forgotten close (app crash, force-stop) recovers on
+  /// the next reconnect.
+  ///
+  /// Fire-and-forget: a write failure here is harmless (the wisp's own
+  /// fade machinery still recovers when the next paint frame arrives),
+  /// so errors are swallowed quietly. NOT routed through WriteCoalescer
+  /// — open/close are one-shot per event, no throttling needed.
+  Future<void> setEditSession(EditSurface surface, bool open) async {
+    try {
+      await _ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.editSession,
+        Uint8List.fromList([surface.bit, open ? 1 : 0]),
+        withoutResponse: true,
+      );
+    } catch (_) {
+      // best-effort
+    }
   }
 
   Future<void> setBrightness(int value) async {
@@ -980,8 +999,7 @@ class ControlNotifier extends _$ControlNotifier {
   Future<void> submitConnectPassword(String pw) async {
     await AuthClient(ble: _ble)
         .authenticate(deviceId: _deviceId, password: pw);
-    final bytes = await _ble.read(
-        _deviceId, BleUuids.controlService, BleUuids.lampSection);
+    final bytes = await _ble.readSection(_deviceId, 'lamp');
     if (bytes.isEmpty) {
       throw const LampAuthRequiredException();
     }
@@ -1428,8 +1446,7 @@ class ControlNotifier extends _$ControlNotifier {
       // it was changed on another device). Drop to error so the UI re-
       // prompts instead of leaving the user in a silent-write-rejected
       // state with the banner clearing as if everything was fine.
-      final canaryBytes = await ble.read(
-          _deviceId, BleUuids.controlService, BleUuids.lampSection);
+      final canaryBytes = await ble.readSection(_deviceId, 'lamp');
       if (canaryBytes.isEmpty) {
         state = AsyncError(
             const LampAuthRequiredException(), StackTrace.current);

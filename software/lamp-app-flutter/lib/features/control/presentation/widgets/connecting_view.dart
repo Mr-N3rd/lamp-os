@@ -62,7 +62,7 @@ class _ConnectingViewState extends ConsumerState<ConnectingView>
     // controlNotifier.save() flips the flag true before going AsyncLoading
     // and back to false after the reconnect resolves.
     final saving = ref.watch(lampSaveStatusProvider(widget.deviceId));
-    final message = saving ? 'Whispering to your lamp…' : 'Saying hello…';
+    final message = saving ? 'Saving…' : 'Connecting…';
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,

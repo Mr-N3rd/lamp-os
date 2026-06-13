@@ -87,19 +87,6 @@ void begin() {
   s_lastBackgroundScanMs = millis();
 }
 
-void forget() {
-  s_lastError.clear();
-  // Swap-and-drop pattern: the critical section just steals the buffer
-  // pointer (cheap O(1) swap), and the destructors / free() run OUTSIDE
-  // the portMUX. portENTER_CRITICAL disables interrupts on this core, so
-  // we never run heap operations inside it.
-  std::vector<std::string> drop;
-  portENTER_CRITICAL(&s_scanMux);
-  drop.swap(s_recentSsids);
-  portEXIT_CRITICAL(&s_scanMux);
-  setState(IDLE);
-}
-
 State state() { return s_state; }
 std::string lastError() { return s_lastError; }
 

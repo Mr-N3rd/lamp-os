@@ -12,38 +12,6 @@ namespace lamp {
 // This prevents premature stopping based on frame count
 static constexpr uint32_t PULSE_MAX_FRAMES = 10000;
 
-namespace {
-// Inlined mirror of easeLinear()'s factor calc (see src/util/fade.cpp).
-// linear[i] == i * 511 by construction, so we compute the factor
-// analytically — bit-identical to the table lookup, no LUT needed.
-inline uint32_t computeLinearFactor(uint32_t currentStep, uint32_t duration) {
-  return static_cast<uint32_t>(
-             static_cast<uint16_t>((currentStep * 511u / duration * 511u) / 511u)) *
-         511u;
-}
-
-// Per-channel linear mix using a precomputed factor. Mirrors easeLinear()'s
-// body bit-for-bit (same integer types, same divisor, same start==end
-// short-circuit). For Pulse the audit's "hoist factor per frame" pattern
-// doesn't fit (blendFactor varies per pixel) — inlining the channel math
-// here just eliminates the four-function-call-per-pixel overhead of going
-// through fadeLinear → easeLinear ×4 channels.
-inline uint8_t mixByteLinear(uint8_t start, uint8_t end, uint32_t factor) {
-  if (start == end) return end;
-  return static_cast<uint8_t>(
-      ((static_cast<uint32_t>(end) - static_cast<uint32_t>(start)) * factor) /
-          262144u +
-      start);
-}
-
-inline Color mixColorLinear(const Color& start, const Color& end, uint32_t factor) {
-  return Color(mixByteLinear(start.r, end.r, factor),
-               mixByteLinear(start.g, end.g, factor),
-               mixByteLinear(start.b, end.b, factor),
-               mixByteLinear(start.w, end.w, factor));
-}
-}  // namespace
-
 PulseExpression::PulseExpression(FrameBuffer* inBuffer, uint32_t inFrames)
     : Expression(inBuffer, inFrames) {
   isExclusive = false;  // This can run and blend with other things

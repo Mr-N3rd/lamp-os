@@ -102,7 +102,7 @@ class NearbyLampsNotifier extends _$NearbyLampsNotifier {
     // second after build()), so the periodic-prune semantics are
     // effectively unchanged.
     _pruneTimer ??= Timer.periodic(_pruneInterval, (_) => _prune());
-    _maybePrewarm(ad.id, now);
+    _maybePrewarm(ad, now);
   }
 
   /// Leading-edge emit throttle (audit M1). Without this, every adv on
@@ -164,7 +164,11 @@ class NearbyLampsNotifier extends _$NearbyLampsNotifier {
   /// Rate-limited per device id by `_prewarmDebounce`, and the underlying
   /// `BleClient.prewarm` enforces a single-slot mutex across ALL device
   /// ids so we never burn the radio on more than one prewarm at a time.
-  void _maybePrewarm(String deviceId, int nowMs) {
+  void _maybePrewarm(BleAdvertisement ad, int nowMs) {
+    // Use the adv fields directly. The previous version did `state.firstWhere
+    // ((l) => l.id == ad.id)` which threw StateError when the adv had landed
+    // in `_pendingRoster` but not yet `state` during the 500 ms emit throttle.
+    final deviceId = ad.id;
     final inv = ref.read(inventoryNotifierProvider).value;
     if (inv == null) return;
     final invNotifier = ref.read(inventoryNotifierProvider.notifier);
@@ -176,7 +180,6 @@ class NearbyLampsNotifier extends _$NearbyLampsNotifier {
       // platform id. If so, the inventory entry's id is updated in
       // place and subsequent advs hit the fast `isPaired = true`
       // branch above.
-      final ad = state.firstWhere((l) => l.id == deviceId);
       unawaited(invNotifier.reconcileIdByIdentity(
         newId: deviceId,
         name: ad.name,
@@ -195,8 +198,7 @@ class NearbyLampsNotifier extends _$NearbyLampsNotifier {
     // route correctly even when the lamp is out of range. Self-caps
     // at "only writes when the value changes" so this is also safe
     // to call on every adv.
-    final advIsMesh = state.firstWhere((l) => l.id == deviceId).isMesh;
-    unawaited(invNotifier.rememberMeshState(deviceId, isMesh: advIsMesh));
+    unawaited(invNotifier.rememberMeshState(deviceId, isMesh: ad.isMesh));
     final last = _lastPrewarmMsById[deviceId] ?? 0;
     if (nowMs - last < _prewarmDebounce.inMilliseconds) return;
     _lastPrewarmMsById[deviceId] = nowMs;

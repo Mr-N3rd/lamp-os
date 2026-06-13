@@ -10,6 +10,7 @@ class ExpressionTypeMeta {
     required this.tagline,
     required this.description,
     required this.defaultParameters,
+    this.defaultDisabledDuringWispOverride = false,
   });
 
   /// Wire-level identifier the firmware switches on (`expression.type`).
@@ -35,6 +36,14 @@ class ExpressionTypeMeta {
   /// All values are `uint32_t` on the firmware side.
   final Map<String, int> defaultParameters;
 
+  /// Default for the `disabledDuringWispOverride` flag on a freshly-
+  /// created expression of this type. True for expressions that paint
+  /// continuously and visibly fight the wisp's hold colour (breathing,
+  /// shifty); false for brief / discrete expressions that coexist
+  /// nicely with a held colour (glitchy, pulse). Operator can flip the
+  /// flag per-expression in the editor. See `docs/expressions.md`.
+  final bool defaultDisabledDuringWispOverride;
+
   /// Ordered for picker display.
   static const all = <ExpressionTypeMeta>[
     ExpressionTypeMeta(
@@ -46,6 +55,7 @@ class ExpressionTypeMeta {
           'A slow, continuous inhale/exhale across the chosen colors. '
           'Breath cycle length sets the tempo.',
       defaultParameters: {'breathSpeed': 10},
+      defaultDisabledDuringWispOverride: true,
     ),
     ExpressionTypeMeta(
       key: 'pulse',
@@ -80,6 +90,7 @@ class ExpressionTypeMeta {
         'shiftDurationMax': 600,
         'fadeDuration': 60,
       },
+      defaultDisabledDuringWispOverride: true,
     ),
     ExpressionTypeMeta(
       key: 'glitchy',

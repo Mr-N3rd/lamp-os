@@ -12,6 +12,7 @@ import '../../control/application/control_notifier.dart';
 import '../../control/domain/lamp_color.dart';
 import '../../control/presentation/widgets/color_picker_sheet.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
+import '../../control/presentation/widgets/lamp_color_swatch.dart';
 import '../../lamp_shell/presentation/widgets/wifi_network_picker.dart';
 import '../application/wisp_notifier.dart';
 import '../domain/wisp_source_mode.dart';
@@ -166,12 +167,19 @@ class _WispBodyState extends ConsumerState<_WispBody> {
     // Gradient bar lives outside the ListView's padded interior so it
     // can stretch edge-to-edge. The ListView keeps its 16px gutter for
     // the rest of the content; the bar sits flush above the header.
+    //
+    // The WiFi + Aurora connection chips that used to sit between the
+    // header and the source picker were removed: WiFi state is shown
+    // in the Wisp setup row at the bottom of the pane; Aurora state
+    // surfaces inline under the source picker when Aurora is the
+    // selected source. Two surfaces for the same fact felt redundant.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         PaletteGradientBar(
           sourceMode: source,
           manualPalette: notifier.draftManualPalette,
+          offColor: status.offColor,
         ),
         Expanded(
           child: ListView(
@@ -179,19 +187,33 @@ class _WispBodyState extends ConsumerState<_WispBody> {
             children: [
               _WispHeader(status: status, staleSeconds: stale),
               const SizedBox(height: 16),
-              _ConnectionChips(status: status),
-              const SizedBox(height: 16),
               _SourcePicker(
                 current: source,
                 auroraEnabled: auroraEnabled,
                 onSelect: (m) => _runWispOp(() => notifier.setSource(m)),
               ),
+              if (source == WispSourceMode.off) ...[
+                const SizedBox(height: 20),
+                _OffColorPicker(
+                  lampId: widget.lampId,
+                  current: status.offColor,
+                ),
+              ],
               if (source == WispSourceMode.manual) ...[
                 const SizedBox(height: 20),
                 _ManualPaletteEditor(lampId: widget.lampId),
               ],
               if (source == WispSourceMode.aurora) ...[
                 const SizedBox(height: 24),
+                if (!status.auroraConnected) ...[
+                  // Aurora is the selected palette source but the wisp
+                  // hasn't reached Aurora over the network yet. Surface
+                  // it here instead of via a permanent header chip.
+                  _AuroraNotConnectedNotice(
+                    wifiConnected: status.wifiConnected,
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 _CurrentZone(status: status),
                 const SizedBox(height: 16),
                 _ObservedZonesPicker(
@@ -320,65 +342,46 @@ class _WispHeader extends StatelessWidget {
   }
 }
 
-class _ConnectionChips extends StatelessWidget {
-  const _ConnectionChips({required this.status});
-  final WispStatus status;
+/// Inline notice shown under the Aurora source pill when Aurora is
+/// selected but the wisp hasn't reached Aurora's network yet. Replaces
+/// the old permanent "Aurora: Disconnected" status chip — the chip was
+/// noise when Aurora wasn't the active mode, and silent at the worst
+/// time (when Aurora WAS selected and not reachable). Wi-Fi state lives
+/// in the "Wisp setup" row at the bottom of the pane; if Wi-Fi is also
+/// down, this notice points the operator there.
+class _AuroraNotConnectedNotice extends StatelessWidget {
+  const _AuroraNotConnectedNotice({required this.wifiConnected});
+  final bool wifiConnected;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _StatusChip(
-          icon: Icons.wifi,
-          label: status.wifiConnected
-              ? 'WiFi: Connected'
-              : 'WiFi: Disconnected',
-          connected: status.wifiConnected,
-        ),
-        const SizedBox(width: 8),
-        _StatusChip(
-          icon: Icons.auto_awesome,
-          label: status.auroraConnected
-              ? 'Aurora: Connected'
-              : 'Aurora: Disconnected',
-          connected: status.auroraConnected,
-        ),
-      ],
-    );
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({
-    required this.icon,
-    required this.label,
-    required this.connected,
-  });
-  final IconData icon;
-  final String label;
-  final bool connected;
-
-  @override
-  Widget build(BuildContext context) {
-    final fg = connected ? BrandColors.lumenGreen : BrandColors.error;
+    final detail = wifiConnected
+        ? "Wi-Fi is up but Aurora hasn't been reached yet."
+        : "The wisp isn't on Wi-Fi — configure it below.";
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: fg.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: fg.withValues(alpha: 0.6)),
+        color: BrandColors.amberGold.withValues(alpha: 0.10),
+        border: Border.all(
+          color: BrandColors.amberGold.withValues(alpha: 0.40),
+        ),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: fg),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: fg,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          const Icon(
+            Icons.auto_awesome,
+            size: 16,
+            color: BrandColors.amberGold,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Aurora not connected.\n$detail',
+              style: const TextStyle(
+                color: BrandColors.lampWhite,
+                fontSize: 12,
+              ),
             ),
           ),
         ],
@@ -395,13 +398,20 @@ class _CurrentZone extends StatelessWidget {
   Widget build(BuildContext context) {
     final String headline;
     final String? subhead;
-    if (status.currentZone == null) {
-      headline = 'No zone selected';
+    // The wisp publishes a -1 sentinel for "no current zone heard yet"
+    // (firmware-side equivalent of null when ZoneSelector hasn't latched).
+    // Show that as a human-readable "None detected" instead of the
+    // literal "Zone -1" the operator was seeing.
+    final zone = status.currentZone;
+    final zoneHeard = zone != null && zone >= 0;
+    if (!zoneHeard) {
+      headline = 'None detected';
       subhead = status.zoneSource == ZoneSource.none
-          ? 'Tap a zone below to assign one.'
+          ? 'Tap a zone below to assign one — or wait for Aurora to '
+              'publish one.'
           : null;
     } else {
-      headline = 'Zone ${status.currentZone}';
+      headline = 'Zone $zone';
       subhead = _zoneSourceLabel(status.zoneSource);
     }
     return Column(
@@ -608,7 +618,7 @@ class _SourcePicker extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Source',
+          'Palette source',
           style: TextStyle(color: BrandColors.lampWhite, fontSize: 14),
         ),
         const SizedBox(height: 8),
@@ -733,14 +743,18 @@ class _SourcePill extends StatelessWidget {
 }
 
 // ── Manual palette editor ─────────────────────────────────────────────
-// Horizontal swatch row + add/edit/reorder/delete + explicit save.
+// Wrap of swatches with an inline Add button — same UX as the
+// expression-editor color list (`_ColorChip` in
+// features/lamp_shell/presentation/expression_editor_screen.dart). The
+// older bespoke editor used a horizontally-scrolling ReorderableListView
+// with swipe-to-delete; one source-of-truth across the two color-list
+// surfaces is easier to learn and easier to maintain.
 //
-// Visual rhyme with the Aurora `_PalettePrefixChip` above: same auroraBlue
-// border treatment around the gradient strip, same monospace label
-// underneath. The strip itself is just N equal-width swatches laid out
-// side-by-side — closer to a "color stops" preview than a true gradient,
-// but it matches how the wisp will actually paint the lamps (it samples
-// the palette as discrete colors per peer, not blended).
+// Reorder was dropped intentionally — the palette is rendered by the
+// wisp as a left→right gradient between equally-spaced color stops, so
+// swatch order DOES matter visually. The expressions UX has the same
+// constraint and users rebuild rather than reorder; the editor matches
+// that workflow.
 class _ManualPaletteEditor extends ConsumerStatefulWidget {
   const _ManualPaletteEditor({required this.lampId});
   final String lampId;
@@ -751,19 +765,14 @@ class _ManualPaletteEditor extends ConsumerStatefulWidget {
 }
 
 class _ManualPaletteEditorState extends ConsumerState<_ManualPaletteEditor> {
-  bool _saving = false;
-
   @override
   Widget build(BuildContext context) {
     final notifier = ref.read(wispNotifierProvider(widget.lampId).notifier);
     // Watch so the editor rebuilds when the notifier emits draft / save
-    // state changes via _bumpState. We don't care about the WispStatus
-    // payload here — the source-picker switch is enough to get us into
-    // this widget at all.
+    // state changes via _bumpState.
     ref.watch(wispNotifierProvider(widget.lampId));
 
     final draft = notifier.draftManualPalette;
-    final dirty = notifier.manualPaletteDirty;
     final atCap = draft.length >= 10;
 
     return Column(
@@ -779,64 +788,35 @@ class _ManualPaletteEditorState extends ConsumerState<_ManualPaletteEditor> {
           ),
         ),
         const SizedBox(height: 8),
-        _PaletteStrip(
-          colors: draft,
-          onTapSwatch: (i) => _editAt(i),
-          onRemove: (i) => notifier.removeManualPaletteColor(i),
-          onReorder: notifier.reorderManualPaletteColor,
-        ),
-        const SizedBox(height: 12),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            OutlinedButton.icon(
-              onPressed: atCap ? null : _addNew,
-              icon: const Icon(Icons.add, size: 16),
-              label: Text(atCap ? 'Max 10' : 'Add color'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: atCap
-                    ? BrandColors.fogGrey
-                    : BrandColors.lampWhite,
-                side: BorderSide(
-                  color: BrandColors.slateGrey.withValues(
-                    alpha: atCap ? 0.25 : 0.5,
-                  ),
-                ),
+            for (var i = 0; i < draft.length; i++)
+              _WispColorChip(
+                color: draft[i],
+                onEdit: () => _editAt(i),
+                onRemove: () => notifier.removeManualPaletteColor(i),
               ),
-            ),
-            const Spacer(),
-            FilledButton.icon(
-              onPressed: (dirty && !_saving) ? _save : null,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: BrandColors.midnightBlack,
-                      ),
-                    )
-                  : const Icon(Icons.check, size: 16),
-              label: const Text('Save'),
-              style: FilledButton.styleFrom(
-                backgroundColor: BrandColors.glowPink,
-                foregroundColor: BrandColors.midnightBlack,
+            if (!atCap)
+              TextButton.icon(
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add color'),
+                onPressed: _addNew,
               ),
-            ),
           ],
         ),
-        const SizedBox(height: 8),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 2),
-          child: Text(
-            'Edits are local until you tap Save. Swipe a swatch to '
-            'remove, long-press to drag.',
+        if (atCap) ...[
+          const SizedBox(height: 4),
+          const Text(
+            'Palette is at the 10-color cap. Remove a swatch to add another.',
             style: TextStyle(
               color: BrandColors.fogGrey,
               fontSize: 11,
               fontStyle: FontStyle.italic,
             ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -860,99 +840,167 @@ class _ManualPaletteEditorState extends ConsumerState<_ManualPaletteEditor> {
     final notifier = ref.read(wispNotifierProvider(widget.lampId).notifier);
     final draft = notifier.draftManualPalette;
     if (index < 0 || index >= draft.length) return;
+    // onLive streams the picker's in-progress color into the notifier on
+    // every drag tick. The notifier debounces the BLE write internally so
+    // the wisp doesn't get saturated; the gradient bar at the top updates
+    // immediately. If the user cancels, the picker returns null and we
+    // restore the original colour (the wisp will get one trailing write
+    // with the restored value).
+    final original = draft[index];
     final picked = await showColorPickerSheet(
       context,
-      initial: draft[index],
+      initial: original,
       title: 'Edit palette color',
       bpp: 3,
+      onLive: (live) => notifier.updateManualPaletteColor(index, live),
     );
-    if (picked == null) return;
-    notifier.updateManualPaletteColor(index, picked);
-  }
-
-  Future<void> _save() async {
-    setState(() => _saving = true);
-    final notifier = ref.read(wispNotifierProvider(widget.lampId).notifier);
-    try {
-      await notifier.setManualPalette();
-      if (!mounted) return;
-      AppSnackbar.info(context, 'Palette saved.');
-    } catch (_) {
-      if (!mounted) return;
-      AppSnackbar.error(
-        context, "Couldn't reach the wisp — try Save again.",
-      );
-    } finally {
-      if (mounted) setState(() => _saving = false);
+    if (picked == null) {
+      notifier.updateManualPaletteColor(index, original);
+    } else {
+      notifier.updateManualPaletteColor(index, picked);
     }
   }
 }
 
-class _PaletteStrip extends StatelessWidget {
-  const _PaletteStrip({
-    required this.colors,
-    required this.onTapSwatch,
+/// Off-mode swatch picker. In Off mode the wisp doesn't broadcast a
+/// palette to the lamps (PaintDistributor is held off); the operator
+/// can still pick a color for the wisp's own 30-pixel ring so it
+/// "operates like a lamp" rather than sitting on the default candle-
+/// amber. Tap the swatch to open the same color picker the manual
+/// editor uses; the wisp persists the choice in NVS.
+class _OffColorPicker extends ConsumerStatefulWidget {
+  const _OffColorPicker({required this.lampId, required this.current});
+
+  final String lampId;
+  final LampColor current;
+
+  @override
+  ConsumerState<_OffColorPicker> createState() => _OffColorPickerState();
+}
+
+class _OffColorPickerState extends ConsumerState<_OffColorPicker> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'WISP COLOR',
+          style: TextStyle(
+            color: BrandColors.headerYellow,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Padding(
+          padding: EdgeInsets.only(bottom: 12),
+          child: Text(
+            "Off doesn't broadcast a palette — your lamps stay on their "
+            "own behaviour. Pick the color the wisp itself shows.",
+            style: TextStyle(color: BrandColors.fogGrey, fontSize: 12),
+          ),
+        ),
+        Row(
+          children: [
+            GestureDetector(
+              onTap: _pick,
+              child: LampColorSwatch(color: widget.current, size: 48),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                widget.current.toHex().toUpperCase(),
+                style: const TextStyle(
+                  color: BrandColors.lampWhite,
+                  fontSize: 14,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _pick,
+              icon: const Icon(Icons.edit, size: 16),
+              label: const Text('Change'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pick() async {
+    final notifier = ref.read(wispNotifierProvider(widget.lampId).notifier);
+    // onLive streams every drag tick into setOffColor; the notifier
+    // debounces the BLE write so the wisp doesn't get flooded. Cancel
+    // restores the original colour (one trailing write).
+    final original = widget.current;
+    final picked = await showColorPickerSheet(
+      context,
+      initial: original,
+      title: 'Wisp color (Off)',
+      bpp: 3,
+      onLive: notifier.setOffColor,
+    );
+    if (picked == null) {
+      await notifier.setOffColor(original);
+    } else {
+      await notifier.setOffColor(picked);
+    }
+  }
+}
+
+/// Expressions-style swatch chip: tap to edit, top-right X to remove.
+/// Distinct from the editor's `_ColorChip` only in that the X is always
+/// shown (the wisp's manual palette is allowed to be empty — the wisp
+/// falls back to warm white on the ring). Visual treatment is the same.
+class _WispColorChip extends StatelessWidget {
+  const _WispColorChip({
+    required this.color,
+    required this.onEdit,
     required this.onRemove,
-    required this.onReorder,
   });
 
-  final List<LampColor> colors;
-  final ValueChanged<int> onTapSwatch;
-  final ValueChanged<int> onRemove;
-  final void Function(int oldIndex, int newIndex) onReorder;
+  final LampColor color;
+  final VoidCallback onEdit;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
-    if (colors.isEmpty) {
-      return Container(
-        height: 56,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: BrandColors.slateGrey.withValues(alpha: 0.35),
-            style: BorderStyle.solid,
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        GestureDetector(
+          onTap: onEdit,
+          child: LampColorSwatch(color: color, size: 40),
+        ),
+        Positioned(
+          top: -6,
+          right: -6,
+          child: Semantics(
+            label: 'Remove color',
+            button: true,
+            child: InkWell(
+              onTap: onRemove,
+              customBorder: const CircleBorder(),
+              child: Container(
+                width: 18,
+                height: 18,
+                decoration: const BoxDecoration(
+                  color: BrandColors.ashGrey,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.close,
+                  size: 12,
+                  color: BrandColors.lampWhite,
+                ),
+              ),
+            ),
           ),
         ),
-        alignment: Alignment.center,
-        child: const Text(
-          'No colors yet — tap Add to start your palette.',
-          style: TextStyle(color: BrandColors.fogGrey, fontSize: 12),
-        ),
-      );
-    }
-
-    // ReorderableListView gives us drag-handles + long-press reorder.
-    // Horizontal scroll direction keeps the gradient-like row layout.
-    return Container(
-      height: 56,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: BrandColors.auroraBlue.withValues(alpha: 0.4),
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: ReorderableListView.builder(
-        scrollDirection: Axis.horizontal,
-        buildDefaultDragHandles: false,
-        itemCount: colors.length,
-        // Strip the lift-shadow tint that ReorderableListView paints on
-        // top of the picked-up item — the swatch is opaque and the
-        // shadow looks like a bug otherwise.
-        proxyDecorator: (child, _, _) =>
-            Material(color: Colors.transparent, elevation: 4, child: child),
-        onReorder: onReorder,
-        itemBuilder: (context, i) {
-          final c = colors[i];
-          return _PaletteSwatch(
-            key: ValueKey('manual-swatch-$i-${c.r}-${c.g}-${c.b}'),
-            color: c,
-            onTap: () => onTapSwatch(i),
-            onDelete: () => onRemove(i),
-            index: i,
-          );
-        },
-      ),
+      ],
     );
   }
 }
@@ -1036,38 +1084,3 @@ class _WifiConfigRowState extends ConsumerState<_WifiConfigRow> {
   }
 }
 
-class _PaletteSwatch extends StatelessWidget {
-  const _PaletteSwatch({
-    super.key,
-    required this.color,
-    required this.onTap,
-    required this.onDelete,
-    required this.index,
-  });
-
-  final LampColor color;
-  final VoidCallback onTap;
-  final VoidCallback onDelete;
-  final int index;
-
-  @override
-  Widget build(BuildContext context) {
-    return ReorderableDelayedDragStartListener(
-      index: index,
-      child: Dismissible(
-        key: ValueKey('dismiss-$index-${color.toHex()}'),
-        direction: DismissDirection.vertical,
-        onDismissed: (_) => onDelete(),
-        background: Container(
-          color: BrandColors.error.withValues(alpha: 0.3),
-          alignment: Alignment.center,
-          child: const Icon(Icons.delete_outline, color: Colors.white),
-        ),
-        child: InkWell(
-          onTap: onTap,
-          child: Container(width: 48, color: color.toSwatch()),
-        ),
-      ),
-    );
-  }
-}

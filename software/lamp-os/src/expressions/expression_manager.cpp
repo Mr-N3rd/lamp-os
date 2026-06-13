@@ -92,6 +92,7 @@ void ExpressionManager::addExpression(const ExpressionConfig& config) {
                                    config.intervalMin, config.intervalMax,
                                    target, config.parameters)) {
       expr->autoTriggerEnabled = config.enabled;
+      expr->disabledDuringWispOverride = config.disabledDuringWispOverride;
       expressions.push_back({std::move(expr), config.type, config});
     }
   }

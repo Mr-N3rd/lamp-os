@@ -18,21 +18,6 @@ void loop();
 void initBehaviors();
 
 /**
- * ArtNet DMX actions shared between the base and shade
- */
-void handleArtnet();
-
-/**
- * Handle wifi mode swaps when a stage router is present
- */
-void handleStageMode();
-
-/**
- * Whole lamp changes from the configuration tool
- */
-void handleWebSocket();
-
-/**
  * @brief Dispatch a lamp action JSON document to the appropriate handler.
  *
  * Routes the same action set used by the WebSocket protocol (bright, shade,

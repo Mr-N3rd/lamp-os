@@ -21,11 +21,11 @@ Future<void> _confirmSkip(BuildContext context, AddLampNotifier notifier) async 
     context: context,
     builder: (ctx) => AlertDialog(
       backgroundColor: BrandColors.midnightBlack,
-      title: const Text('Adopt without a whisper?',
+      title: const Text('Adopt without a password?',
           style: TextStyle(color: BrandColors.lampWhite)),
       content: const Text(
         "Anyone within Bluetooth range will be able to play with this lamp. "
-        "You can set a whisper later from the Setup tab — but it's kinder to "
+        "You can set a password later from the Setup tab — but it's safer to "
         'pick one now.',
         style: TextStyle(color: BrandColors.fogGrey),
       ),
@@ -81,7 +81,7 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
           const Text(
-            'A whisper just between you two',
+            'Set a password',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: BrandColors.lampWhite,
@@ -91,14 +91,14 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
           ),
           const SizedBox(height: 8),
           const Text(
-            "Set a password so only your trusted phones can wake them.",
+            "Only phones with this password will be able to control this lamp.",
             textAlign: TextAlign.center,
             style: TextStyle(color: BrandColors.fogGrey),
           ),
           if (state.error == AddLampError.wrongPassword) ...[
             const SizedBox(height: 8),
             const Text(
-              "That whisper didn't match — try once more.",
+              "That password didn't match — try once more.",
               style: TextStyle(color: BrandColors.error),
               textAlign: TextAlign.center,
             ),
@@ -113,7 +113,7 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
               setState(() {}); // re-evaluate the mismatch banner + button
             },
             decoration: const InputDecoration(
-              labelText: 'Whisper',
+              labelText: 'Password',
               border: OutlineInputBorder(),
             ),
           ),
@@ -123,7 +123,7 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
             obscureText: true,
             onChanged: (_) => setState(() {}),
             decoration: InputDecoration(
-              labelText: 'Whisper again',
+              labelText: 'Confirm password',
               border: const OutlineInputBorder(),
               errorText: showMismatch ? "Doesn't match" : null,
             ),
@@ -207,7 +207,7 @@ class _VerifyingTips extends StatefulWidget {
 
 class _VerifyingTipsState extends State<_VerifyingTips> {
   static const _tips = [
-    'Memorizing your whisper…',
+    'Saving your password…',
     'Picking out a critter friend…',
     'Stretching after the long sleep…',
     'Almost settled in…',

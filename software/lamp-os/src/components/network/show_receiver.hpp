@@ -197,15 +197,6 @@ class ShowReceiver {
   // collapses the second copy after applying the first.
   uint16_t nextEventSeq();
 
-  // Mesh expression-trigger API. Wraps `inv` in a
-  // `{char:"triggerExpression", ...}` CONTROL_OP payload and unicasts it.
-  // Receivers parse and dispatch to ExpressionManager::triggerInvocation,
-  // which never re-cascades — loop break is structural.
-  //
-  // sendExpressionTo: addressed to one peer by name. Returns false if the
-  // peer isn't currently reachable via ESP-NOW (no recent HELLO).
-  bool sendExpressionTo(const std::string& peerName, const ExpressionInvocation& inv);
-
   // Wire a FirmwareReceiver into the dispatch ladder. handleRecv calls
   // its handleChunkOnRecvTask directly on the WiFi task (Core 0) for
   // MSG_FW_CHUNK; OFFER and DONE go through the PendingFirmwareControl

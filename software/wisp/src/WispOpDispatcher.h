@@ -38,6 +38,7 @@ enum class DispatchResult {
   AppliedWifiChange,   // setWifi persisted + WifiLink/StageBeacon kicked
   AppliedSourceChange, // setSource applied (Off/Manual/Aurora)
   AppliedManualPalette,// setManualPalette stored
+  AppliedOffColor,     // setOffColor stored (Off-mode wisp-ring color)
   Malformed,           // JSON parse failed or required field missing
 };
 

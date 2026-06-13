@@ -158,6 +158,15 @@ Config::Config(Preferences* inPrefs) {
       expr.intervalMin = exprNode["intervalMin"] | 60;
       expr.intervalMax = exprNode["intervalMax"] | 900;
       expr.target = exprNode["target"] | 3;
+      // Type-aware default for the wisp-override gate: `breathing` and
+      // `shifty` paint continuously and visibly fight the wisp's hold
+      // colour, so they default to true when the key is missing (old
+      // pre-feature NVS). Other expressions default to false. The
+      // operator can flip per-expression in the editor.
+      const bool typeDefaultsDisabled =
+          (expr.type == "breathing" || expr.type == "shifty");
+      expr.disabledDuringWispOverride =
+          exprNode["disabledDuringWispOverride"] | typeDefaultsDisabled;
       // Load generic parameters
       for (JsonPair kv : exprNode) {
         const char* key = kv.key().c_str();
@@ -165,7 +174,8 @@ Config::Config(Preferences* inPrefs) {
 
         // Skip common fields we've already handled
         if (keyStr == "type" || keyStr == "enabled" || keyStr == "intervalMin" ||
-            keyStr == "intervalMax" || keyStr == "target" || keyStr == "colors") {
+            keyStr == "intervalMax" || keyStr == "target" || keyStr == "colors" ||
+            keyStr == "disabledDuringWispOverride") {
           continue;
         }
 
@@ -446,6 +456,7 @@ JsonDocument Config::asJsonDocument() {
     exprNode["intervalMin"] = expr.intervalMin;
     exprNode["intervalMax"] = expr.intervalMax;
     exprNode["target"] = expr.target;
+    exprNode["disabledDuringWispOverride"] = expr.disabledDuringWispOverride;
     // Serialize generic parameters
     for (const auto& param : expr.parameters) {
       const std::string& key = param.first;
@@ -534,6 +545,7 @@ String Config::asExpressionsJson() {
     exprNode["intervalMin"] = expr.intervalMin;
     exprNode["intervalMax"] = expr.intervalMax;
     exprNode["target"] = expr.target;
+    exprNode["disabledDuringWispOverride"] = expr.disabledDuringWispOverride;
     for (const auto& param : expr.parameters) {
       exprNode[param.first] = param.second;
     }

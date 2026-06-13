@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "components/network/lamp_protocol.hpp"
+#include "components/transient_override/color_override.hpp"
 #include "core/behavior_context.hpp"
 #include "core/compositor.hpp"
 #include "expression_manager.hpp"
@@ -51,9 +53,26 @@ bool Expression::shouldAffectBuffer() {
   }
 }
 
+// Defined out-of-line at the bottom of this file. Queries the lamp's
+// two ColorOverride globals — returns true iff the wisp is actively
+// holding either surface. Used by control() below to suppress
+// auto-trigger on expressions flagged disabledDuringWispOverride.
+bool isWispCurrentlyOverriding();
+
 void Expression::control() {
   // Pause if an exclusive behavior is running (unless we are exclusive)
   if (shouldPause()) return;
+
+  // Wisp-override gate: skip auto-trigger when the operator has marked
+  // this expression "pause when wisp is in control" AND a wisp paint
+  // is currently held on either surface. Pushes nextTriggerMs forward
+  // by the min interval so a long-running wisp hold doesn't queue up
+  // a backlog of triggers that all fire the instant the wisp lets go.
+  if (disabledDuringWispOverride && animationState == STOPPED &&
+      isWispCurrentlyOverriding()) {
+    nextTriggerMs = millis() + intervalMinMs;
+    return;
+  }
 
   // Check for automatic trigger
   if (autoTriggerEnabled && animationState == STOPPED && millis() > nextTriggerMs) {
@@ -110,6 +129,31 @@ void Expression::trigger() {
   if (context_ && context_->expressionManager) {
     context_->expressionManager->onExpressionFired(this);
   }
+}
+
+// Lives in standard_lamp.cpp as globals; defined in lamp namespace.
+}  // namespace lamp
+
+extern lamp::ColorOverride baseColorOverride;
+extern lamp::ColorOverride shadeColorOverride;
+
+namespace lamp {
+
+// Forward-declared in this TU above Expression::control(). Cheap query
+// — two bool reads + two enum comparisons per Expression per loop
+// tick. The two override globals live in standard_lamp.cpp.
+bool isWispCurrentlyOverriding() {
+  if (baseColorOverride.isActive() &&
+      baseColorOverride.activeSource() ==
+          lamp_protocol::OverrideSource::Wisp) {
+    return true;
+  }
+  if (shadeColorOverride.isActive() &&
+      shadeColorOverride.activeSource() ==
+          lamp_protocol::OverrideSource::Wisp) {
+    return true;
+  }
+  return false;
 }
 
 }  // namespace lamp

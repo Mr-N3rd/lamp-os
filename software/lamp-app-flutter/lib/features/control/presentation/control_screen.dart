@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../../core/widgets/friendly_error.dart';
+import 'package:go_router/go_router.dart' as gr;
 import '../../nearby/application/nearby_lamps_notifier.dart';
 import '../application/control_notifier.dart';
 import '../application/lamp_auth_required_exception.dart';
@@ -19,7 +20,6 @@ import 'widgets/connection_banner.dart';
 import 'widgets/lamp_preview.dart';
 import 'widgets/shade_card.dart';
 
-const _blackShade = LampColor(r: 0, g: 0, b: 0, w: 0);
 
 class ControlScreen extends ConsumerStatefulWidget {
   const ControlScreen({super.key, required this.lampId});
@@ -80,9 +80,6 @@ class _ControlScreenState extends ConsumerState<ControlScreen> {
       data: (state) {
         final notifier =
             ref.read(controlNotifierProvider(lampId).notifier);
-        final shade = state.shade.colors.isEmpty
-            ? _blackShade
-            : state.shade.colors.single;
         return Column(
           children: [
             if (!state.connected)
@@ -99,10 +96,12 @@ class _ControlScreenState extends ConsumerState<ControlScreen> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
+                        // LampPreview watches its own (shade, base) slice
+                        // — only rebuilds when those change, not when the
+                        // surrounding state churns from coalesced writes
+                        // or inventory writebacks.
                         LampPreview(
                           deviceId: lampId,
-                          shade: shade,
-                          baseColors: state.base.colors,
                           // Smaller than the previous centred 140 so the
                           // name text gets enough room to the right.
                           size: 100,
@@ -136,28 +135,83 @@ class _ControlScreenState extends ConsumerState<ControlScreen> {
                       ],
                     ),
                   ),
+                  // ShadeCard / BaseCard watch their own slices; ControlScreen
+                  // hands them lampId + the edit-session callback. The
+                  // onChanged write path is internalised in the card.
                   ShadeCard(
-                    color: shade,
-                    bpp: state.shade.bpp,
-                    onChanged: notifier.setShadeColor,
+                    lampId: lampId,
+                    onEditSessionChanged: (open) =>
+                        notifier.setEditSession(EditSurface.shade, open),
                   ),
                   BaseCard(
-                    colors: state.base.colors,
-                    activeIndex: state.base.ac,
+                    lampId: lampId,
                     onTap: () =>
                         showBaseEditorSheet(context, lampId: lampId),
                   ),
                   const SizedBox(height: 12),
                   BrightnessCard(
-                    value: state.lamp.brightness,
-                    onChanged: notifier.setBrightness,
+                    lampId: lampId,
+                    onEditSessionChanged: (open) => notifier
+                        .setEditSession(EditSurface.brightness, open),
                   ),
+                  const SizedBox(height: 8),
+                  _ConfigurationRow(lampId: lampId),
                 ],
               ),
             ),
           ],
         );
       },
+    );
+  }
+}
+
+/// Inline "Lamp configuration" row at the bottom of the Setup tab body.
+/// Replaces the AppBar gear that used to live on every tab — the gear
+/// felt like chrome bolted on top; an inline row reads as "this is just
+/// the next thing in Setup, after the colour cards." Navigates to the
+/// same `/lamp/:id/setup` route (lamp name, password, home mode,
+/// advanced LEDs, About / firmware update / version footer).
+class _ConfigurationRow extends StatelessWidget {
+  const _ConfigurationRow({required this.lampId});
+
+  final String lampId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () =>
+            gr.GoRouter.maybeOf(context)?.push(AppRoutes.setup(lampId)),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.settings, color: BrandColors.lampWhite, size: 22),
+              SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  'Configuration',
+                  style: TextStyle(
+                    color: BrandColors.lampWhite,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+              Icon(Icons.chevron_right, color: BrandColors.slateGrey),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

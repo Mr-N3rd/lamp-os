@@ -178,10 +178,18 @@ void renderRing() {
     numStops = n;
   }
   // Off, or Manual/Aurora with no palette yet, falls through with
-  // numStops == 0 and gets warm-white.
-
-  if (!wisp::computeRingGradient(stopsRgb, numStops, pixels,
-                                 wisp::kStatusRingPixelCount)) {
+  // numStops == 0. Off uses the operator-chosen single color; Manual/
+  // Aurora with empty palette still get warm-white (their config is
+  // "missing", not "I chose a color").
+  if (mode == wisp::WispSourceMode::Off) {
+    const wisp::ManualPaletteColor offColor = wispConfig.offColor();
+    for (size_t i = 0; i < wisp::kStatusRingPixelCount; ++i) {
+      pixels[i * 3 + 0] = offColor.r;
+      pixels[i * 3 + 1] = offColor.g;
+      pixels[i * 3 + 2] = offColor.b;
+    }
+  } else if (!wisp::computeRingGradient(stopsRgb, numStops, pixels,
+                                        wisp::kStatusRingPixelCount)) {
     wisp::fillRingWarmWhite(pixels, wisp::kStatusRingPixelCount);
   }
 
@@ -296,6 +304,15 @@ void drainPendingWispOp() {
       // the wifiConnected transition (driven off WiFi.isConnected()
       // inside StatusBeacon) without waiting up to 30s for the heartbeat.
       Serial.println("[wisp] wifi creds updated; STA reconnect + advert refresh kicked");
+      statusBeacon.triggerOnChange();
+      break;
+    case wisp::DispatchResult::AppliedOffColor:
+      // Off-mode wisp-ring color stored. Only repaint the ring if we're
+      // actually in Off mode right now; otherwise the new color is
+      // background state that takes effect on the next Off transition.
+      if (wispConfig.sourceMode() == wisp::WispSourceMode::Off) {
+        renderRing();
+      }
       statusBeacon.triggerOnChange();
       break;
     case wisp::DispatchResult::Ignored:

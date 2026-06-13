@@ -18,6 +18,10 @@ constexpr const char* kKeySourceMode  = "srcMode";
 // implicit in the byte length (length % 3 == 0). Empty blob → empty
 // palette.
 constexpr const char* kKeyManualPalette = "manualPal";
+// Off-mode color — three bytes (R, G, B). Stored as a fixed-3-byte blob
+// rather than three individual int slots so the wire format / NVS
+// footprint is identical to one ManualPaletteColor.
+constexpr const char* kKeyOffColor      = "offColor";
 
 WispSourceMode coerceSourceMode(int raw) {
   switch (raw) {
@@ -51,11 +55,17 @@ void WispConfig::begin() {
   selectedZone_ = prefs_.getInt(kKeyZone, -1);
   wifiSsid_     = prefs_.getString(kKeySsid, String());
   wifiPw_       = prefs_.getString(kKeyPw, String());
-  // Default to Aurora when the key is missing — matches the pre-Phase-E
-  // behavior where every wisp followed Aurora.
+  // Default to Off when the key is missing. The pre-Phase-E behaviour
+  // was Aurora-for-everyone, but that pretended an event was in progress
+  // on a fresh wisp with no Aurora bus on the network, which (combined
+  // with the empty-palette zero-broadcast) fought every BLE base-colour
+  // edit the operator made. A fresh wisp staying quiet until the
+  // operator picks Manual + a palette OR explicitly flips Aurora on for
+  // a show is the right default. Fielded wisps with NVS-saved values
+  // are unaffected.
   sourceMode_   = coerceSourceMode(
       prefs_.getInt(kKeySourceMode,
-                    static_cast<int>(WispSourceMode::Aurora)));
+                    static_cast<int>(WispSourceMode::Off)));
 
   // Manual palette: bytes blob, 3 bytes per color, capped at the
   // protocol max. getBytesLength returns 0 for missing keys.
@@ -82,12 +92,25 @@ void WispConfig::begin() {
                   (unsigned)paletteLen);
   }
 
+  // Off-mode color: 3 bytes. Missing or wrong-sized blob falls back to the
+  // pre-existing warm-white default already set in the field initialiser.
+  const size_t offColorLen = prefs_.getBytesLength(kKeyOffColor);
+  if (offColorLen == 3) {
+    uint8_t buf[3];
+    if (prefs_.getBytes(kKeyOffColor, buf, 3) == 3) {
+      offColor_.r = buf[0];
+      offColor_.g = buf[1];
+      offColor_.b = buf[2];
+    }
+  }
+
   Serial.printf("[wisp.cfg] loaded selZone=%d ssid='%s' pw=%s "
-                "srcMode=%d manualColors=%u\n",
+                "srcMode=%d manualColors=%u offColor=%u,%u,%u\n",
                 selectedZone_, wifiSsid_.c_str(),
                 wifiPw_.length() ? "<set>" : "<empty>",
                 static_cast<int>(sourceMode_),
-                (unsigned)manualPalette_.size());
+                (unsigned)manualPalette_.size(),
+                offColor_.r, offColor_.g, offColor_.b);
 }
 
 void WispConfig::setSelectedZone(int zone) {
@@ -161,6 +184,15 @@ void WispConfig::setManualPalette(
     }
   }
   Serial.printf("[wisp.cfg] manualPalette <= %u colors\n", (unsigned)n);
+}
+
+void WispConfig::setOffColor(ManualPaletteColor c) {
+  offColor_ = c;
+  if (opened_) {
+    const uint8_t buf[3] = {c.r, c.g, c.b};
+    prefs_.putBytes(kKeyOffColor, buf, 3);
+  }
+  Serial.printf("[wisp.cfg] offColor <= %u,%u,%u\n", c.r, c.g, c.b);
 }
 
 }  // namespace wisp

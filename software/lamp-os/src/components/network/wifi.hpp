@@ -18,7 +18,6 @@ struct ScanResult {
 };
 
 void begin();
-void forget();   // clear last-error / scan cache (used by wifi_op forget)
 
 State state();
 std::string lastError();   // "scan" | "" — only ever set when a scan fails

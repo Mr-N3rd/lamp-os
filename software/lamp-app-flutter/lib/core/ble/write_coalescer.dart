@@ -50,17 +50,6 @@ class WriteCoalescer {
     _pending = payload;
   }
 
-  Future<void> flush() async {
-    if (_disposed) return;
-    _windowTimer?.cancel();
-    final payload = _pending;
-    _pending = null;
-    _windowOpen = false;
-    if (payload != null) {
-      await onWrite(payload);
-    }
-  }
-
   void _onWindowElapsed() {
     if (_disposed) return;
     final payload = _pending;

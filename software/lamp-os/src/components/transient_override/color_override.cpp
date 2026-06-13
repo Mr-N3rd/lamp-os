@@ -34,6 +34,22 @@ void ColorOverride::apply(const uint8_t sourceMac[6],
                           const Color* colors, uint8_t numColors,
                           uint16_t fadeDurationMs) {
   if (!configurator_ || numColors == 0 || !colors) return;
+  // Operator-priority lockout: while the app has the colour picker /
+  // brightness slider for this surface open, wisp paints lose. Social
+  // cascade (PeerSwap) still applies — greetings outrank quiet edits.
+  if (operatorEditing_ &&
+      source == lamp_protocol::OverrideSource::Wisp) {
+#ifdef LAMP_DEBUG
+    // Diagnostic for "lamp stopped listening to wisp" — fires when the
+    // operatorEditing flag is stuck true (e.g. ungraceful BLE
+    // disconnect skipped the defensive sweep in ControlServerCallbacks::
+    // onDisconnect at ble_control.cpp:376-378). If you see this line
+    // while no app is connected, the flag is stranded.
+    Serial.printf("[override] DROP wisp surface=0x%02X (operatorEditing=true)\n",
+                  (unsigned)surface_);
+#endif
+    return;
+  }
   // Source-ownership: a Holding override from a different source can be
   // overtaken — newer apply() wins (matches the UX: a wisp painting room A
   // gets superseded the moment a peer-swap from a closer source arrives).
@@ -54,6 +70,17 @@ void ColorOverride::apply(const uint8_t sourceMac[6],
       lamp::buildGradientWithStops(pixelCount_, stops);
 
   configurator_->beginFade(target, fadeDurationMs);
+  // Keep the configurator's animation state machine alive. Without this,
+  // ConfiguratorBehavior::control() (behaviors/configurator.cpp:77-89)
+  // lapses to STOPPED after CONFIGURATOR_WEBSOCKET_TIMEOUT_MS=60s of no
+  // BLE writes — the legacy WebSocket-era inactivity gate. While
+  // STOPPED, the Compositor skips its draw() (core/compositor.cpp:62),
+  // so the wisp gradient we just stored in `colors` never reaches the
+  // LED buffer even though apply() is firing every ~5-10s. Wisp paint
+  // cadence (well inside 60s) keeps the configurator perpetually awake
+  // through this bump; the existing 6 BLE-write bump sites in
+  // standard_lamp.cpp keep the operator-edit path covered.
+  configurator_->lastWebSocketUpdateTimeMs = millis();
 
   state_ = FadeState::FadingIn;
   activeSource_ = source;
@@ -81,6 +108,10 @@ void ColorOverride::restore(const uint8_t sourceMac[6],
   // machinery so this restore visually behaves identically to a fresh
   // apply (same per-pixel interp curve, same mid-fade interrupt support).
   configurator_->beginFade(savedColors_, fadeDurationMs);
+  // See apply() above — keep the configurator drawing through the
+  // restore fade-back too, otherwise the watchdog-driven restore would
+  // hand off to a STOPPED configurator and the fade would be invisible.
+  configurator_->lastWebSocketUpdateTimeMs = millis();
   state_ = FadeState::Restoring;
   restoreStartMs_ = configurator_->fadeStartMs();
   restoreDurationMs_ = fadeDurationMs;

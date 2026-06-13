@@ -250,6 +250,7 @@ class ExpressionConfig {
     required this.intervalMax,
     required this.target,
     required this.parameters,
+    this.disabledDuringWispOverride = false,
   });
 
   final String type;
@@ -260,9 +261,29 @@ class ExpressionConfig {
   final int target; // 1=shade, 2=base, 3=both
   final Map<String, int> parameters;
 
+  /// When true the lamp skips this expression's auto-trigger while the
+  /// wisp is actively overriding either surface (`baseColorOverride` or
+  /// `shadeColorOverride` non-Idle with `activeSource == Wisp`).
+  /// Defaults to true for `breathing` and `shifty` (they paint
+  /// continuously and visibly fight the wisp's hold colour) and false
+  /// for `glitchy` / `pulse` (brief flashes / waves that coexist with
+  /// a held wisp colour). Operator can flip per-expression in the
+  /// editor. See `docs/expressions.md`.
+  final bool disabledDuringWispOverride;
+
   static const _reservedKeys = {
     'type', 'enabled', 'colors', 'intervalMin', 'intervalMax', 'target',
+    'disabledDuringWispOverride',
   };
+
+  /// Type-aware default for `disabledDuringWispOverride` when the JSON
+  /// key is missing. Mirrors the firmware-side default in
+  /// `software/lamp-os/src/config/config.cpp` so the app and firmware
+  /// agree on what an old NVS payload (pre-feature firmware) should
+  /// parse to without needing a migration write.
+  static bool _defaultDisabledDuringWispOverrideForType(String type) {
+    return type == 'breathing' || type == 'shifty';
+  }
 
   factory ExpressionConfig.fromJson(Map<String, dynamic> json) {
     final params = <String, int>{};
@@ -270,8 +291,9 @@ class ExpressionConfig {
       if (_reservedKeys.contains(e.key)) continue;
       if (e.value is num) params[e.key] = (e.value as num).toInt();
     }
+    final type = json['type'] as String? ?? '';
     return ExpressionConfig(
-      type: json['type'] as String? ?? '',
+      type: type,
       enabled: json['enabled'] as bool? ?? false,
       colors: ((json['colors'] as List?) ?? const [])
           .map((e) => LampColor.fromHex(e as String))
@@ -280,6 +302,9 @@ class ExpressionConfig {
       intervalMax: (json['intervalMax'] as num?)?.toInt() ?? 900,
       target: (json['target'] as num?)?.toInt() ?? 3,
       parameters: params,
+      disabledDuringWispOverride:
+          json['disabledDuringWispOverride'] as bool? ??
+              _defaultDisabledDuringWispOverrideForType(type),
     );
   }
 
@@ -290,8 +315,31 @@ class ExpressionConfig {
         'intervalMin': intervalMin,
         'intervalMax': intervalMax,
         'target': target,
+        'disabledDuringWispOverride': disabledDuringWispOverride,
         ...parameters,
       };
+
+  ExpressionConfig copyWith({
+    String? type,
+    bool? enabled,
+    List<LampColor>? colors,
+    int? intervalMin,
+    int? intervalMax,
+    int? target,
+    Map<String, int>? parameters,
+    bool? disabledDuringWispOverride,
+  }) =>
+      ExpressionConfig(
+        type: type ?? this.type,
+        enabled: enabled ?? this.enabled,
+        colors: colors ?? this.colors,
+        intervalMin: intervalMin ?? this.intervalMin,
+        intervalMax: intervalMax ?? this.intervalMax,
+        target: target ?? this.target,
+        parameters: parameters ?? this.parameters,
+        disabledDuringWispOverride:
+            disabledDuringWispOverride ?? this.disabledDuringWispOverride,
+      );
 
   @override
   bool operator ==(Object other) =>
@@ -303,7 +351,8 @@ class ExpressionConfig {
           intervalMin == other.intervalMin &&
           intervalMax == other.intervalMax &&
           target == other.target &&
-          _mapEq.equals(parameters, other.parameters);
+          _mapEq.equals(parameters, other.parameters) &&
+          disabledDuringWispOverride == other.disabledDuringWispOverride;
 
   @override
   int get hashCode => Object.hash(
@@ -314,6 +363,7 @@ class ExpressionConfig {
         intervalMax,
         target,
         _mapEq.hash(parameters),
+        disabledDuringWispOverride,
       );
 }
 

@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../../inventory/application/inventory_notifier.dart';
+import '../../application/control_notifier.dart';
+import '../../application/control_state.dart';
 import '../../domain/lamp_color.dart';
 import 'critter_asset.dart';
 
@@ -16,22 +18,56 @@ import 'critter_asset.dart';
 /// `Shade` and `Body`. On each rebuild the `<linearGradient …>…</linearGradient>`
 /// blocks in the cached template are replaced with new blocks whose
 /// `<stop>` elements carry the live colors.
+///
+/// Watches its own state slice via `controlNotifierProvider(lampId).select`,
+/// scoped to `(shade.colors, base.colors)`. Sibling state changes
+/// (brightness, expressions, etc.) don't trigger LampPreview rebuilds.
 class LampPreview extends ConsumerStatefulWidget {
   const LampPreview({
     super.key,
     required this.deviceId,
-    required this.shade,
-    required this.baseColors,
     this.size = 140,
   });
 
   final String deviceId;
-  final LampColor shade;
-  final List<LampColor> baseColors;
   final double size;
 
   @override
   ConsumerState<LampPreview> createState() => _LampPreviewState();
+}
+
+/// Subset of ControlState that LampPreview cares about. Two `_PreviewSlice`
+/// values are equal iff the rendered SVG would be identical — drives the
+/// `.select`'s equality check so unchanged surfaces don't rebuild.
+class _PreviewSlice {
+  const _PreviewSlice(this.shade, this.baseColors);
+  final LampColor shade;
+  final List<LampColor> baseColors;
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! _PreviewSlice) return false;
+    if (shade != other.shade) return false;
+    if (baseColors.length != other.baseColors.length) return false;
+    for (var i = 0; i < baseColors.length; i++) {
+      if (baseColors[i] != other.baseColors[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(shade, Object.hashAll(baseColors));
+}
+
+_PreviewSlice _previewSliceFrom(AsyncValue<ControlState> async) {
+  final state = async.value;
+  if (state == null) {
+    return const _PreviewSlice(LampColor.black, []);
+  }
+  final shade = state.shade.colors.isEmpty
+      ? LampColor.black
+      : state.shade.colors.single;
+  return _PreviewSlice(shade, state.base.colors);
 }
 
 class _LampPreviewState extends ConsumerState<LampPreview> {
@@ -119,12 +155,12 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
     return buf.toString();
   }
 
-  /// Substitute the gradient blocks in [template] with the live colors from
-  /// the current widget state.
-  String _renderSvg(String template) {
-    final shadeHex = widget.shade.toRgbHex();
+  /// Substitute the gradient blocks in [template] with the live colors.
+  String _renderSvg(String template, LampColor shade,
+      List<LampColor> baseColors) {
+    final shadeHex = shade.toRgbHex();
     final shadeStops = _stopTag(0, shadeHex) + _stopTag(100, shadeHex);
-    final bodyStops = _buildStops(widget.baseColors);
+    final bodyStops = _buildStops(baseColors);
 
     String rewrite(String tag, String stops) {
       final openTag = '${tag.split('>').first}>';
@@ -152,6 +188,13 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
           ?.firstWhereOrNull((l) => l.id == widget.deviceId)
           ?.critterIndex;
     }));
+    // Targeted watch on the control state — only the slice that affects
+    // the rendered SVG. Sibling state changes (brightness, expressions,
+    // home, etc.) and the inventory writeback storm during a slider drag
+    // don't rebuild this widget.
+    final slice = ref.watch(
+      controlNotifierProvider(widget.deviceId).select(_previewSliceFrom),
+    );
     final asset = critterAssetFor(
       critterIndex: critterIndex,
       deviceId: widget.deviceId,
@@ -169,7 +212,7 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
       return SizedBox(width: widget.size, height: widget.size);
     }
     final cacheKey =
-        '${widget.shade.toHex()}|${widget.baseColors.map((c) => c.toHex()).join(",")}';
+        '${slice.shade.toHex()}|${slice.baseColors.map((c) => c.toHex()).join(",")}';
     // Reuse an already-built SvgPicture widget for this cacheKey (audit
     // perf-H5). Pre-fix every shade/base hex change rebuilt SvgPicture
     // with a fresh ValueKey, which forced flutter_svg to re-decode the
@@ -185,17 +228,20 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
           _memoRendered != null) {
         rendered = _memoRendered!;
       } else {
-        rendered = _renderSvg(template);
+        rendered = _renderSvg(template, slice.shade, slice.baseColors);
         _memoFor = template;
         _memoKey = cacheKey;
         _memoRendered = rendered;
       }
       cached = SvgPicture.string(
         rendered,
-        // Same ValueKey discipline as before — flutter_svg's internal
-        // picture cache is keyed off this string. Identical key across
-        // the cached-widget reuse means no re-decode.
-        key: ValueKey<String>(cacheKey),
+        // No explicit ValueKey: a key here would force Flutter to tear
+        // down the element on every cache miss (a sustained drag visits
+        // more unique color samples than the 16-entry LRU holds),
+        // causing a one-frame mount gap and visible flicker.
+        // flutter_svg's own internal picture cache still keys off the
+        // String source content so unchanged renders return the same
+        // decoded picture.
         width: widget.size,
         height: widget.size,
       );

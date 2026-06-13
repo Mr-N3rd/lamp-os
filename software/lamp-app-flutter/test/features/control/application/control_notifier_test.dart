@@ -639,10 +639,13 @@ void main() {
           '"mqtt":{"enabled":false,"brokerHost":"","brokerPort":1883}}',
         )));
     // Seed home section so build() loads ssid/password
-    await ble.write(_devId, BleUuids.controlService, BleUuids.homeSection,
-        Uint8List.fromList(utf8.encode(
-          '{"ssid":"WiFi","password":"********","brightness":60}',
-        )));
+    ble.seedSection(
+      _devId,
+      'home',
+      Uint8List.fromList(utf8.encode(
+        '{"ssid":"WiFi","password":"********","brightness":60}',
+      )),
+    );
     await ble.disconnect(_devId);
 
     final c = ProviderContainer(
@@ -909,12 +912,9 @@ void main() {
       () async {
     final ble = InMemoryBleClient();
     await _seed(ble);
-    // Overwrite lampSection with empty bytes — simulates the firmware's
+    // Overwrite lamp section with empty bytes — simulates the firmware's
     // auth-gated empty response after commit 71415e0.
-    await ble.connect(_devId);
-    await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-        Uint8List(0));
-    await ble.disconnect(_devId);
+    ble.seedSection(_devId, 'lamp', Uint8List(0));
 
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
@@ -941,11 +941,8 @@ void main() {
       'and rebuilds with state', () async {
     final ble = InMemoryBleClient();
     await _seed(ble);
-    // Start with empty lampSection so build() trips the auth gate.
-    await ble.connect(_devId);
-    await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-        Uint8List(0));
-    await ble.disconnect(_devId);
+    // Start with empty lamp section so build() trips the auth gate.
+    ble.seedSection(_devId, 'lamp', Uint8List(0));
 
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],
@@ -974,14 +971,13 @@ void main() {
     // Simulate "firmware now grants access" by writing real lampSection bytes
     // back into the fake BLE store. Production: the firmware flips this after
     // a valid CHAR_AUTH write.
-    await ble.connect(_devId);
-    await ble.write(
-        _devId,
-        BleUuids.controlService,
-        BleUuids.lampSection,
-        Uint8List.fromList(utf8.encode(
-          '{"name":"jacko","brightness":42,"advancedEnabled":false}',
-        )));
+    ble.seedSection(
+      _devId,
+      'lamp',
+      Uint8List.fromList(utf8.encode(
+        '{"name":"jacko","brightness":42,"advancedEnabled":false}',
+      )),
+    );
 
     await c
         .read(controlNotifierProvider(_devId).notifier)
@@ -1026,11 +1022,9 @@ void main() {
     addTearDown(sub.close);
 
     // Simulate the firmware rebooting under a new password set on another
-    // device: drop the link AND wipe lampSection so the reconnect's canary
-    // read returns empty bytes.
-    await ble.connect(_devId);
-    await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-        Uint8List(0));
+    // device: drop the link AND wipe the lamp section so the reconnect's
+    // canary read returns empty bytes.
+    ble.seedSection(_devId, 'lamp', Uint8List(0));
     await ble.disconnect(_devId);
 
     // First reconnect attempt fires at 500ms; give it room to land.
@@ -1046,10 +1040,7 @@ void main() {
       'and leaves inventory unchanged', () async {
     final ble = InMemoryBleClient();
     await _seed(ble);
-    await ble.connect(_devId);
-    await ble.write(_devId, BleUuids.controlService, BleUuids.lampSection,
-        Uint8List(0));
-    await ble.disconnect(_devId);
+    ble.seedSection(_devId, 'lamp', Uint8List(0));
 
     final c = ProviderContainer(
       overrides: [bleClientProvider.overrideWithValue(ble)],

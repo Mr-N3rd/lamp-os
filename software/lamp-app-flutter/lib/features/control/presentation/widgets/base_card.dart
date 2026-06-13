@@ -1,24 +1,43 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../application/control_notifier.dart';
 import '../../domain/lamp_color.dart';
 
-class BaseCard extends StatelessWidget {
+/// Slice of ControlState BaseCard needs: just the colors list. Used as the
+/// `.select` projection so sibling state changes don't rebuild us.
+class _BaseSlice {
+  const _BaseSlice(this.colors);
+  final List<LampColor> colors;
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! _BaseSlice) return false;
+    if (colors.length != other.colors.length) return false;
+    for (var i = 0; i < colors.length; i++) {
+      if (colors[i] != other.colors[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hashAll(colors);
+}
+
+class BaseCard extends ConsumerWidget {
   const BaseCard({
     super.key,
-    required this.colors,
-    required this.activeIndex,
+    required this.lampId,
     required this.onTap,
   });
 
-  final List<LampColor> colors;
-  // ignore: unused_field
-  final int activeIndex;
+  final String lampId;
   final VoidCallback onTap;
 
   /// Returns a gradient-safe list: LinearGradient requires ≥2 stops, so a
   /// single-color list is duplicated, and an empty list falls back to black.
-  List<Color> _gradientColors() {
+  List<Color> _gradientColors(List<LampColor> colors) {
     if (colors.isEmpty) return const [Colors.black, Colors.black];
     final swatches = colors.map((c) => c.toSwatch()).toList();
     if (swatches.length == 1) return [swatches.first, swatches.first];
@@ -26,7 +45,13 @@ class BaseCard extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final slice = ref.watch(
+      controlNotifierProvider(lampId).select((async) {
+        final state = async.value;
+        return _BaseSlice(state?.base.colors ?? const []);
+      }),
+    );
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
@@ -48,7 +73,7 @@ class BaseCard extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: _gradientColors(),
+                  colors: _gradientColors(slice.colors),
                 ),
               ),
             ),

@@ -5,24 +5,6 @@
 namespace lamp {
 
 namespace {
-// Per-channel linear mix using a precomputed factor. Mirrors easeLinear()'s
-// body bit-for-bit (same integer types, same divisor, same start==end
-// short-circuit) so output bytes match the unhoisted call site exactly.
-inline uint8_t mixByteLinear(uint8_t start, uint8_t end, uint32_t factor) {
-  if (start == end) return end;
-  return static_cast<uint8_t>(
-      ((static_cast<uint32_t>(end) - static_cast<uint32_t>(start)) * factor) /
-          262144u +
-      start);
-}
-
-inline Color mixColorLinear(const Color& start, const Color& end, uint32_t factor) {
-  return Color(mixByteLinear(start.r, end.r, factor),
-               mixByteLinear(start.g, end.g, factor),
-               mixByteLinear(start.b, end.b, factor),
-               mixByteLinear(start.w, end.w, factor));
-}
-
 // Glitchy always calls fadeLinear(buffer[i], glitchColor, 100, 95): the
 // factor is a constant. Precompute it once. Mirrors easeLinear's:
 //   linear[(uint16_t)((95 * 511 / 100 * 511) / 511)] = linear[485] = 485 * 511

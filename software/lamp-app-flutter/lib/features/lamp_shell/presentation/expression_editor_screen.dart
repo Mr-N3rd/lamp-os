@@ -101,38 +101,14 @@ class _ExpressionEditorScreenState
   }
 
   ExpressionConfig _withColors(ExpressionConfig d, List<LampColor> colors) =>
-      ExpressionConfig(
-        type: d.type,
-        enabled: d.enabled,
-        colors: colors,
-        intervalMin: d.intervalMin,
-        intervalMax: d.intervalMax,
-        target: d.target,
-        parameters: d.parameters,
-      );
+      d.copyWith(colors: colors);
 
   ExpressionConfig _withIntervals(ExpressionConfig d, int min, int max) =>
-      ExpressionConfig(
-        type: d.type,
-        enabled: d.enabled,
-        colors: d.colors,
-        intervalMin: min,
-        intervalMax: max,
-        target: d.target,
-        parameters: d.parameters,
-      );
+      d.copyWith(intervalMin: min, intervalMax: max);
 
   ExpressionConfig _withParameters(
           ExpressionConfig d, Map<String, int> p) =>
-      ExpressionConfig(
-        type: d.type,
-        enabled: d.enabled,
-        colors: d.colors,
-        intervalMin: d.intervalMin,
-        intervalMax: d.intervalMax,
-        target: d.target,
-        parameters: p,
-      );
+      d.copyWith(parameters: p);
 
   /// Open the color picker with live preview wired to the lamp. While
   /// the user drags R/G/B sliders, the picked color streams to
@@ -222,18 +198,9 @@ class _ExpressionEditorScreenState
                 onPressed: () async {
                   final notifier = ref
                       .read(controlNotifierProvider(widget.lampId).notifier);
-                  final entry = ExpressionConfig(
-                    type: draft.type,
-                    enabled: draft.enabled,
-                    colors: draft.colors,
-                    intervalMin: draft.intervalMin,
-                    intervalMax: draft.intervalMax,
-                    target: draft.target,
-                    parameters: draft.parameters,
-                  );
-                  await notifier.previewExpression(entry);
+                  await notifier.previewExpression(draft);
                   _testFired = true;
-                  await notifier.testExpression(entry);
+                  await notifier.testExpression(draft);
                 },
               );
             },
@@ -358,6 +325,36 @@ class _ExpressionEditorScreenState
                     ref.watch(advancedSessionProvider(widget.lampId)),
                 onChanged: (p) => _updateDraft((d) => _withParameters(d, p)),
               ),
+              const SizedBox(height: 20),
+              // Wisp-override gate. When the wisp is actively painting,
+              // expressions that paint continuously fight the show. The
+              // operator can opt this expression out of auto-trigger
+              // during wisp control on a per-expression basis. Defaults
+              // come from ExpressionTypeMeta.defaultDisabledDuringWispOverride
+              // (breathing + shifty → on; glitchy + pulse → off). The
+              // expression-test button at the top of the editor is NOT
+              // gated — operator tests fire regardless of wisp state.
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text(
+                  'Pause when wisp is in control',
+                  style: TextStyle(
+                    color: BrandColors.lampWhite,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Skip this expression’s auto-trigger while a '
+                  'wisp is overriding the lamp’s colours.',
+                  style: TextStyle(
+                    color: BrandColors.fogGrey,
+                    fontSize: 12,
+                  ),
+                ),
+                value: draft.disabledDuringWispOverride,
+                onChanged: (v) => _updateDraft(
+                    (d) => d.copyWith(disabledDuringWispOverride: v)),
+              ),
               if (meta != null) ...[
                 const SizedBox(height: 20),
                 Text(
@@ -438,15 +435,7 @@ class _ExpressionEditorScreenState
                         label: Text(isNew ? 'Add' : 'Update'),
                         onPressed: () async {
                           _savedThisSession = true;
-                          await notifier.upsertExpression(ExpressionConfig(
-                            type: draft.type,
-                            enabled: draft.enabled,
-                            colors: draft.colors,
-                            intervalMin: draft.intervalMin,
-                            intervalMax: draft.intervalMax,
-                            target: draft.target,
-                            parameters: draft.parameters,
-                          ));
+                          await notifier.upsertExpression(draft);
                           ref
                               .read(expressionDraftProvider(widget.lampId,
                                       widget.typeKey, widget.targetKey)

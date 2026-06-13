@@ -54,31 +54,39 @@ class _BaseEditorSheetState extends ConsumerState<BaseEditorSheet> {
 
     Future<void> editStop(int i) async {
       final original = [...colors];
-      final picked = await showColorPickerSheet(
-        context,
-        initial: colors[i],
-        title: 'Stop ${i + 1}',
-        bpp: base.bpp,
-        onLive: (live) {
-          // Latest colors come from the notifier — read fresh each tick so
-          // concurrent state changes (e.g. another stop edited in parallel)
-          // don't get clobbered. In practice the picker is modal so this is
-          // belt-and-suspenders, but it matches the realtime contract.
-          final current =
-              ref.read(controlNotifierProvider(widget.lampId)).value;
-          if (current == null) return;
-          final next = [...current.base.colors];
-          if (i >= next.length) return; // stop removed while picker open
-          next[i] = live;
-          notifier.setBaseColors(next);
-        },
-      );
-      if (picked == null) {
-        // Cancelled — restore the snapshot we took before the picker opened.
-        unawaited(notifier.setBaseColors(original));
+      // Tell the lamp we're operator-editing the base surface so the
+      // wisp's overrides get dropped for the picker's lifetime. Always
+      // pair with a close call in `finally`.
+      unawaited(notifier.setEditSession(EditSurface.base, true));
+      try {
+        final picked = await showColorPickerSheet(
+          context,
+          initial: colors[i],
+          title: 'Stop ${i + 1}',
+          bpp: base.bpp,
+          onLive: (live) {
+            // Latest colors come from the notifier — read fresh each tick so
+            // concurrent state changes (e.g. another stop edited in parallel)
+            // don't get clobbered. In practice the picker is modal so this is
+            // belt-and-suspenders, but it matches the realtime contract.
+            final current =
+                ref.read(controlNotifierProvider(widget.lampId)).value;
+            if (current == null) return;
+            final next = [...current.base.colors];
+            if (i >= next.length) return; // stop removed while picker open
+            next[i] = live;
+            notifier.setBaseColors(next);
+          },
+        );
+        if (picked == null) {
+          // Cancelled — restore the snapshot we took before the picker opened.
+          unawaited(notifier.setBaseColors(original));
+        }
+        // Save case: the last onLive tick already wrote the correct color;
+        // no further action needed.
+      } finally {
+        unawaited(notifier.setEditSession(EditSurface.base, false));
       }
-      // Save case: the last onLive tick already wrote the correct color; no
-      // further action needed.
     }
 
     void removeStop(int i) {

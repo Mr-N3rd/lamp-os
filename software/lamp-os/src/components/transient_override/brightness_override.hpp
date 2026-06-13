@@ -65,6 +65,12 @@ class BrightnessOverride {
   FadeState state() const { return state_; }
   lamp_protocol::OverrideSource activeSource() const { return activeSource_; }
 
+  // Operator-priority lockout, same semantics as ColorOverride. Set
+  // on by the app when the brightness slider is being dragged; off
+  // when the user releases it.
+  void setOperatorEditing(bool editing) { operatorEditing_ = editing; }
+  bool operatorEditing() const { return operatorEditing_; }
+
   // Was an override-MSG-WISP-HELLO seen recently from `mac`? Used by
   // the show_receiver brightness-floor check to allow Wisp-paired
   // sources to ignore the kBrightnessOverrideMin floor (e.g. during
@@ -106,6 +112,9 @@ class BrightnessOverride {
   lamp_protocol::OverrideSurface activeSurface_ = lamp_protocol::OverrideSurface::Any;
 
   std::function<void()> onChange_;
+
+  // Operator-editing lock — see setOperatorEditing() above.
+  bool operatorEditing_ = false;
 };
 
 }  // namespace lamp

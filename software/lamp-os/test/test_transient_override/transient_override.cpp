@@ -80,6 +80,11 @@ struct FakeConfigurator {
   uint32_t fadeStartMs_ = 0;
   uint16_t fadeDurationMs_ = 0;
   int beginFadeCount = 0;
+  // Mirrors ConfiguratorBehavior::lastWebSocketUpdateTimeMs. ColorOverride
+  // bumps this from apply() + restore() so the production configurator
+  // doesn't lapse to STOPPED while an override is active. See the
+  // production class at src/behaviors/configurator.{hpp,cpp}.
+  uint32_t lastWebSocketUpdateTimeMs = 0;
 
   uint32_t fadeStartMs() const { return fadeStartMs_; }
   uint16_t fadeDurationMs() const { return fadeDurationMs_; }
@@ -156,6 +161,10 @@ class ColorOverride {
     }
     std::vector<Color> target = expandToPixelCount(colors, numColors);
     configurator_->beginFade(target, fadeDurationMs);
+    // Mirror production: bump the configurator's wake-up timestamp so it
+    // doesn't lapse to STOPPED while an override is active. See
+    // color_override.cpp:apply().
+    configurator_->lastWebSocketUpdateTimeMs = mockMillis();
     state_ = FadeState::FadingIn;
     activeSource_ = source;
     std::memcpy(activeMac_, sourceMac, 6);
@@ -171,6 +180,7 @@ class ColorOverride {
     if (source != lamp_protocol::OverrideSource::Any &&
         source != activeSource_) return;
     configurator_->beginFade(savedColors_, fadeDurationMs);
+    configurator_->lastWebSocketUpdateTimeMs = mockMillis();
     state_ = FadeState::Restoring;
     restoreStartMs_ = configurator_->fadeStartMs();
     restoreDurationMs_ = fadeDurationMs;
@@ -210,6 +220,17 @@ class ColorOverride {
   void rebaseline(const std::vector<Color>& currentSavedColors) {
     if (state_ == FadeState::Idle) return;
     savedColors_ = currentSavedColors;
+  }
+
+  // Cross-touch watchdog without running a fade. Wisp paint ships Base+
+  // Shade pairs 10 ms apart through a single-slot mailbox; if Core 1
+  // drains late, the second post drops the first on the floor and the
+  // dropped surface's watchdog expires after 60 s. The drain block
+  // cross-touches both surfaces after either apply lands.
+  void touchApply(uint32_t nowMs) {
+    if (state_ == FadeState::FadingIn || state_ == FadeState::Holding) {
+      lastApplyMs_ = nowMs;
+    }
   }
 
   bool isActive() const { return state_ != FadeState::Idle; }
@@ -363,6 +384,44 @@ static const uint8_t kMacPeerSwap[6] = {0xBB, 0x11, 0x22, 0x33, 0x44, 0x55};
 // ColorOverride tests
 // ============================================================================
 
+void test_color_override_apply_bumps_configurator_websocket_timestamp() {
+  // ColorOverride::apply() must bump the configurator's
+  // lastWebSocketUpdateTimeMs alongside beginFade(). Without this, the
+  // production configurator's CONFIGURATOR_WEBSOCKET_TIMEOUT_MS=60s
+  // gate would lapse to STOPPED after ~60s of no BLE writes — the
+  // wisp paint would still be APPLY'd but the Compositor would skip
+  // the configurator's draw(), leaving the LED buffer on whatever
+  // last painted it (a stale Pulse from a social greet, the initial
+  // boot colors, etc.). The wisp's ~5-10s paint cadence keeps this
+  // bumped continuously while paint is flowing; the override's own
+  // 60s watchdog handles the fall-back when the wisp goes silent.
+  test::FakeConfigurator cfg;
+  cfg.colors.resize(4, test::Color());
+  test::ColorOverride ov;
+  ov.bind(&cfg, 4);
+
+  test::Color target(100, 100, 100, 0);
+  test::g_nowMs = 12345;
+  ov.apply(kMacWisp, test::lamp_protocol::OverrideSource::Wisp,
+           &target, 1, /*fadeDurationMs=*/100);
+  TEST_ASSERT_EQUAL(12345u, cfg.lastWebSocketUpdateTimeMs);
+
+  // A second apply() at a later time bumps the timestamp again — this
+  // is what keeps the configurator perpetually awake while wisp paint
+  // is flowing every ~5s.
+  test::g_nowMs = 50000;
+  ov.apply(kMacWisp, test::lamp_protocol::OverrideSource::Wisp,
+           &target, 1, 100);
+  TEST_ASSERT_EQUAL(50000u, cfg.lastWebSocketUpdateTimeMs);
+
+  // restore() also bumps — the configurator must stay awake through
+  // the fade-back animation, otherwise the watchdog-driven restore
+  // would hand off to a STOPPED configurator.
+  test::g_nowMs = 80000;
+  ov.restore(kMacWisp, test::lamp_protocol::OverrideSource::Wisp, 200);
+  TEST_ASSERT_EQUAL(80000u, cfg.lastWebSocketUpdateTimeMs);
+}
+
 void test_color_override_apply_transitions_fading_then_holding() {
   // apply() must immediately put state into FadingIn. tick() must move
   // to Holding once the fade window has elapsed but not before.
@@ -440,6 +499,54 @@ void test_color_override_watchdog_auto_restores_after_60s() {
   test::g_nowMs = 60000;
   ov.tick(test::g_nowMs);
   TEST_ASSERT_EQUAL(test::FadeState::Restoring, ov.state());
+}
+
+void test_color_override_touch_apply_defers_watchdog() {
+  // Wisp paint ships Base+Shade pairs 10 ms apart through a single-slot
+  // mailbox. If Core 1 drains late, the second post overwrites the
+  // first, and the dropped surface's watchdog would otherwise fire at
+  // 60 s. The drain block calls touchApply() on the OTHER surface
+  // whenever a wisp frame applies; this test pins that semantics.
+  test::FakeConfigurator cfg;
+  cfg.colors.resize(4, test::Color(50, 50, 50, 0));
+  test::ColorOverride ov;
+  ov.bind(&cfg, 4);
+
+  test::Color target(255, 0, 0, 0);
+  ov.apply(kMacWisp, test::lamp_protocol::OverrideSource::Wisp, &target, 1, 50);
+  test::g_nowMs = 60;
+  ov.tick(test::g_nowMs);
+  TEST_ASSERT_EQUAL(test::FadeState::Holding, ov.state());
+
+  // 50 s into Holding (10 s before watchdog) — touchApply from a sibling
+  // surface drain. Watchdog reference moves forward to 50 s.
+  test::g_nowMs = 50000;
+  ov.touchApply(test::g_nowMs);
+
+  // 60 s into the original lifetime: STILL Holding because the watchdog
+  // now anchors to the touchApply at 50 s, not the original apply.
+  test::g_nowMs = 60000;
+  ov.tick(test::g_nowMs);
+  TEST_ASSERT_EQUAL(test::FadeState::Holding, ov.state());
+
+  // 110 s — 60 s past the touchApply — the watchdog finally fires.
+  test::g_nowMs = 110000;
+  ov.tick(test::g_nowMs);
+  TEST_ASSERT_EQUAL(test::FadeState::Restoring, ov.state());
+}
+
+void test_color_override_touch_apply_noop_when_idle() {
+  // touchApply on an Idle override is a no-op — it can't re-anchor a
+  // watchdog that isn't armed, and must not transition state.
+  test::FakeConfigurator cfg;
+  cfg.colors.resize(4, test::Color());
+  test::ColorOverride ov;
+  ov.bind(&cfg, 4);
+
+  TEST_ASSERT_EQUAL(test::FadeState::Idle, ov.state());
+  test::g_nowMs = 12345;
+  ov.touchApply(test::g_nowMs);
+  TEST_ASSERT_EQUAL(test::FadeState::Idle, ov.state());
 }
 
 void test_color_override_source_ownership_blocks_cross_source_restore() {
@@ -681,9 +788,12 @@ int main(int argc, char** argv) {
   (void)argv;
   UNITY_BEGIN();
 
+  RUN_TEST(test_color_override_apply_bumps_configurator_websocket_timestamp);
   RUN_TEST(test_color_override_apply_transitions_fading_then_holding);
   RUN_TEST(test_color_override_restore_transitions_restoring_then_idle);
   RUN_TEST(test_color_override_watchdog_auto_restores_after_60s);
+  RUN_TEST(test_color_override_touch_apply_defers_watchdog);
+  RUN_TEST(test_color_override_touch_apply_noop_when_idle);
   RUN_TEST(test_color_override_source_ownership_blocks_cross_source_restore);
   RUN_TEST(test_color_override_source_any_restore_succeeds_regardless);
   RUN_TEST(test_color_override_rebaseline_updates_saved_colors_mid_holding);

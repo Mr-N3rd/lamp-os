@@ -10,7 +10,6 @@ import 'package:lamp_app/features/inventory/application/inventory_notifier.dart'
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/expressions_screen.dart';
 import 'package:lamp_app/features/lamp_shell/presentation/lamp_shell.dart';
-import 'package:lamp_app/features/lamp_shell/presentation/setup_screen.dart';
 import 'package:lamp_app/features/nearby/application/nearby_lamps_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -70,12 +69,13 @@ void main() {
     await _settle(tester);
     expect(find.byType(ExpressionsScreen), findsOneWidget);
 
-    await tester.tap(find.byIcon(Icons.settings));
+    // Wisp tab — formerly verified Setup-tab routing, but Setup was
+    // removed from the bottom nav and is now reached via the AppBar
+    // gear (Icons.settings). The gear navigates through GoRouter,
+    // which isn't wired in this MaterialApp-only harness; switching to
+    // a still-present destination keeps the tab-switch coverage here.
+    await tester.tap(find.byIcon(Icons.bubble_chart));
     await _settle(tester);
-    // SetupScreen is now the Setup tab; it renders either ConnectingView
-    // (loading) or the error view depending on BLE state. Either way the
-    // scaffold is present and the Expressions screen is not.
-    expect(find.byType(SetupScreen), findsOneWidget);
     expect(find.byType(ExpressionsScreen), findsNothing);
   });
 
@@ -120,7 +120,7 @@ void main() {
     expect(find.text('lamp-99'), findsOneWidget);
   });
 
-  testWidgets('Save action appears on all editing tabs, hidden on Info',
+  testWidgets('Save action appears on editing tabs, hidden on Wisp',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
     final c = _container();
@@ -134,7 +134,7 @@ void main() {
     ));
     await _settle(tester);
     // Disconnected fixture renders the "Reconnecting…" outlined chip on
-    // Colors tab — Save action is present.
+    // Setup-as-Colors tab — Save action is present.
     expect(find.text('Reconnecting…'), findsOneWidget);
 
     // Switch to Expressions — Save action stays (expressions now ride
@@ -143,15 +143,16 @@ void main() {
     await _settle(tester);
     expect(find.text('Reconnecting…'), findsOneWidget);
 
-    // Switch to Info — read-only; Save action hidden.
-    await tester.tap(find.byIcon(Icons.info_outline));
+    // Switch to Wisp — wisp writes are immediate, no isDirty;
+    // Save action hidden.
+    await tester.tap(find.byIcon(Icons.bubble_chart));
     await _settle(tester);
     expect(find.text('Reconnecting…'), findsNothing);
     expect(find.text('Save changes'), findsNothing);
     expect(find.text('Saved'), findsNothing);
   });
 
-  testWidgets('Save action shows "Save changes" + red dot when dirty',
+  testWidgets('Save action shows "Save changes" pill when dirty',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
     final ble = InMemoryBleClient();
@@ -181,7 +182,6 @@ void main() {
     }
     // Connected + clean ⇒ "Saved" outlined chip.
     expect(find.text('Saved'), findsOneWidget);
-    expect(find.byKey(const ValueKey('save-dirty-dot')), findsNothing);
 
     // Make the state dirty by changing the lamp name through the notifier.
     await c
@@ -190,8 +190,9 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 16));
 
+    // Dirty ⇒ gradient pill swaps to "Save changes". The red-dot badge
+    // was removed: the entire pill lighting up already signals dirty.
     expect(find.text('Save changes'), findsOneWidget);
-    expect(find.byKey(const ValueKey('save-dirty-dot')), findsOneWidget);
   });
 
   testWidgets('Save action shows outlined "Saved" when clean + connected',

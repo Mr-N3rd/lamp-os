@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 
 import 'ble_client.dart';
+import 'uuids.dart';
 
 /// Production [BleClient] backed by flutter_blue_plus. Each public method
 /// resolves the device + service + characteristic from the plugin's live
@@ -238,6 +240,43 @@ class FbpBleClient implements BleClient {
     final ch = await _resolve(d, s, c);
     await ch.setNotifyValue(true);
     yield* ch.lastValueStream.map(Uint8List.fromList);
+  }
+
+  @override
+  Future<Uint8List> readSection(String deviceId, String name) async {
+    try {
+      // Write the section name to PAGE_CTRL. The firmware snapshots the
+      // section into the conn slot + resets a cursor. CTRL is a normal
+      // write-with-response so we know the snapshot is ready before
+      // the first DATA read fires.
+      await write(
+        deviceId,
+        BleUuids.controlService,
+        BleUuids.pageCtrl,
+        Uint8List.fromList(utf8.encode(name)),
+      );
+      // Pull DATA chunks until one comes back short (< kPageChunkSize),
+      // which signals the cursor has reached the end of the snapshot.
+      // fbp 2.x serializes GATT ops per-device internally, so writes
+      // and reads can't interleave on the wire even if our awaits are
+      // back-to-back.
+      final out = BytesBuilder(copy: false);
+      while (true) {
+        final chunk = await read(
+          deviceId,
+          BleUuids.controlService,
+          BleUuids.pageData,
+        );
+        out.add(chunk);
+        if (chunk.length < kPageChunkSize) {
+          return out.toBytes();
+        }
+      }
+    } on BleDisconnectedException {
+      // Mid-stream drop. Partial bytes are discarded; the surrounding
+      // reconnect ladder re-runs the section sweep.
+      rethrow;
+    }
   }
 
   @override

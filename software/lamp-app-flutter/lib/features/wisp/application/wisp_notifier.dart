@@ -36,6 +36,18 @@ class WispNotifier extends _$WispNotifier {
   StreamSubscription<Uint8List>? _sub;
   late WispRepository _repo;
 
+  /// Debounce window for the realtime wispOp writes that fire on every
+  /// Off-mode color-picker drag tick or manual-palette editor mutation.
+  /// 250 ms gives a continuous picker drag ~4 writes/sec — fast enough
+  /// to feel realtime, slow enough that NVS wear and BLE bandwidth stay
+  /// reasonable.
+  static const Duration _offColorDebounce =
+      Duration(milliseconds: 250);
+  static const Duration _manualPaletteDebounce =
+      Duration(milliseconds: 250);
+  Timer? _offColorWriteTimer;
+  Timer? _manualPaletteWriteTimer;
+
   // ── Phase E manual palette state ─────────────────────────────────────
   // The wisp does not echo the saved palette back in wispStatus (would
   // push the JSON past CONTROL_MAX_PAYLOAD — only the 8-char paletteId
@@ -82,6 +94,8 @@ class WispNotifier extends _$WispNotifier {
 
     ref.onDispose(() {
       _sub?.cancel();
+      _offColorWriteTimer?.cancel();
+      _manualPaletteWriteTimer?.cancel();
     });
 
     // Subscribe before the initial read so we never miss a notify that
@@ -249,6 +263,30 @@ class WispNotifier extends _$WispNotifier {
     }
   }
 
+  /// Pick the color the wisp renders on its OWN 30-pixel ring while
+  /// sourceMode is Off. Does not broadcast to lamps — Off mode keeps
+  /// PaintDistributor held off. Optimistically reflects in local state
+  /// so the swatch updates instantly; the BLE write itself is debounced
+  /// at [_offColorDebounce] so a continuous picker drag tops out at
+  /// ~4 writes/sec instead of one per drag tick (which would saturate
+  /// the wispOp link and chew through NVS writes on the wisp's side).
+  ///
+  /// No rollback on failure — the user expects realtime, not
+  /// reconcile-and-revert. The wisp's next status notify will correct
+  /// local state if the write actually missed.
+  Future<void> setOffColor(LampColor color) async {
+    final cur = state.value ?? WispStatus.empty;
+    state = AsyncData(cur.copyWith(offColor: color));
+    _offColorWriteTimer?.cancel();
+    _offColorWriteTimer = Timer(_offColorDebounce, () async {
+      try {
+        await _repo.setOffColor(color);
+      } catch (e, st) {
+        debugPrint('WispNotifier.setOffColor write failed: $e\n$st');
+      }
+    });
+  }
+
   /// Phase E — set the wisp source mode (Off / Manual / Aurora).
   /// Optimistically reflects in local state so the pill picker doesn't
   /// lag the tap; the wispStatus notify reconciles within ~2s. Rolls
@@ -285,6 +323,7 @@ class WispNotifier extends _$WispNotifier {
     if (_draftManualPalette.length >= 10) return;
     _draftManualPalette = [..._draftManualPalette, color];
     _bumpState();
+    _scheduleManualPaletteWrite();
   }
 
   /// Replace the swatch at [index]. No-op if [index] is out of range.
@@ -294,6 +333,7 @@ class WispNotifier extends _$WispNotifier {
     next[index] = color;
     _draftManualPalette = next;
     _bumpState();
+    _scheduleManualPaletteWrite();
   }
 
   /// Remove the swatch at [index] (swipe-to-delete).
@@ -303,6 +343,7 @@ class WispNotifier extends _$WispNotifier {
     next.removeAt(index);
     _draftManualPalette = next;
     _bumpState();
+    _scheduleManualPaletteWrite();
   }
 
   /// Drag-to-reorder. Standard "move item at [oldIndex] to [newIndex]"
@@ -315,6 +356,31 @@ class WispNotifier extends _$WispNotifier {
     next.insert(clampedNew, item);
     _draftManualPalette = next;
     _bumpState();
+    _scheduleManualPaletteWrite();
+  }
+
+  /// Trailing-edge debounced write of the current draft palette to the
+  /// wisp. Called from every editor mutation. Operator-facing semantics:
+  /// every edit is "saved" — no Save button to remember. On the wire,
+  /// continuous edits collapse into one write per [_manualPaletteDebounce]
+  /// window so NVS wear stays bounded.
+  ///
+  /// Errors are logged and swallowed (no UI-visible failure path); the
+  /// next wispStatus notify will let us know if the wisp is still
+  /// receiving. Realtime UX trumps reconcile-and-revert here.
+  void _scheduleManualPaletteWrite() {
+    _manualPaletteWriteTimer?.cancel();
+    final committed = List<LampColor>.from(_draftManualPalette);
+    _manualPaletteWriteTimer = Timer(_manualPaletteDebounce, () async {
+      try {
+        await _repo.setManualPalette(committed);
+        _savedManualPalette = committed;
+        _bumpState();
+        unawaited(_persistManualPaletteToPrefs());
+      } catch (e, st) {
+        debugPrint('WispNotifier.setManualPalette write failed: $e\n$st');
+      }
+    });
   }
 
   /// Commit the draft palette to the wisp. Updates the saved snapshot

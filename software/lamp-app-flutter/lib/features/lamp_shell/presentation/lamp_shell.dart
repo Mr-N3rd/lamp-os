@@ -14,8 +14,6 @@ import '../../social/presentation/social_screen.dart';
 import '../../wisp/application/wisp_notifier.dart';
 import '../../wisp/presentation/wisp_pane.dart';
 import 'expressions_screen.dart';
-import 'info_screen.dart';
-import 'setup_screen.dart';
 
 /// Diagonal aurora-blue → glow-pink gradient used on the active tab
 /// indicator and the AppBar Save action. Ported from the prior Vue app's
@@ -26,7 +24,10 @@ const _brandGradient = LinearGradient(
   colors: [BrandColors.auroraBlue, BrandColors.glowPink],
 );
 
-enum LampTab { control, expressions, setup, wisp, social, info }
+/// Bottom-nav tabs for the lamp shell. Pre-restructure this enum
+/// carried `setup` + `info` as well; both moved into the AppBar gear
+/// → /setup standalone pane.
+enum LampTab { control, expressions, wisp, social }
 
 class LampShell extends ConsumerStatefulWidget {
   const LampShell({
@@ -67,10 +68,8 @@ class _LampShellState extends ConsumerState<LampShell> {
     final body = switch (_tab) {
       LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsScreen(lampId: widget.lampId),
-      LampTab.setup => SetupScreen(lampId: widget.lampId),
       LampTab.wisp => WispPane(lampId: widget.lampId),
       LampTab.social => SocialScreen(lampId: widget.lampId),
-      LampTab.info => InfoScreen(lampId: widget.lampId),
     };
 
     final inventory = ref.watch(inventoryNotifierProvider).value;
@@ -107,16 +106,14 @@ class _LampShellState extends ConsumerState<LampShell> {
           ),
         ),
         actions: [
-          // Save is visible on the editing tabs (Colors, Setup,
-          // Expressions, Social). All ride the same isDirty + settings-blob
-          // save flow — Expressions edits live-preview via
-          // CHAR_EXPRESSION_OP for instant feedback but only persist to
-          // NVS when the global Save Changes pill is tapped. Info is
-          // read-only, so the action is hidden there. Wisp writes are
-          // immediate (CHAR_WISP_OP) with no dirty state — the "Saved"
-          // pill belongs to the settings-blob flow, not wisp ops.
-          if (_tab != LampTab.info && _tab != LampTab.wisp)
-            _SaveAction(lampId: widget.lampId),
+          // Save pill — visible on tabs that ride the isDirty +
+          // settings-blob save flow. Wisp writes go straight through
+          // CHAR_WISP_OP with no dirty state, so the pill belongs to
+          // the settings-blob flow only. Configuration drilldown lives
+          // inline at the bottom of the Setup tab body (not the AppBar)
+          // per the operator's intent that config feels like part of
+          // Setup, not chrome above it.
+          if (_tab != LampTab.wisp) _SaveAction(lampId: widget.lampId),
         ],
       ),
       body: body,
@@ -150,21 +147,22 @@ class _LampShellState extends ConsumerState<LampShell> {
           }),
         ),
         child: NavigationBar(
+          // Bottom nav was carrying 6 destinations; "Setup" and "Info"
+          // are now reached via the AppBar Configuration gear (Setup =
+          // lamp-config hub; Info = About section at its bottom). That
+          // leaves four primary modes — the first tab is relabelled
+          // "Setup" since it's where most lamp tuning happens.
           selectedIndex: _tab.index,
           onDestinationSelected: (i) =>
               setState(() => _tab = LampTab.values[i]),
           destinations: [
-            _gradientDestination(Icons.tune, 'Colors', _tab == LampTab.control),
+            _gradientDestination(Icons.tune, 'Setup', _tab == LampTab.control),
             _gradientDestination(
                 Icons.auto_awesome, 'Expressions', _tab == LampTab.expressions),
-            _gradientDestination(
-                Icons.settings, 'Setup', _tab == LampTab.setup),
             _gradientDestination(
                 Icons.bubble_chart, 'Wisp', _tab == LampTab.wisp),
             _gradientDestination(Icons.handshake_outlined, 'Social',
                 _tab == LampTab.social),
-            _gradientDestination(
-                Icons.info_outline, 'Info', _tab == LampTab.info),
           ],
         ),
       ),
@@ -260,58 +258,38 @@ class _SaveAction extends ConsumerWidget {
       message: 'You have unsaved changes — tap to save',
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            InkWell(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: notifier.save,
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              gradient: _brandGradient,
               borderRadius: BorderRadius.circular(999),
-              onTap: notifier.save,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  gradient: _brandGradient,
-                  borderRadius: BorderRadius.circular(999),
-                  boxShadow: [
-                    BoxShadow(
-                      color: BrandColors.glowPink.withValues(alpha: 0.45),
-                      blurRadius: 10,
-                      spreadRadius: 1,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
+              boxShadow: [
+                BoxShadow(
+                  color: BrandColors.glowPink.withValues(alpha: 0.45),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 1),
                 ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.save, size: 14, color: BrandColors.lampWhite),
-                    SizedBox(width: 8),
-                    Text('Save changes',
-                        style: TextStyle(
-                          color: BrandColors.lampWhite,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 12,
-                        )),
-                  ],
-                ),
-              ),
+              ],
             ),
-            Positioned(
-              top: -2,
-              right: -2,
-              child: Container(
-                key: const ValueKey('save-dirty-dot'),
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: BrandColors.error,
-                  shape: BoxShape.circle,
-                  border:
-                      Border.all(color: BrandColors.lampWhite, width: 1.2),
-                ),
-              ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.save, size: 14, color: BrandColors.lampWhite),
+                SizedBox(width: 8),
+                Text('Save changes',
+                    style: TextStyle(
+                      color: BrandColors.lampWhite,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    )),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

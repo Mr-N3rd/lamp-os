@@ -43,6 +43,8 @@ class ExpressionDraft extends _$ExpressionDraft {
       target: target,
       parameters: Map<String, int>.from(
           meta?.defaultParameters ?? const <String, int>{}),
+      disabledDuringWispOverride:
+          meta?.defaultDisabledDuringWispOverride ?? false,
     );
   }
 

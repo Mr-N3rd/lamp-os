@@ -3,10 +3,16 @@ import 'dart:typed_data';
 
 import 'package:collection/collection.dart';
 
+import '../../control/domain/lamp_color.dart';
 import 'wisp_source_mode.dart';
 import 'zone_source.dart';
 
 const _observedZonesEq = ListEquality<int>();
+
+/// Default Off-mode color. Matches the wisp firmware's NVS-default for
+/// `offColor` (warm candle-amber); also the fallback when the wispStatus
+/// payload pre-dates the offColor field.
+const LampColor _defaultOffColor = LampColor(r: 255, g: 150, b: 50, w: 0);
 
 /// Parsed `CHAR_WISP_STATUS` payload. The lamp serves a merged JSON that
 /// combines the last `wispStatus` MSG_CONTROL_OP broadcast (from the
@@ -34,6 +40,7 @@ class WispStatus {
     this.helloLastSeenMs,
     this.statusLastSeenMs,
     this.source = WispSourceMode.aurora,
+    this.offColor = _defaultOffColor,
   });
 
   /// Sentinel for "no wisp has been heard on this lamp yet" (lamp
@@ -95,6 +102,13 @@ class WispStatus {
   /// pill picker. Defaults to [WispSourceMode.aurora] when missing so
   /// pre-Phase-E wisps and `{}` payloads land on the legacy default.
   final WispSourceMode source;
+
+  /// Color the wisp renders on its own 30-pixel ring when sourceMode is
+  /// Off. Does NOT propagate to the lamp grid — Off mode broadcasts
+  /// RESTORE so the lamps drop any prior override. Defaults to a warm
+  /// candle-amber matching the firmware fallback so pre-feature wisps
+  /// (or `{}` payloads) land on a sensible value.
+  final LampColor offColor;
 
   /// True iff Aurora has ever been observed on the mesh from this wisp's
   /// perspective. The Aurora pill in the source picker is enabled only
@@ -158,6 +172,18 @@ class WispStatus {
       return const <int>[];
     }
 
+    LampColor parseOffColor(Object? v) {
+      if (v is List && v.length >= 3) {
+        final r = asInt(v[0]);
+        final g = asInt(v[1]);
+        final b = asInt(v[2]);
+        if (r != null && g != null && b != null) {
+          return LampColor(r: r & 0xFF, g: g & 0xFF, b: b & 0xFF, w: 0);
+        }
+      }
+      return _defaultOffColor;
+    }
+
     final zoneSrc = asString(json['zoneSource']);
     final sourceRaw = json['source'];
     return WispStatus(
@@ -181,6 +207,7 @@ class WispStatus {
       // parseWispSourceMode tolerates null + unknown strings; the default
       // is aurora, matching the wisp-side coercion.
       source: parseWispSourceMode(sourceRaw is String ? sourceRaw : null),
+      offColor: parseOffColor(json['offColor']),
     );
   }
 
@@ -189,6 +216,7 @@ class WispStatus {
     ZoneSource? zoneSource,
     List<int>? observedZones,
     WispSourceMode? source,
+    LampColor? offColor,
   }) {
     return WispStatus(
       currentZone: currentZone ?? this.currentZone,
@@ -205,6 +233,7 @@ class WispStatus {
       helloLastSeenMs: helloLastSeenMs,
       statusLastSeenMs: statusLastSeenMs,
       source: source ?? this.source,
+      offColor: offColor ?? this.offColor,
     );
   }
 
@@ -225,7 +254,8 @@ class WispStatus {
           helloPaletteIdPrefix == other.helloPaletteIdPrefix &&
           helloLastSeenMs == other.helloLastSeenMs &&
           statusLastSeenMs == other.statusLastSeenMs &&
-          source == other.source;
+          source == other.source &&
+          offColor == other.offColor;
 
   @override
   int get hashCode => Object.hash(
@@ -241,5 +271,6 @@ class WispStatus {
         Object.hash(helloFlags, helloPaletteIdPrefix, helloLastSeenMs),
         statusLastSeenMs,
         source,
+        offColor,
       );
 }

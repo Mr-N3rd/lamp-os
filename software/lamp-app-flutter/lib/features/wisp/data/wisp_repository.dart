@@ -93,6 +93,19 @@ class WispRepository {
     });
   }
 
+  /// Off-mode color the wisp renders on its OWN 30-pixel ring when
+  /// sourceMode == Off. Does NOT broadcast paint to the lamp grid —
+  /// PaintDistributor stays held off in Off mode, so this color exists
+  /// only on the wisp itself, "operating it like a lamp" per the
+  /// product UX.
+  Future<void> setOffColor(LampColor color) async {
+    await _writeOp({
+      'char': 'wispOp',
+      'op': 'setOffColor',
+      'color': <int>[color.r, color.g, color.b],
+    });
+  }
+
   /// Push new WiFi credentials to the wisp. The wisp persists them in
   /// NVS and immediately kicks WifiLink to reconnect and StageBeacon to
   /// refresh its BLE advert (so pre-mesh lamps follow the new SSID on

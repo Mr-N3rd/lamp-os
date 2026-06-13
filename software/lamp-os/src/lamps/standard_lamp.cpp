@@ -35,7 +35,6 @@
 #include "core/behavior_context.hpp"
 #include "core/compositor.hpp"
 #include "core/frame_buffer.hpp"
-#include "globals.hpp"
 #include "pending_json_slot.hpp"
 #include "pending_typed_slot.hpp"
 #include "util/color.hpp"
@@ -67,6 +66,48 @@ struct PendingKnockoutUpdate {
 };
 
 volatile int8_t pendingBrightness = -1;
+
+// ── User brightness micro-fade ─────────────────────────────────────────────
+// The pendingBrightness drain (live-preview from CHAR_BRIGHTNESS) used to
+// call shadeStrip->setBrightness directly on every write. Each WriteCoalescer
+// window delivers a write every ~60-100 ms, so a sustained slider drag landed
+// as visibly stepped brightness changes — user described it as "not smooth".
+//
+// This small fade state interpolates between successive user writes over
+// kUserBrightnessFadeMs (~80 ms — slightly longer than the coalescer floor so
+// each step bleeds into the next without overshooting). Drain stamps a new
+// (source, target, start) triple per write; the loop tick interpolates and
+// applies. Tick is gated to brightnessOverride.isActive() == false so an
+// active wisp / personality override owns the strip uncontested via the
+// existing applyEffectiveBrightness change-callback path.
+//
+// Source initialisation: drain reads the current visual level by lerping the
+// previous fade in flight, so an immediate re-write picks up wherever the
+// strip actually is. Cold-start (no prior write) seeds source = target so the
+// very first write snaps without a black-up ramp.
+static constexpr uint16_t kUserBrightnessFadeMs = 80;
+static uint8_t  s_userBrightnessSource = 0;
+static uint8_t  s_userBrightnessTarget = 0;
+static uint32_t s_userBrightnessFadeStartMs = 0;
+static bool     s_userBrightnessSeeded = false;
+
+// Compute the current interpolated brightness for the live user-write fade.
+// Returns target once the fade window has elapsed.
+static uint8_t computeUserBrightnessNow(uint32_t nowMs) {
+  if (s_userBrightnessSource == s_userBrightnessTarget) {
+    return s_userBrightnessTarget;
+  }
+  const uint32_t elapsed = nowMs - s_userBrightnessFadeStartMs;
+  if (elapsed >= kUserBrightnessFadeMs) {
+    return s_userBrightnessTarget;
+  }
+  const int32_t span =
+      static_cast<int32_t>(s_userBrightnessTarget) - s_userBrightnessSource;
+  return static_cast<uint8_t>(
+      s_userBrightnessSource +
+      (span * static_cast<int32_t>(elapsed)) /
+          static_cast<int32_t>(kUserBrightnessFadeMs));
+}
 // Flag set from Core 0 (BLE callbacks) when the home-mode preview state
 // changes — either the flag itself flipped, or homeMode.brightness was
 // updated via CHAR_HOME_PREVIEW cmd 0x02. The loop task on Core 1 drains
@@ -324,10 +365,13 @@ static void applyShadeColorsLocal(JsonArray arr) {
   std::vector<lamp::Color> colors = jsonArrayToColors(arr);
   std::vector<lamp::Color> gradient =
       lamp::buildGradientWithStops(shade.pixelCount, colors);
-  // Phase C: drive the change through beginFade() so the BLE color
-  // picker keeps its fade UX (was the easeFrames mechanism — now a
-  // duration-controlled ~250ms ease). Any active override gets a
-  // rebaseline() so a later restore lands on the new colors.
+  // Phase C: drive the change through beginFade() so the BLE color picker
+  // keeps its fade UX (~250ms ease). Mid-fade interrupts (rapid writes
+  // during a drag) are handled inside ConfiguratorBehavior::beginFade —
+  // it computes the in-progress lerp value as the new fade-from endpoint,
+  // so successive writes rubber-band smoothly without re-snapshotting the
+  // post-overlay buffer (which on Base contains knockout dimming and
+  // would otherwise flicker on dimmed pixels).
   shadeConfiguratorBehavior.beginFade(gradient, lamp::kDefaultFadeMs);
   shadeColorOverride.rebaseline(gradient);
   // Reflect the new shade in the BLE adv so phones and v1 neighbours see it
@@ -343,6 +387,10 @@ static void applyBaseColorsLocal(JsonArray arr) {
   std::vector<lamp::Color> colors = jsonArrayToColors(arr);
   std::vector<lamp::Color> gradient =
       lamp::buildGradientWithStops(base.pixelCount, colors);
+  // See applyShadeColorsLocal: the fade-snapshot-from-buffer flicker on
+  // knockout pixels is now handled at the ConfiguratorBehavior::beginFade
+  // call site itself (snapshots from `colors` / in-progress lerp, not
+  // fb->buffer). No mid-fade guard needed here.
   baseConfiguratorBehavior.beginFade(gradient, lamp::kDefaultFadeMs);
   baseColorOverride.rebaseline(gradient);
   // Reflect the new base in the BLE adv — first stop is what the adv carries
@@ -477,11 +525,10 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     config.invalidateExpressionsSection();
 
   } else if (strcmp(ch, "triggerExpression") == 0) {
-    // Receive side of the legacy single-peer-named triggerExpression
-    // CONTROL_OP primitive (sendExpressionTo). The MSG_EVENT broadcast
-    // cascade has its own recv path through tryHandleExpressionEvent and
-    // does NOT route through here. We never re-emit — that's the
-    // structural loop break.
+    // Receive side of the single-peer-named triggerExpression CONTROL_OP.
+    // The MSG_EVENT broadcast cascade has its own recv path through
+    // tryHandleExpressionEvent and does NOT route through here. We never
+    // re-emit — that's the structural loop break.
     lamp::ExpressionInvocation inv;
     if (!lamp::parseInvocation(doc.as<JsonObjectConst>(), inv)) return;
     if (inv.delayMs == 0) {
@@ -1103,16 +1150,26 @@ void loop() {
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    // Apply the wire value directly — the user just wrote `level`, so
-    // by definition that IS the effective brightness right now. Skipping
-    // the effectiveBrightness() lookup keeps this hot path off the
-    // wifi::homeSsidVisible string-compare loop, matching the pre-
-    // simplification behavior (commit 7023f29) where this drain was
-    // smooth under continuous slider drag.
+    // Stamp a new micro-fade triple instead of writing the strip
+    // directly. The loop-tick interpolation below smooths each ~60-100 ms
+    // BLE write into a continuous transition, eliminating the visibly
+    // stepped brightness drag the user used to see. See the comment on
+    // s_userBrightnessSource above for the why.
+    const uint32_t fadeNow = millis();
+    const uint8_t  source = s_userBrightnessSeeded
+                                ? computeUserBrightnessNow(fadeNow)
+                                : level;
+    s_userBrightnessSource     = source;
+    s_userBrightnessTarget     = level;
+    s_userBrightnessFadeStartMs = fadeNow;
+    s_userBrightnessSeeded     = true;
+    // Apply the initial sample on this drain cycle so the strip starts
+    // moving immediately rather than waiting for the next compositor
+    // tick.
     if (shadeStrip) shadeStrip->setBrightness(
-        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, source));
     if (baseStrip)  baseStrip->setBrightness(
-        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, source));
     // ARCHITECTURAL INVARIANT for section cache:
     //   `*SectionJsonCached()` represents the PERSISTED config snapshot
     //   (last NVS write or boot-load), NOT the live in-memory config.
@@ -1448,6 +1505,18 @@ void loop() {
                                  cmd.colors, cmd.numColors,
                                  cmd.fadeDurationMs);
       }
+      // Wisp paint ships Base + Shade 10 ms apart per peer but both land
+      // in a single-slot mailbox — newest-writer-wins. When Core 1 lags
+      // past 10 ms (BLE scan + render contention is enough), the Shade
+      // frame drops the Base frame on the floor and Base's watchdog
+      // expires after 60 s. Treat the surviving frame as proof of mesh
+      // liveness on both surfaces. PeerSwap ships single-surface frames,
+      // so guard on Wisp only.
+      if (cmd.sourceKind == lamp_protocol::OverrideSource::Wisp) {
+        const uint32_t now = millis();
+        baseColorOverride.touchApply(now);
+        shadeColorOverride.touchApply(now);
+      }
     }
   }
   {
@@ -1586,6 +1655,27 @@ void loop() {
     baseColorOverride.tick(now);
     shadeColorOverride.tick(now);
     brightnessOverride.tick(now, effectiveBrightness());
+
+    // User brightness micro-fade tick. Only runs when no transient
+    // brightness override is active — applyEffectiveBrightness's
+    // change-callback path owns the strip while the override is
+    // animating (wisp / personality). Without this gate the two
+    // would race on every frame.
+    if (!brightnessOverride.isActive() && s_userBrightnessSeeded &&
+        s_userBrightnessSource != s_userBrightnessTarget) {
+      const uint8_t level = computeUserBrightnessNow(now);
+      if (shadeStrip)
+        shadeStrip->setBrightness(
+            lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+      if (baseStrip)
+        baseStrip->setBrightness(
+            lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+      // Mark the fade complete so subsequent frames are no-ops once
+      // the window has elapsed.
+      if (level == s_userBrightnessTarget) {
+        s_userBrightnessSource = s_userBrightnessTarget;
+      }
+    }
 
     // Personality engine — runs after the transient-override block so it
     // reads a consistent post-fade view this tick. Cheap when nothing's

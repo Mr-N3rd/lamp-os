@@ -24,7 +24,7 @@ import '../domain/wisp_source_mode.dart';
 /// crowd the header below.
 ///
 /// Picks its stops from [sourceMode]:
-///   - Off    → warm-white fill (single solid color)
+///   - Off    → the operator-chosen [offColor] as a single solid color
 ///   - Manual → the manual palette draft (so edits preview live before
 ///              the operator hits Save)
 ///   - Aurora → warm-white fill until the app gets an Aurora palette
@@ -34,6 +34,7 @@ class PaletteGradientBar extends StatelessWidget {
     super.key,
     required this.sourceMode,
     required this.manualPalette,
+    required this.offColor,
     this.height = 36,
     // Dropped 256 → 30 (audit perf-H7). The bar is a representation of
     // what the wisp's ring shows; the ring HAS 30 pixels, so anything
@@ -54,6 +55,13 @@ class PaletteGradientBar extends StatelessWidget {
   /// directly below it.
   final List<LampColor> manualPalette;
 
+  /// Operator-chosen color rendered on the wisp's own 30-pixel ring
+  /// while [sourceMode] is [WispSourceMode.off]. Mirrors the wisp-side
+  /// `offColor` NVS field; previewed here as a single solid stop so the
+  /// gradient bar at the top of the pane stays a faithful mirror of the
+  /// ring across all three modes.
+  final LampColor offColor;
+
   /// Vertical extent of the bar in logical pixels.
   final double height;
 
@@ -65,7 +73,7 @@ class PaletteGradientBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final stops = _stopsFor(sourceMode, manualPalette);
+    final stops = _stopsFor(sourceMode, manualPalette, offColor);
     final ramp = renderPaletteRamp(stops, pixelCount);
     return SizedBox(
       width: double.infinity,
@@ -74,10 +82,14 @@ class PaletteGradientBar extends StatelessWidget {
     );
   }
 
-  /// Map (source mode, manual palette) → list of [Color] stops fed to
-  /// `renderPaletteRamp`. The empty-list cases all collapse to warm-
-  /// white inside the renderer, which matches the LED ring fallback.
-  static List<Color> _stopsFor(WispSourceMode mode, List<LampColor> manual) {
+  /// Map (source mode, manual palette, off color) → list of [Color]
+  /// stops fed to `renderPaletteRamp`. Empty-list cases collapse to
+  /// warm-white inside the renderer, matching the LED ring fallback.
+  static List<Color> _stopsFor(
+    WispSourceMode mode,
+    List<LampColor> manual,
+    LampColor offColor,
+  ) {
     switch (mode) {
       case WispSourceMode.manual:
         return [for (final c in manual) Color.fromARGB(0xFF, c.r, c.g, c.b)];
@@ -85,7 +97,7 @@ class PaletteGradientBar extends StatelessWidget {
         // No app-side Aurora palette today — see file-level comment.
         return const <Color>[];
       case WispSourceMode.off:
-        return const <Color>[];
+        return [Color.fromARGB(0xFF, offColor.r, offColor.g, offColor.b)];
     }
   }
 }

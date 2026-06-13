@@ -1,16 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../application/control_notifier.dart';
 
-class BrightnessCard extends StatelessWidget {
+/// Brightness slider card. Watches its own slice of the control state via
+/// `.select(state.lamp.brightness)` so unrelated state mutations (colors,
+/// expressions, home, etc.) don't trigger card rebuilds. Material's
+/// Slider tracks the gesture position internally during a drag, so a
+/// vanilla controlled value reads as 1:1 responsive without needing
+/// local state.
+class BrightnessCard extends ConsumerWidget {
   const BrightnessCard({
     super.key,
-    required this.value,
-    required this.onChanged,
+    required this.lampId,
+    this.onEditSessionChanged,
   });
 
-  final int value;
-  final ValueChanged<int> onChanged;
+  final String lampId;
+
+  /// Fires `true` when the slider drag starts and `false` when it ends.
+  /// Wired into `ControlNotifier.setEditSession` so the lamp drops
+  /// wisp-sourced brightness overrides for the duration of the drag.
+  final ValueChanged<bool>? onEditSessionChanged;
 
   /// Interpolates the slider thumb black → amber-gold → white as brightness
   /// goes 0 → 50 → 100 %. Ported from the prior Vue app's BrightnessSlider
@@ -26,7 +38,12 @@ class BrightnessCard extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(
+      controlNotifierProvider(lampId)
+          .select((async) => async.value?.lamp.brightness ?? 0),
+    );
+    final notifier = ref.read(controlNotifierProvider(lampId).notifier);
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(16),
@@ -71,7 +88,9 @@ class BrightnessCard extends StatelessWidget {
               max: 100,
               divisions: 100,
               value: value.toDouble(),
-              onChanged: (v) => onChanged(v.toInt()),
+              onChanged: (v) => notifier.setBrightness(v.toInt()),
+              onChangeStart: (_) => onEditSessionChanged?.call(true),
+              onChangeEnd: (_) => onEditSessionChanged?.call(false),
             ),
           ),
         ],
