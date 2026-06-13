@@ -3,14 +3,19 @@ import 'package:flutter/material.dart';
 import '../../domain/lamp_color.dart';
 
 /// A swatch that visualizes a [LampColor] — including the separate
-/// warm-white LED's contribution. Composites the W tint via SCREEN
-/// blend (matching the old Vue ColorPreview's CSS
-/// `mix-blend-mode: screen`) so bright colors retain their brightness
-/// and gain warm glow, instead of being muddied toward the tint as
-/// they would be under default alpha blend.
+/// warm-white LED's contribution. Renders as a stack of two layers
+/// matching the original Vue ColorPreview component: a base RGB
+/// layer with a warm-white tint (#FABB3E) overlaid at
+/// `opacity = (W/255) * (availableRoom/765)`.
 ///
-/// The actual screen-blend math lives in [LampColor.blendedRgb]; this
-/// widget is just a colored box that uses it via [LampColor.toSwatch].
+/// On 2026-06-12 this was briefly changed to a single Container using
+/// the screen-blend math from [LampColor.blendedRgb] (which is correct
+/// for gradient / SVG fills where you can't stack layers), but bright
+/// colors with high W didn't wash visibly enough — the screen blend
+/// preserves base brightness while alpha overlay actually mutes it
+/// toward the warm tint. Operator feedback 2026-06-13 reverted this
+/// widget back to the stacked alpha overlay. The screen-blend path
+/// remains the right tool for [LampColor.toRgbHex] / gradient stops.
 
 /// Two-shape variants of [LampColorSwatch]. The default is [circle] so
 /// existing call-sites stay unchanged; the [roundedSquare] variant is
@@ -46,23 +51,54 @@ class LampColorSwatch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isCircle = shape == LampSwatchShape.circle;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        // Use the screen-blended composite from LampColor — matches the
-        // old Vue ColorPreview component visually (which used CSS
-        // mix-blend-mode: screen to overlay the W tint). The previous
-        // two-Container Stack used the default srcOver alpha blend,
-        // which muddied bright colors toward the warm tint instead of
-        // additively brightening them.
-        color: color.toSwatch(),
+    final baseRgb = Color.fromARGB(0xFF, color.r, color.g, color.b);
+    // Same warm tint as the Vue ColorPreview component (#FABB3E).
+    const warmTint = Color(0xFFFABB3E);
+    final overlayOpacity = warmWhiteOpacity(color);
+
+    BoxDecoration decoration({required Color fill, bool drawBorder = false}) {
+      return BoxDecoration(
+        color: fill,
         shape: isCircle ? BoxShape.circle : BoxShape.rectangle,
         borderRadius:
             isCircle ? null : BorderRadius.circular(borderRadius),
-        border: Border.all(
-          color: borderColor ?? Colors.white.withValues(alpha: 0.12),
-        ),
+        border: drawBorder
+            ? Border.all(
+                color: borderColor ?? Colors.white.withValues(alpha: 0.12),
+              )
+            : null,
+      );
+    }
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        children: [
+          // Base RGB.
+          Positioned.fill(
+            child: Container(decoration: decoration(fill: baseRgb)),
+          ),
+          // Warm-white overlay, alpha-blended via [Opacity] so it
+          // actually tints the base toward the warm tone (not just
+          // adds glow on top of it).
+          if (overlayOpacity > 0)
+            Positioned.fill(
+              child: Opacity(
+                opacity: overlayOpacity,
+                child: Container(decoration: decoration(fill: warmTint)),
+              ),
+            ),
+          // Border drawn last so neither layer's edge clips it.
+          Positioned.fill(
+            child: Container(
+              decoration: decoration(
+                fill: Colors.transparent,
+                drawBorder: true,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

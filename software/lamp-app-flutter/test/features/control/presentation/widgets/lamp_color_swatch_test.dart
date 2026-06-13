@@ -30,26 +30,39 @@ void main() {
     });
   });
 
-  testWidgets('renders the screen-blended composite as a single fill',
+  testWidgets('renders a base-RGB layer + warm-white overlay when W > 0',
       (tester) async {
-    // Post-2026-06-12: swatch was a two-Container Stack composing the W
-    // overlay via default alpha blend. The blend was wrong (muddied
-    // bright colors). Now it uses LampColor.blendedRgb's screen blend
-    // and paints a single Container, matching the old Vue UI.
+    // Reverted on 2026-06-13 from the single-Container screen-blend back
+    // to the original Vue ColorPreview stacked-layer model: bright colors
+    // with high W weren't washing visibly enough under screen blend (the
+    // base brightness was preserved instead of being muted toward the
+    // warm tint). The stacked alpha overlay actually washes.
     const c = LampColor(r: 0x30, g: 0x07, b: 0x83, w: 0x80);
     await tester.pumpWidget(const MaterialApp(
       home: Scaffold(body: LampColorSwatch(color: c)),
     ));
-    expect(find.byType(LampColorSwatch), findsOneWidget);
-    final container = tester.widget<Container>(
-      find.descendant(
-        of: find.byType(LampColorSwatch),
-        matching: find.byType(Container),
-      ),
-    );
-    final deco = container.decoration as BoxDecoration;
-    final expected = c.toSwatch();
-    expect(deco.color, expected);
+    final containers = tester.widgetList<Container>(find.descendant(
+      of: find.byType(LampColorSwatch),
+      matching: find.byType(Container),
+    )).toList();
+    final fillColors = containers
+        .map((c) => (c.decoration as BoxDecoration).color)
+        .toList();
+    // Base RGB layer (no W blending).
+    expect(fillColors, contains(const Color(0xFF300783)));
+    // Warm tint (Vue-era #FABB3E).
+    expect(fillColors, contains(const Color(0xFFFABB3E)));
+    // Opacity wrapper carries the calculated alpha for the W overlay.
+    expect(find.byType(Opacity), findsOneWidget);
+  });
+
+  testWidgets('W=0 swatch omits the warm overlay layer entirely',
+      (tester) async {
+    const c = LampColor(r: 0x11, g: 0x22, b: 0x33, w: 0);
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(body: LampColorSwatch(color: c)),
+    ));
+    expect(find.byType(Opacity), findsNothing);
   });
 
   testWidgets('roundedSquare shape uses BoxShape.rectangle', (tester) async {
