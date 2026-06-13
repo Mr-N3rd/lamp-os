@@ -1,4 +1,5 @@
 #include "AuroraPaletteClient.h"
+#include <WiFi.h>
 #include "NotificationCodec.h"
 #include "SubscriptionEncoder.h"
 
@@ -19,6 +20,12 @@ void AuroraPaletteClient::begin() {
 void AuroraPaletteClient::loop() {
     switch (state_) {
         case State::Discovering:
+            // Skip mDNS until STA is up. Without this gate the wisp issues
+            // `MDNS.queryService("aurora","tcp")` every ~3s even when ssid=''
+            // — each query blocks the WiFi task ~50-300ms and starves the
+            // ESP-NOW send-callback path, causing bursty paint FAILs (root
+            // cause A in docs/.../overnight analysis from 2026-06-13).
+            if (!WiFi.isConnected()) break;
             if (discovery_.discover()) {
                 ws_.setTarget(discovery_.ip(), discovery_.port());
                 fetcher_.setTarget(discovery_.ip(), discovery_.port());
