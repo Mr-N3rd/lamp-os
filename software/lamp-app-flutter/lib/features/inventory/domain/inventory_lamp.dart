@@ -8,6 +8,7 @@ abstract class InventoryLamp with _$InventoryLamp {
   const factory InventoryLamp({
     required String id,
     required String name,
+    String? controlPassword,
     int? lastSeenEpochMs,
     List<int>? lastShadeColor,
     List<int>? lastBaseColor,

@@ -1,52 +1,74 @@
+import 'dart:typed_data';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_app/core/ble/write_coalescer.dart';
 
 void main() {
-  test('rapid writes coalesce to the latest payload', () {
+  test('debounces back-to-back schedules into a single write', () {
     fakeAsync((async) {
-      final flushed = <int>[];
-      final c = WriteCoalescer<int>(
-        debounce: const Duration(milliseconds: 30),
-        onFlush: (v) async => flushed.add(v),
+      final writes = <Uint8List>[];
+      final c = WriteCoalescer(
+        onWrite: (v) async => writes.add(v),
+        debounce: const Duration(milliseconds: 20),
       );
-
-      c.schedule(1);
-      async.elapse(const Duration(milliseconds: 10));
-      c.schedule(2);
-      async.elapse(const Duration(milliseconds: 10));
-      c.schedule(3);
+      c.schedule(Uint8List.fromList([1]));
+      c.schedule(Uint8List.fromList([2]));
+      c.schedule(Uint8List.fromList([3]));
       async.elapse(const Duration(milliseconds: 40));
-
-      expect(flushed, [3]);
+      expect(writes, [Uint8List.fromList([3])]);
     });
   });
 
-  test('isolated writes each flush', () {
+  test('each debounce window fires exactly once', () {
     fakeAsync((async) {
-      final flushed = <int>[];
-      final c = WriteCoalescer<int>(
-        debounce: const Duration(milliseconds: 30),
-        onFlush: (v) async => flushed.add(v),
+      final writes = <Uint8List>[];
+      final c = WriteCoalescer(
+        onWrite: (v) async => writes.add(v),
+        debounce: const Duration(milliseconds: 20),
       );
-
-      c.schedule(1);
-      async.elapse(const Duration(milliseconds: 100));
-      c.schedule(2);
-      async.elapse(const Duration(milliseconds: 100));
-
-      expect(flushed, [1, 2]);
+      c.schedule(Uint8List.fromList([1]));
+      async.elapse(const Duration(milliseconds: 30));
+      c.schedule(Uint8List.fromList([2]));
+      async.elapse(const Duration(milliseconds: 30));
+      expect(writes, [Uint8List.fromList([1]), Uint8List.fromList([2])]);
     });
   });
 
-  test('flushNow bypasses debounce', () async {
-    final flushed = <int>[];
-    final c = WriteCoalescer<int>(
-      debounce: const Duration(milliseconds: 30),
-      onFlush: (v) async => flushed.add(v),
+  test('flush() forces immediate send and cancels pending timer', () async {
+    final writes = <Uint8List>[];
+    final c = WriteCoalescer(
+      onWrite: (v) async => writes.add(v),
+      debounce: const Duration(seconds: 10),
     );
-    c.schedule(7);
-    await c.flushNow();
-    expect(flushed, [7]);
+    c.schedule(Uint8List.fromList([1]));
+    await c.flush();
+    expect(writes, [Uint8List.fromList([1])]);
+  });
+
+  test('flush() after dispose() is a no-op', () async {
+    final writes = <Uint8List>[];
+    final c = WriteCoalescer(
+      onWrite: (v) async => writes.add(v),
+      debounce: const Duration(seconds: 10),
+    );
+    c.schedule(Uint8List.fromList([1]));
+    c.dispose();
+    await c.flush();
+    expect(writes, isEmpty);
+  });
+
+  test('dispose() cancels pending work', () {
+    fakeAsync((async) {
+      final writes = <Uint8List>[];
+      final c = WriteCoalescer(
+        onWrite: (v) async => writes.add(v),
+        debounce: const Duration(milliseconds: 20),
+      );
+      c.schedule(Uint8List.fromList([1]));
+      c.dispose();
+      async.elapse(const Duration(milliseconds: 40));
+      expect(writes, isEmpty);
+    });
   });
 }

@@ -11,12 +11,16 @@ void main() {
       id: 'aa',
       name: 'jacko',
       serviceUuids: ['5f64f4d0-d6d9-4a44-9b3f-3a8d6f7e6b40'],
+      baseRgb: 0x300783,
+      shadeRgb: 0x000000,
       rssi: -55,
     ));
     scanner.emit(const BleAdvertisement(
       id: 'bb',
       name: 'melonie',
       serviceUuids: ['5f64f4c1-d6d9-4a44-9b3f-3a8d6f7e6b40'],
+      baseRgb: 0xff0000,
+      shadeRgb: 0x00ff00,
       rssi: -68,
     ));
     await Future<void>.delayed(Duration.zero);

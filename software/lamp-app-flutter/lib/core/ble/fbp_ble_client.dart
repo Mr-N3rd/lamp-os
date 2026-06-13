@@ -9,6 +9,33 @@ import 'ble_client.dart';
 /// resolves the device + service + characteristic from the plugin's live
 /// registry, errors out with a friendly exception type when it can't.
 class FbpBleClient implements BleClient {
+  @override
+  Future<void> connect(String deviceId) async {
+    final device = fbp.BluetoothDevice(
+      remoteId: fbp.DeviceIdentifier(deviceId),
+    );
+    await device.connect(
+      license: fbp.License.nonprofit,
+      autoConnect: false,
+      mtu: 247,
+    );
+  }
+
+  @override
+  Future<void> disconnect(String deviceId) async {
+    final device = fbp.BluetoothDevice(
+      remoteId: fbp.DeviceIdentifier(deviceId),
+    );
+    await device.disconnect();
+  }
+
+  @override
+  bool isConnected(String deviceId) {
+    return fbp.FlutterBluePlus.connectedDevices.any(
+      (d) => d.remoteId.str == deviceId,
+    );
+  }
+
   Future<fbp.BluetoothCharacteristic> _resolve(
     String deviceId,
     String serviceUuid,

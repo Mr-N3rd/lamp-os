@@ -5,6 +5,7 @@ import '../../features/inventory/application/active_lamp_notifier.dart';
 import '../../features/inventory/application/inventory_notifier.dart';
 import '../../features/lamp_shell/presentation/lamp_shell.dart';
 import '../../features/nearby/presentation/nearby_lamps_screen.dart';
+import '../../features/onboarding/presentation/add_lamp_shell.dart';
 import '../../features/onboarding/presentation/onboarding_placeholder.dart';
 import 'routes.dart';
 
@@ -18,9 +19,17 @@ GoRouter appRouter(Ref ref) {
       final inv = ref.read(inventoryNotifierProvider).value;
       final active = ref.read(activeLampNotifierProvider).value;
       if (inv == null) return null; // still loading
-      if (inv.isEmpty) return AppRoutes.onboarding;
+      final loc = state.uri.toString();
+      // Empty inventory → land on onboarding, but allow the user to
+      // navigate forward into the AddLamp flow and the debug devices view.
+      if (inv.isEmpty) {
+        if (loc.startsWith('/onboarding') || loc.startsWith('/devices')) {
+          return null;
+        }
+        return AppRoutes.onboarding;
+      }
       final target = active ?? inv.first.id;
-      if (state.uri.toString() == AppRoutes.onboarding) {
+      if (loc == AppRoutes.onboarding) {
         return AppRoutes.control(target);
       }
       return null;
@@ -48,6 +57,10 @@ GoRouter appRouter(Ref ref) {
           lampId: state.pathParameters['id']!,
           initialTab: LampTab.setup,
         ),
+      ),
+      GoRoute(
+        path: '/onboarding/add',
+        builder: (_, _) => const AddLampShell(),
       ),
       GoRoute(
         path: '/devices',

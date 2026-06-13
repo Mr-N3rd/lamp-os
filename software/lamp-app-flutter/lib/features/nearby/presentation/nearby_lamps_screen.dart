@@ -65,18 +65,18 @@ class NearbyLampsScreen extends ConsumerWidget {
                         ),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(999),
-                          color: (l.isConfigured
-                                  ? BrandColors.lumenGreen
-                                  : BrandColors.amberGold)
+                          color: (l.isFactoryDefault
+                                  ? BrandColors.amberGold
+                                  : BrandColors.lumenGreen)
                               .withValues(alpha: 0.18),
                         ),
                         child: Text(
-                          l.isConfigured ? 'configured' : 'unconfigured',
+                          l.isFactoryDefault ? 'factory' : 'configured',
                           style: TextStyle(
                             fontSize: 10,
-                            color: l.isConfigured
-                                ? BrandColors.lumenGreen
-                                : BrandColors.amberGold,
+                            color: l.isFactoryDefault
+                                ? BrandColors.amberGold
+                                : BrandColors.lumenGreen,
                             fontWeight: FontWeight.w600,
                           ),
                         ),

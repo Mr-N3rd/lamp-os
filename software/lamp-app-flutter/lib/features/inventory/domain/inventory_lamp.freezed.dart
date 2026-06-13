@@ -15,7 +15,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$InventoryLamp {
 
- String get id; String get name; int? get lastSeenEpochMs; List<int>? get lastShadeColor; List<int>? get lastBaseColor;
+ String get id; String get name; String? get controlPassword; int? get lastSeenEpochMs; List<int>? get lastShadeColor; List<int>? get lastBaseColor;
 /// Create a copy of InventoryLamp
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -28,16 +28,16 @@ $InventoryLampCopyWith<InventoryLamp> get copyWith => _$InventoryLampCopyWithImp
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is InventoryLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs)&&const DeepCollectionEquality().equals(other.lastShadeColor, lastShadeColor)&&const DeepCollectionEquality().equals(other.lastBaseColor, lastBaseColor));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is InventoryLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.controlPassword, controlPassword) || other.controlPassword == controlPassword)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs)&&const DeepCollectionEquality().equals(other.lastShadeColor, lastShadeColor)&&const DeepCollectionEquality().equals(other.lastBaseColor, lastBaseColor));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,name,lastSeenEpochMs,const DeepCollectionEquality().hash(lastShadeColor),const DeepCollectionEquality().hash(lastBaseColor));
+int get hashCode => Object.hash(runtimeType,id,name,controlPassword,lastSeenEpochMs,const DeepCollectionEquality().hash(lastShadeColor),const DeepCollectionEquality().hash(lastBaseColor));
 
 @override
 String toString() {
-  return 'InventoryLamp(id: $id, name: $name, lastSeenEpochMs: $lastSeenEpochMs, lastShadeColor: $lastShadeColor, lastBaseColor: $lastBaseColor)';
+  return 'InventoryLamp(id: $id, name: $name, controlPassword: $controlPassword, lastSeenEpochMs: $lastSeenEpochMs, lastShadeColor: $lastShadeColor, lastBaseColor: $lastBaseColor)';
 }
 
 
@@ -48,7 +48,7 @@ abstract mixin class $InventoryLampCopyWith<$Res>  {
   factory $InventoryLampCopyWith(InventoryLamp value, $Res Function(InventoryLamp) _then) = _$InventoryLampCopyWithImpl;
 @useResult
 $Res call({
- String id, String name, int? lastSeenEpochMs, List<int>? lastShadeColor, List<int>? lastBaseColor
+ String id, String name, String? controlPassword, int? lastSeenEpochMs, List<int>? lastShadeColor, List<int>? lastBaseColor
 });
 
 
@@ -65,11 +65,12 @@ class _$InventoryLampCopyWithImpl<$Res>
 
 /// Create a copy of InventoryLamp
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? lastSeenEpochMs = freezed,Object? lastShadeColor = freezed,Object? lastBaseColor = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? controlPassword = freezed,Object? lastSeenEpochMs = freezed,Object? lastShadeColor = freezed,Object? lastBaseColor = freezed,}) {
   return _then(_self.copyWith(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
-as String,lastSeenEpochMs: freezed == lastSeenEpochMs ? _self.lastSeenEpochMs : lastSeenEpochMs // ignore: cast_nullable_to_non_nullable
+as String,controlPassword: freezed == controlPassword ? _self.controlPassword : controlPassword // ignore: cast_nullable_to_non_nullable
+as String?,lastSeenEpochMs: freezed == lastSeenEpochMs ? _self.lastSeenEpochMs : lastSeenEpochMs // ignore: cast_nullable_to_non_nullable
 as int?,lastShadeColor: freezed == lastShadeColor ? _self.lastShadeColor : lastShadeColor // ignore: cast_nullable_to_non_nullable
 as List<int>?,lastBaseColor: freezed == lastBaseColor ? _self.lastBaseColor : lastBaseColor // ignore: cast_nullable_to_non_nullable
 as List<int>?,
@@ -157,10 +158,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String name,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String name,  String? controlPassword,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _InventoryLamp() when $default != null:
-return $default(_that.id,_that.name,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor);case _:
+return $default(_that.id,_that.name,_that.controlPassword,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor);case _:
   return orElse();
 
 }
@@ -178,10 +179,10 @@ return $default(_that.id,_that.name,_that.lastSeenEpochMs,_that.lastShadeColor,_
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String name,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String name,  String? controlPassword,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor)  $default,) {final _that = this;
 switch (_that) {
 case _InventoryLamp():
-return $default(_that.id,_that.name,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor);case _:
+return $default(_that.id,_that.name,_that.controlPassword,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -198,10 +199,10 @@ return $default(_that.id,_that.name,_that.lastSeenEpochMs,_that.lastShadeColor,_
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String name,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String name,  String? controlPassword,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor)?  $default,) {final _that = this;
 switch (_that) {
 case _InventoryLamp() when $default != null:
-return $default(_that.id,_that.name,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor);case _:
+return $default(_that.id,_that.name,_that.controlPassword,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor);case _:
   return null;
 
 }
@@ -213,11 +214,12 @@ return $default(_that.id,_that.name,_that.lastSeenEpochMs,_that.lastShadeColor,_
 @JsonSerializable()
 
 class _InventoryLamp implements InventoryLamp {
-  const _InventoryLamp({required this.id, required this.name, this.lastSeenEpochMs, final  List<int>? lastShadeColor, final  List<int>? lastBaseColor}): _lastShadeColor = lastShadeColor,_lastBaseColor = lastBaseColor;
+  const _InventoryLamp({required this.id, required this.name, this.controlPassword, this.lastSeenEpochMs, final  List<int>? lastShadeColor, final  List<int>? lastBaseColor}): _lastShadeColor = lastShadeColor,_lastBaseColor = lastBaseColor;
   factory _InventoryLamp.fromJson(Map<String, dynamic> json) => _$InventoryLampFromJson(json);
 
 @override final  String id;
 @override final  String name;
+@override final  String? controlPassword;
 @override final  int? lastSeenEpochMs;
  final  List<int>? _lastShadeColor;
 @override List<int>? get lastShadeColor {
@@ -251,16 +253,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _InventoryLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs)&&const DeepCollectionEquality().equals(other._lastShadeColor, _lastShadeColor)&&const DeepCollectionEquality().equals(other._lastBaseColor, _lastBaseColor));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _InventoryLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.controlPassword, controlPassword) || other.controlPassword == controlPassword)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs)&&const DeepCollectionEquality().equals(other._lastShadeColor, _lastShadeColor)&&const DeepCollectionEquality().equals(other._lastBaseColor, _lastBaseColor));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,name,lastSeenEpochMs,const DeepCollectionEquality().hash(_lastShadeColor),const DeepCollectionEquality().hash(_lastBaseColor));
+int get hashCode => Object.hash(runtimeType,id,name,controlPassword,lastSeenEpochMs,const DeepCollectionEquality().hash(_lastShadeColor),const DeepCollectionEquality().hash(_lastBaseColor));
 
 @override
 String toString() {
-  return 'InventoryLamp(id: $id, name: $name, lastSeenEpochMs: $lastSeenEpochMs, lastShadeColor: $lastShadeColor, lastBaseColor: $lastBaseColor)';
+  return 'InventoryLamp(id: $id, name: $name, controlPassword: $controlPassword, lastSeenEpochMs: $lastSeenEpochMs, lastShadeColor: $lastShadeColor, lastBaseColor: $lastBaseColor)';
 }
 
 
@@ -271,7 +273,7 @@ abstract mixin class _$InventoryLampCopyWith<$Res> implements $InventoryLampCopy
   factory _$InventoryLampCopyWith(_InventoryLamp value, $Res Function(_InventoryLamp) _then) = __$InventoryLampCopyWithImpl;
 @override @useResult
 $Res call({
- String id, String name, int? lastSeenEpochMs, List<int>? lastShadeColor, List<int>? lastBaseColor
+ String id, String name, String? controlPassword, int? lastSeenEpochMs, List<int>? lastShadeColor, List<int>? lastBaseColor
 });
 
 
@@ -288,11 +290,12 @@ class __$InventoryLampCopyWithImpl<$Res>
 
 /// Create a copy of InventoryLamp
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? lastSeenEpochMs = freezed,Object? lastShadeColor = freezed,Object? lastBaseColor = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? controlPassword = freezed,Object? lastSeenEpochMs = freezed,Object? lastShadeColor = freezed,Object? lastBaseColor = freezed,}) {
   return _then(_InventoryLamp(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
-as String,lastSeenEpochMs: freezed == lastSeenEpochMs ? _self.lastSeenEpochMs : lastSeenEpochMs // ignore: cast_nullable_to_non_nullable
+as String,controlPassword: freezed == controlPassword ? _self.controlPassword : controlPassword // ignore: cast_nullable_to_non_nullable
+as String?,lastSeenEpochMs: freezed == lastSeenEpochMs ? _self.lastSeenEpochMs : lastSeenEpochMs // ignore: cast_nullable_to_non_nullable
 as int?,lastShadeColor: freezed == lastShadeColor ? _self._lastShadeColor : lastShadeColor // ignore: cast_nullable_to_non_nullable
 as List<int>?,lastBaseColor: freezed == lastBaseColor ? _self._lastBaseColor : lastBaseColor // ignore: cast_nullable_to_non_nullable
 as List<int>?,

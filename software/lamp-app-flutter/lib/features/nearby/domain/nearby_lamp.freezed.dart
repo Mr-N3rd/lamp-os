@@ -15,7 +15,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$NearbyLamp {
 
- String get id; String get name; int get rssi; List<String> get serviceUuids; int get lastSeenEpochMs;
+ String get id; String get name; int get rssi; List<String> get serviceUuids; int get baseRgb; int get shadeRgb; int get lastSeenEpochMs;
 /// Create a copy of NearbyLamp
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -28,16 +28,16 @@ $NearbyLampCopyWith<NearbyLamp> get copyWith => _$NearbyLampCopyWithImpl<NearbyL
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NearbyLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.rssi, rssi) || other.rssi == rssi)&&const DeepCollectionEquality().equals(other.serviceUuids, serviceUuids)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NearbyLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.rssi, rssi) || other.rssi == rssi)&&const DeepCollectionEquality().equals(other.serviceUuids, serviceUuids)&&(identical(other.baseRgb, baseRgb) || other.baseRgb == baseRgb)&&(identical(other.shadeRgb, shadeRgb) || other.shadeRgb == shadeRgb)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,name,rssi,const DeepCollectionEquality().hash(serviceUuids),lastSeenEpochMs);
+int get hashCode => Object.hash(runtimeType,id,name,rssi,const DeepCollectionEquality().hash(serviceUuids),baseRgb,shadeRgb,lastSeenEpochMs);
 
 @override
 String toString() {
-  return 'NearbyLamp(id: $id, name: $name, rssi: $rssi, serviceUuids: $serviceUuids, lastSeenEpochMs: $lastSeenEpochMs)';
+  return 'NearbyLamp(id: $id, name: $name, rssi: $rssi, serviceUuids: $serviceUuids, baseRgb: $baseRgb, shadeRgb: $shadeRgb, lastSeenEpochMs: $lastSeenEpochMs)';
 }
 
 
@@ -48,7 +48,7 @@ abstract mixin class $NearbyLampCopyWith<$Res>  {
   factory $NearbyLampCopyWith(NearbyLamp value, $Res Function(NearbyLamp) _then) = _$NearbyLampCopyWithImpl;
 @useResult
 $Res call({
- String id, String name, int rssi, List<String> serviceUuids, int lastSeenEpochMs
+ String id, String name, int rssi, List<String> serviceUuids, int baseRgb, int shadeRgb, int lastSeenEpochMs
 });
 
 
@@ -65,13 +65,15 @@ class _$NearbyLampCopyWithImpl<$Res>
 
 /// Create a copy of NearbyLamp
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? rssi = null,Object? serviceUuids = null,Object? lastSeenEpochMs = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? rssi = null,Object? serviceUuids = null,Object? baseRgb = null,Object? shadeRgb = null,Object? lastSeenEpochMs = null,}) {
   return _then(_self.copyWith(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,rssi: null == rssi ? _self.rssi : rssi // ignore: cast_nullable_to_non_nullable
 as int,serviceUuids: null == serviceUuids ? _self.serviceUuids : serviceUuids // ignore: cast_nullable_to_non_nullable
-as List<String>,lastSeenEpochMs: null == lastSeenEpochMs ? _self.lastSeenEpochMs : lastSeenEpochMs // ignore: cast_nullable_to_non_nullable
+as List<String>,baseRgb: null == baseRgb ? _self.baseRgb : baseRgb // ignore: cast_nullable_to_non_nullable
+as int,shadeRgb: null == shadeRgb ? _self.shadeRgb : shadeRgb // ignore: cast_nullable_to_non_nullable
+as int,lastSeenEpochMs: null == lastSeenEpochMs ? _self.lastSeenEpochMs : lastSeenEpochMs // ignore: cast_nullable_to_non_nullable
 as int,
   ));
 }
@@ -157,10 +159,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String name,  int rssi,  List<String> serviceUuids,  int lastSeenEpochMs)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String name,  int rssi,  List<String> serviceUuids,  int baseRgb,  int shadeRgb,  int lastSeenEpochMs)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _NearbyLamp() when $default != null:
-return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.lastSeenEpochMs);case _:
+return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.baseRgb,_that.shadeRgb,_that.lastSeenEpochMs);case _:
   return orElse();
 
 }
@@ -178,10 +180,10 @@ return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.lastSeen
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String name,  int rssi,  List<String> serviceUuids,  int lastSeenEpochMs)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String name,  int rssi,  List<String> serviceUuids,  int baseRgb,  int shadeRgb,  int lastSeenEpochMs)  $default,) {final _that = this;
 switch (_that) {
 case _NearbyLamp():
-return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.lastSeenEpochMs);case _:
+return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.baseRgb,_that.shadeRgb,_that.lastSeenEpochMs);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -198,10 +200,10 @@ return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.lastSeen
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String name,  int rssi,  List<String> serviceUuids,  int lastSeenEpochMs)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String name,  int rssi,  List<String> serviceUuids,  int baseRgb,  int shadeRgb,  int lastSeenEpochMs)?  $default,) {final _that = this;
 switch (_that) {
 case _NearbyLamp() when $default != null:
-return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.lastSeenEpochMs);case _:
+return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.baseRgb,_that.shadeRgb,_that.lastSeenEpochMs);case _:
   return null;
 
 }
@@ -213,7 +215,7 @@ return $default(_that.id,_that.name,_that.rssi,_that.serviceUuids,_that.lastSeen
 @JsonSerializable()
 
 class _NearbyLamp extends NearbyLamp {
-  const _NearbyLamp({required this.id, required this.name, required this.rssi, required final  List<String> serviceUuids, required this.lastSeenEpochMs}): _serviceUuids = serviceUuids,super._();
+  const _NearbyLamp({required this.id, required this.name, required this.rssi, required final  List<String> serviceUuids, required this.baseRgb, required this.shadeRgb, required this.lastSeenEpochMs}): _serviceUuids = serviceUuids,super._();
   factory _NearbyLamp.fromJson(Map<String, dynamic> json) => _$NearbyLampFromJson(json);
 
 @override final  String id;
@@ -226,6 +228,8 @@ class _NearbyLamp extends NearbyLamp {
   return EqualUnmodifiableListView(_serviceUuids);
 }
 
+@override final  int baseRgb;
+@override final  int shadeRgb;
 @override final  int lastSeenEpochMs;
 
 /// Create a copy of NearbyLamp
@@ -241,16 +245,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _NearbyLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.rssi, rssi) || other.rssi == rssi)&&const DeepCollectionEquality().equals(other._serviceUuids, _serviceUuids)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _NearbyLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.rssi, rssi) || other.rssi == rssi)&&const DeepCollectionEquality().equals(other._serviceUuids, _serviceUuids)&&(identical(other.baseRgb, baseRgb) || other.baseRgb == baseRgb)&&(identical(other.shadeRgb, shadeRgb) || other.shadeRgb == shadeRgb)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,name,rssi,const DeepCollectionEquality().hash(_serviceUuids),lastSeenEpochMs);
+int get hashCode => Object.hash(runtimeType,id,name,rssi,const DeepCollectionEquality().hash(_serviceUuids),baseRgb,shadeRgb,lastSeenEpochMs);
 
 @override
 String toString() {
-  return 'NearbyLamp(id: $id, name: $name, rssi: $rssi, serviceUuids: $serviceUuids, lastSeenEpochMs: $lastSeenEpochMs)';
+  return 'NearbyLamp(id: $id, name: $name, rssi: $rssi, serviceUuids: $serviceUuids, baseRgb: $baseRgb, shadeRgb: $shadeRgb, lastSeenEpochMs: $lastSeenEpochMs)';
 }
 
 
@@ -261,7 +265,7 @@ abstract mixin class _$NearbyLampCopyWith<$Res> implements $NearbyLampCopyWith<$
   factory _$NearbyLampCopyWith(_NearbyLamp value, $Res Function(_NearbyLamp) _then) = __$NearbyLampCopyWithImpl;
 @override @useResult
 $Res call({
- String id, String name, int rssi, List<String> serviceUuids, int lastSeenEpochMs
+ String id, String name, int rssi, List<String> serviceUuids, int baseRgb, int shadeRgb, int lastSeenEpochMs
 });
 
 
@@ -278,13 +282,15 @@ class __$NearbyLampCopyWithImpl<$Res>
 
 /// Create a copy of NearbyLamp
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? rssi = null,Object? serviceUuids = null,Object? lastSeenEpochMs = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? rssi = null,Object? serviceUuids = null,Object? baseRgb = null,Object? shadeRgb = null,Object? lastSeenEpochMs = null,}) {
   return _then(_NearbyLamp(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,rssi: null == rssi ? _self.rssi : rssi // ignore: cast_nullable_to_non_nullable
 as int,serviceUuids: null == serviceUuids ? _self._serviceUuids : serviceUuids // ignore: cast_nullable_to_non_nullable
-as List<String>,lastSeenEpochMs: null == lastSeenEpochMs ? _self.lastSeenEpochMs : lastSeenEpochMs // ignore: cast_nullable_to_non_nullable
+as List<String>,baseRgb: null == baseRgb ? _self.baseRgb : baseRgb // ignore: cast_nullable_to_non_nullable
+as int,shadeRgb: null == shadeRgb ? _self.shadeRgb : shadeRgb // ignore: cast_nullable_to_non_nullable
+as int,lastSeenEpochMs: null == lastSeenEpochMs ? _self.lastSeenEpochMs : lastSeenEpochMs // ignore: cast_nullable_to_non_nullable
 as int,
   ));
 }

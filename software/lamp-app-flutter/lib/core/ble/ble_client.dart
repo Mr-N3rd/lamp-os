@@ -15,7 +15,17 @@ class BleEncryptionRequired implements Exception {
   String toString() => 'BleEncryptionRequired: $deviceId';
 }
 
+class BleNotConnected implements Exception {
+  const BleNotConnected(this.deviceId);
+  final String deviceId;
+  @override
+  String toString() => 'BleNotConnected: $deviceId';
+}
+
 abstract class BleClient {
+  Future<void> connect(String deviceId);
+  Future<void> disconnect(String deviceId);
+  bool isConnected(String deviceId);
   Future<Uint8List> read(String deviceId, String serviceUuid, String charUuid);
   Future<void> write(
     String deviceId,
@@ -33,6 +43,7 @@ abstract class BleClient {
 /// Test/dev fake. Records writes per (device, service, char) key, lets tests
 /// schedule encryption failures, and broadcasts writes to subscribers.
 class InMemoryBleClient implements BleClient {
+  final Set<String> _connected = {};
   final Map<String, Uint8List> _values = {};
   final Map<String, StreamController<Uint8List>> _streams = {};
   final Map<String, int> _pendingEncryptionFails = {};
@@ -45,7 +56,21 @@ class InMemoryBleClient implements BleClient {
   }
 
   @override
+  Future<void> connect(String deviceId) async {
+    _connected.add(deviceId);
+  }
+
+  @override
+  Future<void> disconnect(String deviceId) async {
+    _connected.remove(deviceId);
+  }
+
+  @override
+  bool isConnected(String deviceId) => _connected.contains(deviceId);
+
+  @override
   Future<Uint8List> read(String d, String s, String c) async {
+    if (!_connected.contains(d)) throw BleNotConnected(d);
     final v = _values[_key(d, s, c)];
     if (v == null) throw BleNotFound('$d/$s/$c');
     return v;
@@ -53,6 +78,7 @@ class InMemoryBleClient implements BleClient {
 
   @override
   Future<void> write(String d, String s, String c, Uint8List v) async {
+    if (!_connected.contains(d)) throw BleNotConnected(d);
     final key = _key(d, s, c);
     final count = _pendingEncryptionFails[key] ?? 0;
     if (count > 0) {
@@ -65,6 +91,7 @@ class InMemoryBleClient implements BleClient {
 
   @override
   Stream<Uint8List> subscribe(String d, String s, String c) {
+    if (!_connected.contains(d)) throw BleNotConnected(d);
     final key = _key(d, s, c);
     final ctrl = _streams.putIfAbsent(
       key,

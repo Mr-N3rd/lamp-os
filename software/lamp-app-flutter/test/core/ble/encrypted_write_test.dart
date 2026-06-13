@@ -9,8 +9,9 @@ void main() {
   late int bondCalls;
   late EncryptedWrite ew;
 
-  setUp(() {
+  setUp(() async {
     ble = InMemoryBleClient();
+    await ble.connect('d');
     bondCalls = 0;
     ew = EncryptedWrite(
       ble: ble,

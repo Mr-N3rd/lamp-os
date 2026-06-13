@@ -1,36 +1,46 @@
 import 'dart:async';
+import 'dart:typed_data';
 
-typedef FlushFn<T> = Future<void> Function(T value);
+/// Coalesces a stream of [schedule] calls into a single trailing write after
+/// [debounce] has elapsed since the last call. Used to keep slider drags from
+/// firing dozens of BLE writes per second.
+///
+/// Errors from [onWrite] are intentionally dropped — this is a fire-and-forget
+/// debouncer; a failed mid-stream slider write should not crash the UI.
+class WriteCoalescer {
+  WriteCoalescer({required this.onWrite, required this.debounce});
 
-class WriteCoalescer<T> {
-  WriteCoalescer({required this.debounce, required this.onFlush});
-
+  final Future<void> Function(Uint8List) onWrite;
   final Duration debounce;
-  final FlushFn<T> onFlush;
+
+  Uint8List? _pending;
   Timer? _timer;
-  T? _pending;
-  bool _hasPending = false;
+  bool _disposed = false;
 
-  void schedule(T value) {
-    _pending = value;
-    _hasPending = true;
+  void schedule(Uint8List payload) {
+    if (_disposed) return;
+    _pending = payload;
     _timer?.cancel();
-    _timer = Timer(debounce, _fire);
+    _timer = Timer(debounce, () => unawaited(_drain()));
   }
 
-  Future<void> flushNow() async {
+  Future<void> flush() async {
+    if (_disposed) return;
     _timer?.cancel();
-    _timer = null;
-    await _fire();
+    await _drain();
   }
 
-  Future<void> _fire() async {
-    if (!_hasPending) return;
-    final v = _pending as T;
-    _hasPending = false;
+  Future<void> _drain() async {
+    final payload = _pending;
     _pending = null;
-    await onFlush(v);
+    if (payload != null) {
+      await onWrite(payload);
+    }
   }
 
-  void dispose() => _timer?.cancel();
+  void dispose() {
+    _disposed = true;
+    _timer?.cancel();
+    _pending = null;
+  }
 }
