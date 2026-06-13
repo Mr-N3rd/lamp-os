@@ -79,6 +79,10 @@ class ShiftyExpression : public Expression {
 
   void draw() override;
 
+  // Continuous palette-shift animation — visually fights the wisp's
+  // hold colour, so must pause while wisp is overriding.
+  bool disabledDuringWispOverride() const override { return true; }
+
 protected:
   void onTrigger() override;
   void onUpdate() override;

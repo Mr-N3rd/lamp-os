@@ -162,19 +162,18 @@ class _ExpressionTile extends ConsumerWidget {
     final meta = ExpressionTypeMeta.byKey(expression.type);
     final title = meta?.name ??
         (expression.type.isEmpty ? '(unnamed)' : expression.type);
-    // Per-expression wisp-gating. The user marks expressions that should
-    // pause while a wisp is in control by setting
-    // `disabledDuringWispOverride`. We watch a tiny slice of wispStatus
+    // Per-expression wisp-gating. Wisp-disabled-ness is a type-property
+    // (refactor 2026-06-13 — removed the per-instance toggle), so we look
+    // it up via ExpressionTypeMeta. Watch a tiny slice of wispStatus
     // (just `controlling`) so the row greys when a wisp takes over and
-    // un-greys when the wisp releases. No tooltip / explanation — the
-    // mystery is intentional per the spec.
+    // un-greys when the wisp releases.
     final wispControlling = ref.watch(
       wispNotifierProvider(lampId).select(
         (async) => async.value?.controlling ?? false,
       ),
     );
     final muted =
-        expression.disabledDuringWispOverride && wispControlling;
+        (meta?.defaultDisabledDuringWispOverride ?? false) && wispControlling;
     return Dismissible(
       key: ValueKey('${expression.type}-${expression.target}'),
       direction: DismissDirection.endToStart,

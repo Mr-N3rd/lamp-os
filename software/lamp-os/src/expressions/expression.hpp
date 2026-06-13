@@ -127,12 +127,16 @@ class Expression : public AnimatedBehavior {
 
   // Suppresses auto-trigger from control() while the wisp is actively
   // overriding the lamp's base or shade surface. Manual trigger() (the
-  // app's "Test" button + chain triggers) still fires. Mirrors
-  // ExpressionConfig::disabledDuringWispOverride; set by
-  // ExpressionManager when an entry is loaded / upserted from config.
-  // The control() implementation queries the override state via
-  // `isWispCurrentlyOverriding()` (declared in expression.cpp).
-  bool disabledDuringWispOverride = false;
+  // app's "Test" button + chain triggers) still fires. Pure type-property
+  // — overridden in subclasses, NOT stored in config/NVS/BLE. Refactor
+  // 2026-06-13: the operator doesn't need a per-expression toggle here;
+  // whether a given expression coexists with wisp paint is a property of
+  // the expression class itself (continuous animations like breathing /
+  // shifty fight the wisp's hold colour and must pause; short discrete
+  // ones like glitchy / pulse coexist fine). The control() implementation
+  // queries the override state via `isWispCurrentlyOverriding()` (declared
+  // in expression.cpp).
+  virtual bool disabledDuringWispOverride() const { return false; }
 
 protected:
   /**

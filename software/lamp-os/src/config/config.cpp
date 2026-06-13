@@ -158,15 +158,11 @@ Config::Config(Preferences* inPrefs) {
       expr.intervalMin = exprNode["intervalMin"] | 60;
       expr.intervalMax = exprNode["intervalMax"] | 900;
       expr.target = exprNode["target"] | 3;
-      // Type-aware default for the wisp-override gate: `breathing` and
-      // `shifty` paint continuously and visibly fight the wisp's hold
-      // colour, so they default to true when the key is missing (old
-      // pre-feature NVS). Other expressions default to false. The
-      // operator can flip per-expression in the editor.
-      const bool typeDefaultsDisabled =
-          (expr.type == "breathing" || expr.type == "shifty");
-      expr.disabledDuringWispOverride =
-          exprNode["disabledDuringWispOverride"] | typeDefaultsDisabled;
+      // (Refactor 2026-06-13: disabledDuringWispOverride parse removed —
+      // now a pure type-property on the Expression subclass; nothing to
+      // load from NVS. Old NVS blobs with the key are tolerated; the
+      // skip-list below drops it from the generic parameter loop so it
+      // isn't accidentally captured as a parameter value.)
       // Load generic parameters
       for (JsonPair kv : exprNode) {
         const char* key = kv.key().c_str();
@@ -456,7 +452,7 @@ JsonDocument Config::asJsonDocument() {
     exprNode["intervalMin"] = expr.intervalMin;
     exprNode["intervalMax"] = expr.intervalMax;
     exprNode["target"] = expr.target;
-    exprNode["disabledDuringWispOverride"] = expr.disabledDuringWispOverride;
+    // disabledDuringWispOverride is no longer persisted — pure type-property.
     // Serialize generic parameters
     for (const auto& param : expr.parameters) {
       const std::string& key = param.first;
@@ -545,7 +541,7 @@ String Config::asExpressionsJson() {
     exprNode["intervalMin"] = expr.intervalMin;
     exprNode["intervalMax"] = expr.intervalMax;
     exprNode["target"] = expr.target;
-    exprNode["disabledDuringWispOverride"] = expr.disabledDuringWispOverride;
+    // disabledDuringWispOverride is no longer serialised — pure type-property.
     for (const auto& param : expr.parameters) {
       exprNode[param.first] = param.second;
     }

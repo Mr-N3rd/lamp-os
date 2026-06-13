@@ -64,7 +64,7 @@ void Expression::control() {
   // is currently held on either surface. Pushes nextTriggerMs forward
   // by the min interval so a long-running wisp hold doesn't queue up
   // a backlog of triggers that all fire the instant the wisp lets go.
-  if (disabledDuringWispOverride && animationState == STOPPED &&
+  if (disabledDuringWispOverride() && animationState == STOPPED &&
       isWispCurrentlyOverriding()) {
     nextTriggerMs = millis() + intervalMinMs;
     return;

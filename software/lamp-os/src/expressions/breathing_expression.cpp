@@ -130,7 +130,7 @@ void BreathingExpression::control() {
   // path AND the per-frame onUpdate. The wisp's hold colour is what
   // the strip shows; our animation effectively pauses mid-cycle and
   // resumes when the wisp lets go. See docs/expressions.md.
-  if (disabledDuringWispOverride && isWispCurrentlyOverriding()) {
+  if (disabledDuringWispOverride() && isWispCurrentlyOverriding()) {
     return;
   }
 

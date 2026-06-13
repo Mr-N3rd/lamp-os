@@ -54,6 +54,10 @@ class BreathingExpression : public Expression {
   void draw() override;
   void control() override;  // Override to keep always running
 
+  // Continuous fade between palette colours — visually fights the wisp's
+  // hold colour, so must pause while wisp is overriding.
+  bool disabledDuringWispOverride() const override { return true; }
+
 protected:
   void onTrigger() override;
   void onUpdate() override;

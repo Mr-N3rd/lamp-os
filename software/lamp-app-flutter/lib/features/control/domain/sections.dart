@@ -250,7 +250,6 @@ class ExpressionConfig {
     required this.intervalMax,
     required this.target,
     required this.parameters,
-    this.disabledDuringWispOverride = false,
   });
 
   final String type;
@@ -261,33 +260,18 @@ class ExpressionConfig {
   final int target; // 1=shade, 2=base, 3=both
   final Map<String, int> parameters;
 
-  /// When true the lamp skips this expression's auto-trigger while the
-  /// wisp is actively overriding either surface (`baseColorOverride` or
-  /// `shadeColorOverride` non-Idle with `activeSource == Wisp`).
-  /// Defaults to true for `breathing` and `shifty` (they paint
-  /// continuously and visibly fight the wisp's hold colour) and false
-  /// for `glitchy` / `pulse` (brief flashes / waves that coexist with
-  /// a held wisp colour). Operator can flip per-expression in the
-  /// editor. See `docs/expressions.md`.
-  final bool disabledDuringWispOverride;
+  // (Refactor 2026-06-13: `disabledDuringWispOverride` field removed.
+  // It's a pure type-property now — look up via
+  // `ExpressionTypeMeta.forType(type).defaultDisabledDuringWispOverride`
+  // when the UI needs to gate against wisp control. Mirrors the firmware
+  // refactor that moved the gate to a virtual method on the Expression
+  // subclass.)
 
   static const _reservedKeys = {
     'type', 'enabled', 'colors', 'intervalMin', 'intervalMax', 'target',
+    // Tolerated from older firmware payloads but dropped from params.
     'disabledDuringWispOverride',
   };
-
-  /// Type-aware value for `disabledDuringWispOverride`. The toggle was
-  /// removed from the operator UX in commit 3575f43 — the behavior
-  /// should be uniform across the fleet per type. We normalize on load
-  /// here so any stale stored value (from when the toggle was
-  /// user-toggleable) is overwritten on the next Save with the current
-  /// type default. Mirrors firmware-side
-  /// `software/lamp-os/src/config/config.cpp`. A future custom-lamps
-  /// power-user surface can re-introduce per-instance overrides via a
-  /// separate mechanism if needed.
-  static bool _defaultDisabledDuringWispOverrideForType(String type) {
-    return type == 'breathing' || type == 'shifty';
-  }
 
   factory ExpressionConfig.fromJson(Map<String, dynamic> json) {
     final params = <String, int>{};
@@ -295,9 +279,8 @@ class ExpressionConfig {
       if (_reservedKeys.contains(e.key)) continue;
       if (e.value is num) params[e.key] = (e.value as num).toInt();
     }
-    final type = json['type'] as String? ?? '';
     return ExpressionConfig(
-      type: type,
+      type: json['type'] as String? ?? '',
       enabled: json['enabled'] as bool? ?? false,
       colors: ((json['colors'] as List?) ?? const [])
           .map((e) => LampColor.fromHex(e as String))
@@ -306,10 +289,6 @@ class ExpressionConfig {
       intervalMax: (json['intervalMax'] as num?)?.toInt() ?? 900,
       target: (json['target'] as num?)?.toInt() ?? 3,
       parameters: params,
-      // Force the type default — ignore any stored value. See doc on
-      // `_defaultDisabledDuringWispOverrideForType` above for the why.
-      disabledDuringWispOverride:
-          _defaultDisabledDuringWispOverrideForType(type),
     );
   }
 
@@ -320,7 +299,6 @@ class ExpressionConfig {
         'intervalMin': intervalMin,
         'intervalMax': intervalMax,
         'target': target,
-        'disabledDuringWispOverride': disabledDuringWispOverride,
         ...parameters,
       };
 
@@ -332,7 +310,6 @@ class ExpressionConfig {
     int? intervalMax,
     int? target,
     Map<String, int>? parameters,
-    bool? disabledDuringWispOverride,
   }) =>
       ExpressionConfig(
         type: type ?? this.type,
@@ -342,8 +319,6 @@ class ExpressionConfig {
         intervalMax: intervalMax ?? this.intervalMax,
         target: target ?? this.target,
         parameters: parameters ?? this.parameters,
-        disabledDuringWispOverride:
-            disabledDuringWispOverride ?? this.disabledDuringWispOverride,
       );
 
   @override
@@ -356,8 +331,7 @@ class ExpressionConfig {
           intervalMin == other.intervalMin &&
           intervalMax == other.intervalMax &&
           target == other.target &&
-          _mapEq.equals(parameters, other.parameters) &&
-          disabledDuringWispOverride == other.disabledDuringWispOverride;
+          _mapEq.equals(parameters, other.parameters);
 
   @override
   int get hashCode => Object.hash(
@@ -368,7 +342,6 @@ class ExpressionConfig {
         intervalMax,
         target,
         _mapEq.hash(parameters),
-        disabledDuringWispOverride,
       );
 }
 

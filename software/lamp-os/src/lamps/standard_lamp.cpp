@@ -417,8 +417,13 @@ static void applyExpressionOpLocal(JsonObject doc) {
     cfg.target = entry["target"] | 3;
     for (JsonPair kv : entry) {
       std::string key(kv.key().c_str());
-      if (key == "type" || key == "enabled" || key == "intervalMin" ||
-          key == "intervalMax" || key == "target" || key == "colors") continue;
+      // `disabledDuringWispOverride` is tolerated from older app payloads
+      // but ignored — it's now a pure type-property on the Expression
+      // subclass, not config-driven.
+      if (key == "type" || key == "enabled" ||
+          key == "disabledDuringWispOverride" ||
+          key == "intervalMin" || key == "intervalMax" ||
+          key == "target" || key == "colors") continue;
       JsonVariant v = kv.value();
       if (v.is<uint32_t>()) cfg.setParameter(key, v.as<uint32_t>());
       else if (v.is<int>()) cfg.setParameter(key, static_cast<uint32_t>(v.as<int>()));
@@ -846,8 +851,12 @@ lamp::ExpressionConfig parseExpressionConfig(JsonObject node) {
   for (JsonPair kv : node) {
     const char* key = kv.key().c_str();
     std::string keyStr(key);
-    if (keyStr == "type" || keyStr == "enabled" || keyStr == "intervalMin" ||
-        keyStr == "intervalMax" || keyStr == "target" || keyStr == "colors") {
+    // `disabledDuringWispOverride` tolerated from older payloads but
+    // ignored — pure type-property now.
+    if (keyStr == "type" || keyStr == "enabled" ||
+        keyStr == "disabledDuringWispOverride" ||
+        keyStr == "intervalMin" || keyStr == "intervalMax" ||
+        keyStr == "target" || keyStr == "colors") {
       continue;
     }
     JsonVariant value = kv.value();

@@ -123,49 +123,35 @@ void main() {
     expect(s.expressions[1].target, 3);
   });
 
-  group('ExpressionConfig.disabledDuringWispOverride normalises to type default',
-      () {
-    // Contract: the type default ALWAYS wins, even when the JSON
-    // explicitly stores a different value. The user-facing toggle was
-    // removed in commit 3575f43; behavior is uniform per type
-    // (breathing + shifty pause during wisp control; everything else
-    // doesn't). Without this normalisation, an expression saved back
-    // when the toggle was user-toggleable would keep its stale value
-    // and silently diverge from the rest of the fleet.
-    test('breathing → true (type default)', () {
+  group('ExpressionConfig drops legacy disabledDuringWispOverride', () {
+    // The field was a per-instance config until commit 3575f43 (UI toggle
+    // removed), and was deleted entirely on 2026-06-13 — it's now a pure
+    // type-property looked up via ExpressionTypeMeta. fromJson/toJson must
+    // tolerate the legacy key (older firmware/payloads may still ship it)
+    // but never surface it as a parameter or carry it forward.
+    test('legacy disabledDuringWispOverride is dropped, not stored as param',
+        () {
       final e = ExpressionConfig.fromJson(<String, dynamic>{
         'type': 'breathing',
-      });
-      expect(e.disabledDuringWispOverride, isTrue);
-    });
-    test('shifty → true (type default)', () {
-      final e = ExpressionConfig.fromJson(<String, dynamic>{
-        'type': 'shifty',
-      });
-      expect(e.disabledDuringWispOverride, isTrue);
-    });
-    test('glitchy → false (type default)', () {
-      final e = ExpressionConfig.fromJson(<String, dynamic>{
-        'type': 'glitchy',
-      });
-      expect(e.disabledDuringWispOverride, isFalse);
-    });
-    test('type default overrides explicit false on breathing', () {
-      // Old NVS payload from when the toggle was user-toggleable;
-      // load coerces back to the type default so display + firmware
-      // converge on next Save.
-      final e = ExpressionConfig.fromJson(<String, dynamic>{
-        'type': 'breathing',
-        'disabledDuringWispOverride': false,
-      });
-      expect(e.disabledDuringWispOverride, isTrue);
-    });
-    test('type default overrides explicit true on glitchy', () {
-      final e = ExpressionConfig.fromJson(<String, dynamic>{
-        'type': 'glitchy',
+        'enabled': true,
         'disabledDuringWispOverride': true,
+        'someRealParam': 42,
       });
-      expect(e.disabledDuringWispOverride, isFalse);
+      expect(e.type, 'breathing');
+      expect(e.parameters.containsKey('disabledDuringWispOverride'), isFalse);
+      expect(e.parameters['someRealParam'], 42);
+    });
+    test('toJson does not emit disabledDuringWispOverride', () {
+      const e = ExpressionConfig(
+        type: 'breathing',
+        enabled: true,
+        colors: [],
+        intervalMin: 60,
+        intervalMax: 900,
+        target: 3,
+        parameters: {},
+      );
+      expect(e.toJson().containsKey('disabledDuringWispOverride'), isFalse);
     });
   });
 
