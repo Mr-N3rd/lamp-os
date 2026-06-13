@@ -82,6 +82,19 @@ void ColorOverride::apply(const uint8_t sourceMac[6],
     hasLastWispColor_ = true;
   }
 
+#ifdef LAMP_DEBUG
+  // Diagnostic for the 2026-06-13 "jacko renders pink/orange instead of
+  // wisp/picker colors" report. Print the actual stops[0] bytes being
+  // passed into the configurator so we can compare against the LED output.
+  // If this prints the correct RGB but LEDs render wrong, the bug is
+  // downstream of beginFade (configurator fade math, compositor overlays,
+  // NeoPixel write). If this prints swapped/wrong bytes, the bug is
+  // upstream in the wire decode.
+  Serial.printf("[override] beginFade surface=0x%02X src=%d target0=(R=%u G=%u B=%u W=%u)\n",
+                (unsigned)surface_, (int)source,
+                (unsigned)stops[0].r, (unsigned)stops[0].g,
+                (unsigned)stops[0].b, (unsigned)stops[0].w);
+#endif
   configurator_->beginFade(target, fadeDurationMs);
   // Keep the configurator's animation state machine alive. Without this,
   // ConfiguratorBehavior::control() (behaviors/configurator.cpp:77-89)
