@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
 import '../../../../core/widgets/status_dot.dart';
+import '../../../inventory/application/inventory_notifier.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../../nearby/domain/nearby_lamp.dart';
 import '../../application/add_lamp_notifier.dart';
@@ -12,13 +13,39 @@ class AddLampScanStep extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final lamps = ref.watch(nearbyLampsNotifierProvider);
+    final all = ref.watch(nearbyLampsNotifierProvider);
+    final inventory =
+        ref.watch(inventoryNotifierProvider).value ?? const [];
+    final inventoryIds = inventory.map((l) => l.id).toSet();
+    // Hide lamps that are already in this phone's inventory — they're
+    // already addable from "My lamps", and showing them here would
+    // confuse the "tap a discovered lamp to add it" flow.
+    final lamps = all.where((l) => !inventoryIds.contains(l.id)).toList();
     if (lamps.isEmpty) {
       return const Center(
-        child: Text(
-          'Scanning for lamps...',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: BrandColors.fogGrey),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Searching for a stray lamp…',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: BrandColors.lampWhite,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Make sure your new lamp is plugged in and glowing nearby. '
+                "If they're shy, give them a moment.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: BrandColors.fogGrey, fontSize: 13),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -44,7 +71,7 @@ class _LampRow extends ConsumerWidget {
       ref.read(addLampNotifierProvider.notifier).select(lamp.id);
     } else {
       // No confirm dialog — `add()` sets state.step to `done` and the
-      // AddLampShell will swap in the AddLampDoneStep ("X is ready"),
+      // AddLampShell will swap in the AddLampDoneStep ("X is home!"),
       // which serves as the visual confirmation.
       await ref
           .read(addLampNotifierProvider.notifier)
@@ -67,11 +94,11 @@ class _LampRow extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            // BLE adv tells us bluetooth-reachable; v2-firmware lamps also
-            // carry a mesh-state byte (`NearbyLamp.onMesh`). Light bright
-            // green when the lamp is on the mesh, otherwise faded blue.
+            // BLE adv tells us this lamp is bluetooth-reachable; the
+            // `isMesh` flag distinguishes mesh-protocol firmware from
+            // legacy BT-only. Light green for mesh, faded blue for BT.
             StatusDot(
-              kind: lamp.onMesh
+              kind: lamp.isMesh
                   ? StatusKind.mesh
                   : StatusKind.bluetooth,
               size: 14,

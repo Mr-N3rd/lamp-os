@@ -1,8 +1,34 @@
-#include "./glitchy_expression.hpp"
+#include "glitchy_expression.hpp"
 #include <Arduino.h>
-#include "../util/fade.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
+
+namespace {
+// Per-channel linear mix using a precomputed factor. Mirrors easeLinear()'s
+// body bit-for-bit (same integer types, same divisor, same start==end
+// short-circuit) so output bytes match the unhoisted call site exactly.
+inline uint8_t mixByteLinear(uint8_t start, uint8_t end, uint32_t factor) {
+  if (start == end) return end;
+  return static_cast<uint8_t>(
+      ((static_cast<uint32_t>(end) - static_cast<uint32_t>(start)) * factor) /
+          262144u +
+      start);
+}
+
+inline Color mixColorLinear(const Color& start, const Color& end, uint32_t factor) {
+  return Color(mixByteLinear(start.r, end.r, factor),
+               mixByteLinear(start.g, end.g, factor),
+               mixByteLinear(start.b, end.b, factor),
+               mixByteLinear(start.w, end.w, factor));
+}
+
+// Glitchy always calls fadeLinear(buffer[i], glitchColor, 100, 95): the
+// factor is a constant. Precompute it once. Mirrors easeLinear's:
+//   linear[(uint16_t)((95 * 511 / 100 * 511) / 511)] = linear[485] = 485 * 511
+// (linear[i] == i * 511 by construction; see src/util/fade.cpp).
+static constexpr uint32_t kGlitchyLinearFactor = 485u * 511u;  // == 247835
+}  // namespace
 
 GlitchyExpression::GlitchyExpression(FrameBuffer* inBuffer, uint32_t inFrames)
     : Expression(inBuffer, inFrames) {
@@ -53,10 +79,13 @@ void GlitchyExpression::draw() {
   if (isLastFrame()) {
     fb->buffer = savedBuffer;
   } else {
-    // Blend glitch color with current buffer for a tinted effect
-    // 95% blend = 95 out of 100 steps toward glitch color
+    // Blend glitch color with current buffer for a tinted effect.
+    // 95% blend = 95 out of 100 steps toward glitch color. Inputs (100, 95)
+    // are constant, so the linear factor is too — precomputed as
+    // kGlitchyLinearFactor at namespace scope. Per pixel we just inline the
+    // four-channel mix and skip the per-channel function-call overhead.
     for (int i = 0; i < fb->pixelCount; i++) {
-      fb->buffer[i] = fadeLinear(fb->buffer[i], glitchColor, 100, 95);
+      fb->buffer[i] = mixColorLinear(fb->buffer[i], glitchColor, kGlitchyLinearFactor);
     }
   }
 

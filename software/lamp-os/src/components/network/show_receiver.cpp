@@ -1,7 +1,8 @@
-#include "./show_receiver.hpp"
+#include "show_receiver.hpp"
 
 #include <Arduino.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace lamp {
@@ -39,15 +40,99 @@ void ShowReceiver::setControlOpHandler(ControlOpHandler h) {
   controlOpHandler_ = std::move(h);
 }
 
+// Serialize + size-check + send. Returns false (and logs in debug) when the
+// payload would exceed the ~230-byte ESP-NOW CONTROL_OP cap so we don't fail
+// silently inside sendControlOp's own bounds check.
+static bool sendInvocationToMac(ShowReceiver& self, const uint8_t mac[6],
+                                const ExpressionInvocation& inv) {
+  std::string json;
+  serializeInvocation(inv, json);
+  if (json.size() > lamp_protocol::CONTROL_MAX_PAYLOAD) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[show] triggerExpression payload %u > max %u, dropping\n",
+                  (unsigned)json.size(),
+                  (unsigned)lamp_protocol::CONTROL_MAX_PAYLOAD);
+#endif
+    return false;
+  }
+  // Expression cascades are intentionally local: receivers apply the
+  // invocation but the FLAG_LOCAL_ONLY bit tells them not to relay it.
+  // Reach is therefore whatever direct ESP-NOW radio range delivers —
+  // "lamps in the same physical space", which is the user's mental model
+  // of a cascade. Set true here so every per-peer frame carries the flag.
+  return self.sendControlOp(mac,
+                            reinterpret_cast<const uint8_t*>(json.data()),
+                            json.size(),
+                            /*localOnly=*/true);
+}
+
+bool ShowReceiver::sendExpressionTo(const std::string& peerName,
+                                    const ExpressionInvocation& inv) {
+  auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
+  for (const auto& p : peers) {
+    if (p.name != peerName) continue;
+    if (!p.hasMac) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[show] sendExpressionTo: peer '%s' has no MAC yet\n",
+                    peerName.c_str());
+#endif
+      continue;
+    }
+    return sendInvocationToMac(*this, p.mac, inv);
+  }
+#ifdef LAMP_DEBUG
+  Serial.printf("[show] sendExpressionTo: peer '%s' not reachable\n",
+                peerName.c_str());
+#endif
+  return false;
+}
+
+void ShowReceiver::sendExpressionToAll(const ExpressionInvocation& inv,
+                                       uint32_t staggerMs) {
+  auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
+  std::vector<NearbyLamp> targets;
+  targets.reserve(peers.size());
+  for (const auto& p : peers) {
+    if (!p.hasMac) continue;
+    if (std::memcmp(p.mac, myMac_, 6) == 0) continue;  // never send to self
+    targets.push_back(p);
+  }
+  // Deterministic name order so the cascade direction is stable visit-to-visit
+  // (otherwise NearbyLamps internal insertion order would leak in).
+  std::sort(targets.begin(), targets.end(),
+            [](const NearbyLamp& a, const NearbyLamp& b) {
+              return a.name < b.name;
+            });
+#ifdef LAMP_DEBUG
+  Serial.printf("[fanout] %s → %u peers (staggerMs=%u)\n",
+                inv.type.c_str(), (unsigned)targets.size(),
+                (unsigned)staggerMs);
+  if (targets.empty()) {
+    Serial.println("[fanout]   NO peers — check HELLOs / LAMP_PRUNE_TIME_MS");
+  }
+#endif
+  for (size_t i = 0; i < targets.size(); i++) {
+    ExpressionInvocation perPeer = inv;
+    perPeer.delayMs = inv.delayMs + static_cast<uint32_t>(i) * staggerMs;
+#ifdef LAMP_DEBUG
+    Serial.printf("[fanout]   → '%s' (delayMs=%u)\n",
+                  targets[i].name.c_str(), (unsigned)perPeer.delayMs);
+#endif
+    sendInvocationToMac(*this, targets[i].mac, perPeer);
+  }
+}
+
 bool ShowReceiver::sendControlOp(const uint8_t targetMac[6],
-                                 const uint8_t* payload, size_t payloadLen) {
+                                 const uint8_t* payload, size_t payloadLen,
+                                 bool localOnly) {
   if (payloadLen > lamp_protocol::CONTROL_MAX_PAYLOAD) return false;
   uint8_t buf[lamp_protocol::CONTROL_MAX_SIZE];
   // sourceMac is THIS lamp — peers and the originator can dedup our own
   // re-broadcasts based on it.
   const size_t n = lamp_protocol::buildControlOp(buf, sizeof(buf), controlOpSeq_++,
                                                  targetMac, myMac_,
-                                                 payload, payloadLen);
+                                                 payload, payloadLen,
+                                                 localOnly);
   if (!n) return false;
   // Record in our own dedup ring so the inbound re-broadcast (from a peer)
   // doesn't loop back as an "apply locally".
@@ -122,17 +207,25 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, si
     if (!lamp_protocol::parseControlOp(data, len, op)) return;
     // Dedup by (sourceMac, seq) so a loop-relayed copy doesn't fire twice.
     if (!controlOpDedup_.record(op.sourceMac, lamp_protocol::MSG_CONTROL_OP, op.seq)) return;
-    // Rebroadcast for grid relay (terminates at peers that have seen this seq).
-    link_.broadcast(data, len);
+    // Rebroadcast for grid relay UNLESS the sender flagged this op localOnly
+    // (expression cascades do — see ShowReceiver::sendInvocationToMac). When
+    // localOnly is set, reach is limited to the sender's direct radio range
+    // instead of fanning across the whole mesh via relays.
+    if (!op.localOnly) {
+      link_.broadcast(data, len);
+    }
     // Apply locally if addressed to us or broadcast.
     static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     const bool forUs = (std::memcmp(op.targetMac, myMac_, 6) == 0) ||
                        (std::memcmp(op.targetMac, bcast, 6) == 0);
     if (forUs && controlOpHandler_) {
 #ifdef LAMP_DEBUG
-      Serial.printf("[show] CONTROL_OP apply len=%u\n", (unsigned)op.payloadLen);
+      Serial.printf("[show] CONTROL_OP apply len=%u src=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                    (unsigned)op.payloadLen,
+                    op.sourceMac[0], op.sourceMac[1], op.sourceMac[2],
+                    op.sourceMac[3], op.sourceMac[4], op.sourceMac[5]);
 #endif
-      controlOpHandler_(op.payload, op.payloadLen);
+      controlOpHandler_(op.payload, op.payloadLen, op.sourceMac);
     }
   }
 }

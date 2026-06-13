@@ -1,16 +1,48 @@
-#include "./pulse_expression.hpp"
+#include "pulse_expression.hpp"
 
 #include <Arduino.h>
 #include <algorithm>
 #include <cmath>
 
-#include "../util/fade.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
 
 // Use a large frame count to let wave position determine animation end
 // This prevents premature stopping based on frame count
 static constexpr uint32_t PULSE_MAX_FRAMES = 10000;
+
+namespace {
+// Inlined mirror of easeLinear()'s factor calc (see src/util/fade.cpp).
+// linear[i] == i * 511 by construction, so we compute the factor
+// analytically — bit-identical to the table lookup, no LUT needed.
+inline uint32_t computeLinearFactor(uint32_t currentStep, uint32_t duration) {
+  return static_cast<uint32_t>(
+             static_cast<uint16_t>((currentStep * 511u / duration * 511u) / 511u)) *
+         511u;
+}
+
+// Per-channel linear mix using a precomputed factor. Mirrors easeLinear()'s
+// body bit-for-bit (same integer types, same divisor, same start==end
+// short-circuit). For Pulse the audit's "hoist factor per frame" pattern
+// doesn't fit (blendFactor varies per pixel) — inlining the channel math
+// here just eliminates the four-function-call-per-pixel overhead of going
+// through fadeLinear → easeLinear ×4 channels.
+inline uint8_t mixByteLinear(uint8_t start, uint8_t end, uint32_t factor) {
+  if (start == end) return end;
+  return static_cast<uint8_t>(
+      ((static_cast<uint32_t>(end) - static_cast<uint32_t>(start)) * factor) /
+          262144u +
+      start);
+}
+
+inline Color mixColorLinear(const Color& start, const Color& end, uint32_t factor) {
+  return Color(mixByteLinear(start.r, end.r, factor),
+               mixByteLinear(start.g, end.g, factor),
+               mixByteLinear(start.b, end.b, factor),
+               mixByteLinear(start.w, end.w, factor));
+}
+}  // namespace
 
 PulseExpression::PulseExpression(FrameBuffer* inBuffer, uint32_t inFrames)
     : Expression(inBuffer, inFrames) {
@@ -90,8 +122,11 @@ void PulseExpression::updateWavePosition() {
 }
 
 void PulseExpression::selectNextColor() {
-  if (colors.size() > 1) {
-    // Pick random color from palette
+  // Capture into pulseColor on every trigger (not just when the palette
+  // has 2+ entries) so receive-side cascade overrides land correctly even
+  // for single-color invocations. getRandomColor() over a 1-element vector
+  // returns that element, so the call is safe and idempotent.
+  if (!colors.empty()) {
     pulseColor = getRandomColor();
   }
 }
@@ -131,20 +166,23 @@ void PulseExpression::draw() {
     updateWavePosition();
   }
 
-  // Apply pulse effect
-  int pixelsAffected = 0;
+  // Apply pulse effect. blendFactor is per-pixel (depends on distance to wave
+  // center), so the audit's "hoist factor once per frame" pattern doesn't fit
+  // here — but we can still avoid the 4 channel function calls per pixel by
+  // inlining the easeLinear math via mixColorLinear. End-clamp short-circuit
+  // mirrors easeLinear()'s `currentStep >= duration` branch (returns end).
   for (int i = 0; i < fb->pixelCount; i++) {
     uint32_t blendFactor = calculateBlendFactor(i);
 
-    if (blendFactor > 0) {  // Skip pixels with no blend
-      // Blend pulse color with current buffer
-      // blendFactor is 0-100 (percentage)
-      fb->buffer[i] = fadeLinear(fb->buffer[i], pulseColor, 100, blendFactor);
-      pixelsAffected++;
-
+    if (blendFactor == 0) continue;  // Skip pixels with no blend
+    if (blendFactor >= 100) {
+      fb->buffer[i] = pulseColor;
+      continue;
     }
-  }
 
+    uint32_t factor = computeLinearFactor(blendFactor, 100u);
+    fb->buffer[i] = mixColorLinear(fb->buffer[i], pulseColor, factor);
+  }
 
   // Advance animation frame
   nextFrame();
@@ -161,9 +199,6 @@ void PulseExpression::draw() {
     }
   }
 
-  // Check if animation just completed
-  if (animationState == STOPPED && frame == 0) {  // frame resets to 0 when stopped
-  }
 }
 
 }  // namespace lamp

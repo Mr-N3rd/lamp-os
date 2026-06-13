@@ -79,46 +79,9 @@ void main() {
     expect(jsonDecode(utf8.decode(plain)), {'op': 'scan'});
   });
 
-  test('setHomeSsid() writes {op:setHomeSsid, ssid}', () async {
-    final c = await _seeded('{"state":"idle"}');
-    addTearDown(c.dispose);
-    await c.read(wifiNotifierProvider(_devId).future);
-
-    await c
-        .read(wifiNotifierProvider(_devId).notifier)
-        .setHomeSsid('home');
-
-    final ble = c.read(bleClientProvider);
-    final written = await ble.read(
-        _devId, BleUuids.controlService, BleUuids.wifiOp);
-    expect(written[0], LampCrypto.magicCiphertext);
-    final plain = await LampCrypto.decryptOpForTesting(
-        written,
-        password: 'secret',
-        saltUuid16: uuidSaltLE16(BleUuids.wifiOp),
-        charShortName: 'wifiOp');
-    expect(jsonDecode(utf8.decode(plain)),
-        {'op': 'setHomeSsid', 'ssid': 'home'});
-  });
-
-  test('forget() writes {op:forget}', () async {
-    final c = await _seeded('{"state":"idle"}');
-    addTearDown(c.dispose);
-    await c.read(wifiNotifierProvider(_devId).future);
-
-    await c.read(wifiNotifierProvider(_devId).notifier).forget();
-
-    final ble = c.read(bleClientProvider);
-    final written = await ble.read(
-        _devId, BleUuids.controlService, BleUuids.wifiOp);
-    expect(written[0], LampCrypto.magicCiphertext);
-    final plain = await LampCrypto.decryptOpForTesting(
-        written,
-        password: 'secret',
-        saltUuid16: uuidSaltLE16(BleUuids.wifiOp),
-        charShortName: 'wifiOp');
-    expect(jsonDecode(utf8.decode(plain)), {'op': 'forget'});
-  });
+  // setHomeSsid() and forget() were removed when home SSID moved to the
+  // unified draft model — they now flow through controlNotifier and the
+  // global settings_blob save path. wifiOp only carries `scan` now.
 
   test('notify updates state and preserves scan results', () async {
     final c = await _seeded(

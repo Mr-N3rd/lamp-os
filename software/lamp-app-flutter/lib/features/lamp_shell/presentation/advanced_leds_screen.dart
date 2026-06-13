@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
@@ -12,121 +12,172 @@ import '../../control/presentation/widgets/connecting_view.dart';
 /// lamplit wordmark, or directly toggleable from the Setup screen once
 /// advanced is on.
 ///
-/// Strip-type options:
-///   - **RGBW** — 4 bpp NeoPixel (`NEO_GRBW` on the wire). Has a true
-///     warm-white channel.
-///   - **RGB** — 3 bpp NeoPixel in standard `NEO_GRB` byte order, no W.
-///   - **BGR** — 3 bpp NeoPixel in `NEO_BGR` order. Requires a firmware
-///     option that isn't yet plumbed; shown disabled with an info note
-///     until that lands.
-class AdvancedLedsScreen extends ConsumerWidget {
+/// Strip-type options map directly to NeoPixel byte-order flags. The
+/// `byteOrder` field on each section is the source of truth; `bpp` is
+/// kept in sync (4 for GRBW, 3 for GRB/BGR).
+///   - **GRBW** — 4 bpp NeoPixel (`NEO_GRBW`). True warm-white channel.
+///   - **GRB**  — 3 bpp NeoPixel (`NEO_GRB`). Standard RGB ordering.
+///   - **BGR**  — 3 bpp NeoPixel (`NEO_BGR`). For strips whose hardware
+///     ships red and blue swapped from the GRB norm.
+///
+/// The bottom Cancel/Update action row mirrors the editor pattern used
+/// elsewhere (knockout, expression editor, base editor). Update just
+/// pops — the actual persistence still rides the global "Save Changes"
+/// pill on the control screen, which triggers a reboot. Cancel rewinds
+/// the four fields (base.px, base.byteOrder, shade.px, shade.byteOrder)
+/// to their pre-screen-open values.
+class AdvancedLedsScreen extends ConsumerStatefulWidget {
   const AdvancedLedsScreen({super.key, required this.lampId});
   final String lampId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(controlNotifierProvider(lampId));
+  ConsumerState<AdvancedLedsScreen> createState() =>
+      _AdvancedLedsScreenState();
+}
+
+class _AdvancedLedsScreenState extends ConsumerState<AdvancedLedsScreen> {
+  // Snapshot of the four fields this screen edits, taken on the first
+  // non-loading paint. Cancel restores from here.
+  int? _origBasePx;
+  String? _origBaseByteOrder;
+  int? _origShadePx;
+  String? _origShadeByteOrder;
+
+  void _cancel() {
+    final n = ref.read(controlNotifierProvider(widget.lampId).notifier);
+    if (_origBasePx != null) n.setBasePx(_origBasePx!);
+    if (_origBaseByteOrder != null) n.setBaseByteOrder(_origBaseByteOrder!);
+    if (_origShadePx != null) n.setShadePx(_origShadePx!);
+    if (_origShadeByteOrder != null) {
+      n.setShadeByteOrder(_origShadeByteOrder!);
+    }
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final async = ref.watch(controlNotifierProvider(widget.lampId));
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => GoRouter.maybeOf(context)?.pop(),
-        ),
         title: const Text('Advanced LED setup'),
       ),
       body: async.when(
-        loading: () => ConnectingView(deviceId: lampId),
-        error: (e, _) => Center(
-          child: Text('Could not reach this lamp: $e',
-              style: const TextStyle(color: BrandColors.fogGrey)),
+        loading: () => ConnectingView(deviceId: widget.lampId),
+        error: (e, _) => FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
         ),
         data: (state) {
-          final notifier = ref.read(controlNotifierProvider(lampId).notifier);
-          return ListView(
-            padding: const EdgeInsets.all(16),
+          // Capture on first paint, never overwrite — the user's mid-
+          // edit values come through `state` later and we want Cancel
+          // to revert to where things were when the screen opened.
+          _origBasePx ??= state.base.px;
+          _origBaseByteOrder ??= state.base.byteOrder;
+          _origShadePx ??= state.shade.px;
+          _origShadeByteOrder ??= state.shade.byteOrder;
+
+          final notifier =
+              ref.read(controlNotifierProvider(widget.lampId).notifier);
+          return Column(
             children: [
-              const InfoPanel(
-                child: Text(
-                  'Match these to the physical strips you built into the '
-                  'lamp. Mis-matched LED count or byte-order will show as '
-                  'wrong-coloured or partially-lit segments.',
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    const InfoPanel(
+                      child: Text(
+                        'Match these to the physical strips you built '
+                        'into the lamp. Mis-matched LED count or '
+                        'byte-order will show as wrong-coloured or '
+                        'partially-lit segments.',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Base strip',
+                      style: TextStyle(
+                        color: BrandColors.headerYellow,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _PixelCountField(
+                      initial: state.base.px,
+                      label: 'Base LED count',
+                      onChanged: notifier.setBasePx,
+                    ),
+                    const SizedBox(height: 12),
+                    SegmentedButton<String>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(value: 'GRBW', label: Text('GRBW')),
+                        ButtonSegment(value: 'GRB', label: Text('GRB')),
+                        ButtonSegment(value: 'BGR', label: Text('BGR')),
+                      ],
+                      selected: {state.base.byteOrder},
+                      onSelectionChanged: (s) =>
+                          notifier.setBaseByteOrder(s.first),
+                    ),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Shade strip',
+                      style: TextStyle(
+                        color: BrandColors.headerYellow,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _PixelCountField(
+                      initial: state.shade.px,
+                      label: 'Shade LED count',
+                      onChanged: notifier.setShadePx,
+                    ),
+                    const SizedBox(height: 12),
+                    SegmentedButton<String>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(value: 'GRBW', label: Text('GRBW')),
+                        ButtonSegment(value: 'GRB', label: Text('GRB')),
+                        ButtonSegment(value: 'BGR', label: Text('BGR')),
+                      ],
+                      selected: {state.shade.byteOrder},
+                      onSelectionChanged: (s) =>
+                          notifier.setShadeByteOrder(s.first),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'Base strip',
-                style: TextStyle(
-                  color: BrandColors.headerYellow,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      TextButton.icon(
+                        icon: const Icon(Icons.close, size: 18),
+                        label: const Text('Cancel'),
+                        onPressed: _cancel,
+                      ),
+                      const Spacer(),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.check, size: 18),
+                        label: const Text('Update'),
+                        // Just pops — the global Save Changes pill on the
+                        // control screen is what actually triggers the
+                        // settings_blob write + reboot that makes byte
+                        // order / pixel count take effect on the strip.
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              _PixelCountField(
-                initial: state.base.px,
-                label: 'Base LED count',
-                onChanged: notifier.setBasePx,
-              ),
-              const SizedBox(height: 12),
-              SegmentedButton<int>(
-                showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(value: 4, label: Text('RGBW')),
-                  ButtonSegment(value: 3, label: Text('RGB')),
-                ],
-                selected: {state.base.bpp},
-                onSelectionChanged: (s) => notifier.setBaseBpp(s.first),
-              ),
-              const SizedBox(height: 24),
-              const Text(
-                'Shade strip',
-                style: TextStyle(
-                  color: BrandColors.headerYellow,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                ),
-              ),
-              const SizedBox(height: 8),
-              _PixelCountField(
-                initial: state.shade.px,
-                label: 'Shade LED count',
-                onChanged: notifier.setShadePx,
-              ),
-              const SizedBox(height: 12),
-              SegmentedButton<int>(
-                showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(value: 4, label: Text('RGBW')),
-                  ButtonSegment(value: 3, label: Text('RGB')),
-                ],
-                selected: {state.shade.bpp},
-                onSelectionChanged: (s) => notifier.setShadeBpp(s.first),
-              ),
-              const SizedBox(height: 24),
-              const InfoPanel(
-                child: Text(
-                  'BGR-byte-order strips are a planned firmware option — '
-                  'not selectable yet. If your strips show swapped red/blue '
-                  'channels, hold tight; a firmware update will let you '
-                  'flip the byte order here.',
-                ),
-              ),
-              const SizedBox(height: 24),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Advanced enabled',
-                    style: TextStyle(
-                        color: BrandColors.lampWhite, fontSize: 14)),
-                subtitle: const Text(
-                  'Turning this off hides the advanced LED settings until '
-                  'the 5-tap unlock is performed again.',
-                  style: TextStyle(
-                      color: BrandColors.fogGrey, fontSize: 12),
-                ),
-                value: state.lamp.advancedEnabled,
-                onChanged: notifier.setLampAdvancedEnabled,
               ),
             ],
           );

@@ -1,5 +1,4 @@
-#ifndef LAMP_CONFIG_CONFIG_TYPES_H
-#define LAMP_CONFIG_CONFIG_TYPES_H
+#pragma once
 
 #include <cstdint>
 #include <map>
@@ -7,7 +6,7 @@
 #include <variant>
 #include <vector>
 
-#include "../util/color.hpp"
+#include "util/color.hpp"
 
 namespace lamp {
 
@@ -25,37 +24,57 @@ class KnockoutPixel {
 };
 
 /**
+ * @brief Social personality mode — tunes how often + how eagerly the lamp
+ *        greets nearby peers via SocialBehavior. Stored as uint8_t for
+ *        wire/NVS compatibility. Default Ambivert (matches the
+ *        pre-personality 30s-cooldown behavior).
+ */
+enum class SocialMode : uint8_t {
+  Introvert = 0,
+  Ambivert = 1,
+  Extrovert = 2,
+};
+
+/**
  * @brief Global lamp settings to control initialization
  * @property name - a name that can be used to identify this lamp. it can be up to 12 characters long
  * @property brightness - global brightness level for the lamp as a percentage
  * @property password - password to protect lamp BLE control surface
  * @property advancedEnabled - if true, advanced settings UI is unlocked
+ * @property socialMode - personality flavor: introvert / ambivert (default) / extrovert
  */
 class LampSettings {
  public:
-  std::string name = "standard";
+  std::string name = "stray";
   uint8_t brightness = 100;
   std::string password = "";
   bool advancedEnabled = false;
+  SocialMode socialMode = SocialMode::Ambivert;
 };
 
 /**
  * @brief Settings used for the bulb neopixels
  * @property px - the total pixel count
- * @property bpp - bytes per pixel: 4 = NEO_GRBW (RGBWW), 3 = NEO_GRB (RGB)
+ * @property bpp - bytes per pixel: 4 = RGBW-class strip, 3 = RGB-class strip
+ * @property byteOrder - NeoPixel wire byte order. Recognized values:
+ *   "GRBW" (4 bpp), "GRB" (3 bpp), "BGR" (3 bpp). Empty string falls back
+ *   to a bpp-derived default ("GRBW" for bpp==4, "GRB" otherwise) so old
+ *   NVS payloads without the field load unchanged.
  * @property colors - a list of up to 5 colors to use
  */
 class ShadeSettings {
  public:
   uint8_t px = 38;
   uint8_t bpp = 4;
+  std::string byteOrder = "";
   std::vector<Color> colors = {Color(0x00, 0x00, 0x00, 0xFF)};
 };
 
 /**
  * @brief Settings used for the base neopixels
  * @property px - the total pixel count
- * @property bpp - bytes per pixel: 4 = NEO_GRBW (RGBWW), 3 = NEO_GRB (RGB)
+ * @property bpp - bytes per pixel: 4 = RGBW-class strip, 3 = RGB-class strip
+ * @property byteOrder - NeoPixel wire byte order; see ShadeSettings.
  * @property colors - a list of up to 5 colors to use
  * @property knockoutPixels - a list of knockout pixels to profile the lamp base
  * @property ac - the preferred color index in a gradient
@@ -64,6 +83,7 @@ class BaseSettings {
  public:
   uint8_t px = 35;
   uint8_t bpp = 4;
+  std::string byteOrder = "";
   std::vector<Color> colors = {Color(0x30, 0x07, 0x83, 0x00)};
   std::vector<uint8_t> knockoutPixels = std::vector<uint8_t>(50, (uint8_t)100);
   uint8_t ac = 0;
@@ -132,4 +152,3 @@ class HomeModeSettings {
 };
 
 }  // namespace lamp
-#endif

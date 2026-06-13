@@ -38,12 +38,19 @@ abstract class BleClient {
   /// channels (brightness, colors, knockout, home-mode-focus). Leave
   /// false for ops where the caller needs to know the write landed
   /// (auth, settings_blob, expression_op).
+  ///
+  /// [allowLongWrite] = true enables fbp's prepare/execute-write
+  /// sequence for payloads > MTU (up to 512 bytes — BLE protocol max
+  /// for a characteristic value). Mutually exclusive with
+  /// `withoutResponse`. Set this for settings_blob writes which can
+  /// grow to several hundred bytes once expressions are added.
   Future<void> write(
     String deviceId,
     String serviceUuid,
     String charUuid,
     Uint8List value, {
     bool withoutResponse = false,
+    bool allowLongWrite = false,
   });
   Stream<Uint8List> subscribe(
     String deviceId,
@@ -110,6 +117,7 @@ class InMemoryBleClient implements BleClient {
     String c,
     Uint8List v, {
     bool withoutResponse = false,
+    bool allowLongWrite = false,
   }) async {
     if (!_connected.contains(d)) throw BleNotConnected(d);
     final key = _key(d, s, c);

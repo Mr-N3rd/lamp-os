@@ -5,6 +5,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../../../core/theme/brand_colors.dart';
 import '../../../inventory/application/inventory_notifier.dart';
+import '../../application/lamp_save_status.dart';
 import 'critter_asset.dart';
 
 /// Full-screen "we're talking to the lamp" state — a critter SVG that gently
@@ -57,6 +58,11 @@ class _ConnectingViewState extends ConsumerState<ConnectingView>
       critterIndex: lamp?.critterIndex,
       deviceId: widget.deviceId,
     );
+    // Switch the message when we're in the post-save reconnect window —
+    // controlNotifier.save() flips the flag true before going AsyncLoading
+    // and back to false after the reconnect resolves.
+    final saving = ref.watch(lampSaveStatusProvider(widget.deviceId));
+    final message = saving ? 'Whispering to your lamp…' : 'Saying hello…';
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -70,9 +76,9 @@ class _ConnectingViewState extends ConsumerState<ConnectingView>
             ),
           ),
           const SizedBox(height: 24),
-          const Text(
-            'Connecting…',
-            style: TextStyle(
+          Text(
+            message,
+            style: const TextStyle(
               color: BrandColors.fogGrey,
               fontSize: 14,
               letterSpacing: 0.5,

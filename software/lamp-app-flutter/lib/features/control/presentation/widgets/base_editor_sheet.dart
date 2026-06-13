@@ -6,19 +6,49 @@ import '../../application/control_notifier.dart';
 import '../../domain/lamp_color.dart';
 import 'color_picker_sheet.dart';
 
-class BaseEditorSheet extends ConsumerWidget {
+/// Modal sheet for editing the base gradient stops. Acts as an atomic edit
+/// session: every in-sheet change live-previews via the controlNotifier
+/// (so the lamp tracks the gradient as the user picks), but the sheet
+/// keeps a snapshot of the colors/ac it opened with and either commits
+/// (Save just closes — state already mirrors edits) or rolls back the
+/// live-preview channel (Cancel re-writes the snapshot) before popping.
+/// The user's "what's actually persisted" still comes from global
+/// Save Changes via settings_blob.
+class BaseEditorSheet extends ConsumerStatefulWidget {
   const BaseEditorSheet({super.key, required this.lampId});
 
   final String lampId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(controlNotifierProvider(lampId)).value;
-    if (state == null) return const SizedBox.shrink();
+  ConsumerState<BaseEditorSheet> createState() => _BaseEditorSheetState();
+}
 
-    final colors = state.base.colors;
-    final activeIndex = state.base.ac;
-    final notifier = ref.read(controlNotifierProvider(lampId).notifier);
+class _BaseEditorSheetState extends ConsumerState<BaseEditorSheet> {
+  /// Captured at first build when state is non-null. Cancel restores both.
+  List<LampColor>? _originalColors;
+  int? _originalAc;
+
+  @override
+  Widget build(BuildContext context) {
+    // Slice to just the base section. Without `.select` the sheet
+    // rebuilds on every ControlState change (brightness, shade,
+    // expressions, etc) — and a color-picker drag spams notifier
+    // updates, all of which would re-render the whole sheet. With
+    // the slice, only mutations to `state.base` trigger a rebuild.
+    final base = ref.watch(
+      controlNotifierProvider(widget.lampId)
+          .select((async) => async.value?.base),
+    );
+    if (base == null) return const SizedBox.shrink();
+
+    // First successful paint snapshots the session baseline.
+    _originalColors ??= List.of(base.colors);
+    _originalAc ??= base.ac;
+
+    final colors = base.colors;
+    final activeIndex = base.ac;
+    final notifier =
+        ref.read(controlNotifierProvider(widget.lampId).notifier);
 
     Future<void> editStop(int i) async {
       final original = [...colors];
@@ -26,13 +56,14 @@ class BaseEditorSheet extends ConsumerWidget {
         context,
         initial: colors[i],
         title: 'Stop ${i + 1}',
-        bpp: state.base.bpp,
+        bpp: base.bpp,
         onLive: (live) {
           // Latest colors come from the notifier — read fresh each tick so
           // concurrent state changes (e.g. another stop edited in parallel)
           // don't get clobbered. In practice the picker is modal so this is
           // belt-and-suspenders, but it matches the realtime contract.
-          final current = ref.read(controlNotifierProvider(lampId)).value;
+          final current =
+              ref.read(controlNotifierProvider(widget.lampId)).value;
           if (current == null) return;
           final next = [...current.base.colors];
           if (i >= next.length) return; // stop removed while picker open
@@ -73,26 +104,32 @@ class BaseEditorSheet extends ConsumerWidget {
       }
     }
 
+    void cancel() {
+      // Roll back to the session baseline: re-write the live-preview channel
+      // so the lamp visually reverts, and restore the active-stop index.
+      // Subtle: setBaseColors mutates app state too, so this also clears any
+      // edits the user made in this session from the global draft.
+      final origColors = _originalColors;
+      final origAc = _originalAc;
+      if (origColors != null) notifier.setBaseColors(origColors);
+      if (origAc != null) notifier.setBaseAc(origAc);
+      Navigator.pop(context);
+    }
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            Row(
+            const Row(
               children: [
-                const Text(
+                Text(
                   'Base gradient',
                   style: TextStyle(
                     color: BrandColors.lampWhite,
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
                   ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, color: BrandColors.slateGrey),
-                  onPressed: () => Navigator.pop(context),
-                  tooltip: 'Close',
                 ),
               ],
             ),
@@ -163,6 +200,25 @@ class BaseEditorSheet extends ConsumerWidget {
                 onPressed: addStop,
                 child: const Text('+ Add stop'),
               ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: cancel,
+                  child: const Text('Cancel'),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  icon: const Icon(Icons.check, size: 18),
+                  label: const Text('Update'),
+                  // Update just closes — every in-session edit already went
+                  // through the controlNotifier's live-preview path, so the
+                  // global draft is already up-to-date. Persistence still
+                  // requires the AppBar's Save Changes (settings_blob).
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
           ],
         ),
       ),

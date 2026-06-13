@@ -94,14 +94,14 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
       return _stopTag(0, '000000') + _stopTag(100, '000000');
     }
     if (colors.length == 1) {
-      final hex = colors.single.toHex().substring(1, 7);
+      final hex = colors.single.toRgbHex();
       return _stopTag(0, hex) + _stopTag(100, hex);
     }
     final n = colors.length;
     final buf = StringBuffer();
     for (var i = 0; i < n; i++) {
       final pct = i / (n - 1) * 100;
-      final hex = colors[i].toHex().substring(1, 7);
+      final hex = colors[i].toRgbHex();
       buf.write(_stopTag(pct, hex));
     }
     return buf.toString();
@@ -110,7 +110,7 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
   /// Substitute the gradient blocks in [template] with the live colors from
   /// the current widget state.
   String _renderSvg(String template) {
-    final shadeHex = widget.shade.toHex().substring(1, 7);
+    final shadeHex = widget.shade.toRgbHex();
     final shadeStops = _stopTag(0, shadeHex) + _stopTag(100, shadeHex);
     final bodyStops = _buildStops(widget.baseColors);
 

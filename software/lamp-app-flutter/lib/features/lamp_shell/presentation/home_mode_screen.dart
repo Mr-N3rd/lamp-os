@@ -9,6 +9,7 @@ import '../../../core/ble/ble_client.dart';
 import '../../../core/ble/ble_client_provider.dart';
 import '../../../core/ble/uuids.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/friendly_error.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
@@ -81,23 +82,21 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
     }));
   }
 
-  Future<void> _selectSsid(String ssid) async {
-    // 1. Tell the firmware to persist the new home SSID (CHAR_WIFI_OP
-    //    setHomeSsid → persistConfigToNvs firmware-side).
-    await ref.read(wifiNotifierProvider(widget.lampId).notifier)
-        .setHomeSsid(ssid);
-    // 2. Mirror into controlNotifier state so the UI reflects it
-    //    immediately (CHAR_HOME_SECTION has no NOTIFY subscription).
-    if (!mounted) return;
+  void _selectSsid(String ssid) {
+    // Draft-only: hold the SSID in controlNotifier state and let global
+    // Save Changes persist it via settings_blob (the firmware merges
+    // homeMode.ssid on blob writes). No live firmware effect to preview
+    // for an SSID — home-mode detection runs off the saved value.
     ref.read(controlNotifierProvider(widget.lampId).notifier)
         .setHomeSsid(ssid);
   }
 
   void _onForget() {
-    // Firmware clears + persists; mirror to app state.
-    ref.read(wifiNotifierProvider(widget.lampId).notifier).forget();
-    final cn = ref.read(controlNotifierProvider(widget.lampId).notifier);
-    cn.setHomeSsid('');
+    // Same draft-only flow: clear the SSID in app state; Save Changes
+    // persists. Users who want the lamp to drop home mode *immediately*
+    // can hit Save Changes after Forget.
+    ref.read(controlNotifierProvider(widget.lampId).notifier)
+        .setHomeSsid('');
   }
 
   @override
@@ -117,9 +116,12 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
       ),
       body: controlAsync.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
-        error: (e, _) => Center(
-          child: Text('Could not reach this lamp: $e',
-              style: const TextStyle(color: BrandColors.fogGrey)),
+        error: (e, _) => FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
         ),
         data: (state) {
           final notifier =

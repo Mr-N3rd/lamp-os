@@ -38,7 +38,7 @@ class NearbyLampsNotifier extends _$NearbyLampsNotifier {
       baseRgb: ad.baseRgb,
       shadeRgb: ad.shadeRgb,
       lastSeenEpochMs: now,
-      onMesh: ad.onMesh,
+      isMesh: ad.isMesh,
     );
     final next = [
       for (final l in state)

@@ -32,8 +32,11 @@ void main() {
   });
 
   test('BaseSection.knockout folds entries into a map', () {
+    // Positional knockout: index = pixel, value = brightness %. Default
+    // (100) entries are skipped on parse, so only non-defaults end up in
+    // the map.
     final s = BaseSection.fromJson(jsonDecode(
-      '{"px":35,"ac":0,"bpp":4,"colors":[],"knockout":[{"p":3,"b":50},{"p":7,"b":25}]}',
+      '{"px":35,"ac":0,"bpp":4,"colors":[],"knockout":[100,100,100,50,100,100,100,25,100,100]}',
     ) as Map<String, dynamic>);
     expect(s.knockout, {3: 50, 7: 25});
   });

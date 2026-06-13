@@ -23,6 +23,6 @@ void main() {
       ProviderScope(child: LampApp(permissions: _AlwaysGranted())),
     );
     await tester.pumpAndSettle();
-    expect(find.text('No lamps yet'), findsOneWidget);
+    expect(find.text('No lamps in your care yet'), findsOneWidget);
   });
 }

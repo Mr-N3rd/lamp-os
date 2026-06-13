@@ -1,4 +1,4 @@
-#include "./espnow_link.hpp"
+#include "espnow_link.hpp"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -11,8 +11,18 @@ namespace lamp {
 
 EspNowRecvFn EspNowLink::s_recv = nullptr;
 
+// ESP-NOW max payload per spec is 250 B; reject anything outside [0, 250] so a
+// negative/garbage len from a driver error path can't be cast to a huge size_t.
+static constexpr int kMaxRecvFrameLen = 250;
+
 static void recvTrampoline(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
   if (EspNowLink::s_recv == nullptr || info == nullptr) return;
+  if (len < 0 || len > kMaxRecvFrameLen) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[espnow] reject len=%d\n", len);
+#endif
+    return;
+  }
   EspNowLink::s_recv(info->src_addr, data, static_cast<size_t>(len));
 }
 
@@ -21,9 +31,10 @@ bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
 
   // WiFi STA mode is already up via wifi::begin() in standard_lamp setup;
   // do NOT call WiFi.mode/disconnect/setSleep here — that would clobber the
-  // wifi module's STA association to home WiFi. Channel coordination is
-  // wifi::ensureGridChannel()'s job; we just set peer.channel=0 below so the
-  // peer record tracks "whatever channel the radio is on right now".
+  // radio state the wifi module relies on for periodic presence scans.
+  // Channel coordination is wifi::ensureGridChannel()'s job; we just set
+  // peer.channel=0 below so the peer record tracks "whatever channel the
+  // radio is on right now".
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("[espnow] esp_now_init failed");

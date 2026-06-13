@@ -7,16 +7,12 @@ import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../../core/utils/tap_counter.dart';
 import '../../../core/widgets/info_panel.dart';
-import '../../../core/widgets/lamp_icon.dart';
-import '../../../core/widgets/status_dot.dart';
-import '../../control/application/control_notifier.dart';
-import '../../nearby/application/nearby_lamps_notifier.dart';
-import '../application/lamp_status.dart';
+import '../../control/application/advanced_session.dart';
 
-/// Info tab — mirror of the Vue app's Info.vue:
-///   - Lamplit text-logo (tap 5× in 3s to unlock advanced settings).
-///   - Marketing blurb / society link.
-///   - Nearby Lamps list (BLE + future-grid).
+/// Info tab — Lamplit branding only. Nearby + Seen lamp lists moved to
+/// the new Social tab (see `features/social/presentation/social_screen.dart`).
+/// The Lamplit wordmark here is the tap-5-times target that unlocks the
+/// session-only advanced flag.
 class InfoScreen extends ConsumerStatefulWidget {
   const InfoScreen({super.key, required this.lampId});
   final String lampId;
@@ -35,12 +31,17 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
       count: 5,
       window: const Duration(seconds: 3),
       onTriggered: () {
-        final notifier =
-            ref.read(controlNotifierProvider(widget.lampId).notifier);
-        notifier.setLampAdvancedEnabled(true);
+        // Session-only unlock: flips the app-side advancedSession flag for
+        // this lamp. Resets to false on BLE disconnect (handled by
+        // ControlNotifier._onConnectionChange). The user re-does the tap
+        // gesture each session — by design, advanced mode never lingers
+        // across reconnects.
+        ref.read(advancedSessionProvider(widget.lampId).notifier).enable();
         if (context.mounted) {
-          GoRouter.maybeOf(context)
-              ?.push(AppRoutes.advancedLeds(widget.lampId));
+          // Land on the Setup hub rather than drilling straight into the
+          // Advanced LED screen — that way the user sees the lamp name +
+          // home-mode rows alongside the now-unlocked Advanced LED row.
+          GoRouter.maybeOf(context)?.push(AppRoutes.setup(widget.lampId));
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
                 duration: Duration(seconds: 2),
@@ -53,9 +54,6 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final nearby = ref.watch(nearbyLampsNotifierProvider);
-    final connected = ref.watch(controlNotifierProvider(widget.lampId)
-        .select((async) => async.value?.connected ?? false));
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -99,63 +97,6 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 24),
-        const Row(
-          children: [
-            Text(
-              'Nearby lamps',
-              style: TextStyle(
-                color: BrandColors.headerYellow,
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.8,
-              ),
-            ),
-            Spacer(),
-          ],
-        ),
-        if (nearby.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Text(
-              'No other lamps heard yet. Lamps within Bluetooth range '
-              'will appear here.',
-              style: TextStyle(color: BrandColors.fogGrey, fontSize: 12),
-            ),
-          )
-        else
-          ...nearby.map((l) {
-            final status = statusFor(
-              lampId: l.id,
-              nearby: nearby,
-              connected: connected && l.id == widget.lampId,
-            );
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Row(
-                children: [
-                  StatusDot(kind: status, size: 12),
-                  const SizedBox(width: 10),
-                  LampIcon(
-                    shade: Color(0xFF000000 | l.shadeRgb),
-                    base: Color(0xFF000000 | l.baseRgb),
-                    size: 26,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      l.name.isEmpty ? '(unnamed)' : l.name,
-                      style: const TextStyle(
-                        color: BrandColors.lampWhite,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }),
       ],
     );
   }

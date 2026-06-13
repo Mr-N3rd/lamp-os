@@ -18,7 +18,7 @@ final class ControlNotifierProvider
     required ControlNotifierFamily super.from,
     required String super.argument,
   }) : super(
-         retry: null,
+         retry: _noRetry,
          name: r'controlNotifierProvider',
          isAutoDispose: true,
          dependencies: null,
@@ -50,7 +50,7 @@ final class ControlNotifierProvider
   }
 }
 
-String _$controlNotifierHash() => r'144e532122ed06779cfd1d774e7409adcb7bd658';
+String _$controlNotifierHash() => r'ee9ad06da4cc838840ba597f761830752b39d974';
 
 final class ControlNotifierFamily extends $Family
     with
@@ -63,7 +63,7 @@ final class ControlNotifierFamily extends $Family
         > {
   ControlNotifierFamily._()
     : super(
-        retry: null,
+        retry: _noRetry,
         name: r'controlNotifierProvider',
         dependencies: null,
         $allTransitiveDependencies: null,

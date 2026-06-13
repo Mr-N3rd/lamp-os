@@ -15,7 +15,7 @@ class BleAdvertisement {
     required this.baseRgb,
     required this.shadeRgb,
     required this.rssi,
-    this.onMesh = false,
+    this.isMesh = false,
   });
 
   final String id;
@@ -24,13 +24,17 @@ class BleAdvertisement {
   /// Base color in 0xRRGGBB form, parsed from the lamp manufacturer data.
   final int baseRgb;
   /// Shade color in 0xRRGGBB form, parsed from the lamp manufacturer data.
+  /// `0` for legacy 6-byte-payload v2 firmware (no shade in adv).
   final int shadeRgb;
   final int rssi;
 
-  /// True iff the firmware's advertisement byte 8 was non-zero. v1
-  /// firmware (8-byte payload) omits the byte; `onMesh` stays false. v2
-  /// firmware (9-byte payload) sets it based on `wifi::isConnected()`.
-  final bool onMesh;
+  /// True iff this lamp's firmware advertises the version byte
+  /// (mfg.length >= 7 && mfg[6] >= 2) — i.e. it speaks the app's
+  /// mesh protocol and is fully app-controllable. v1 lamps and
+  /// transitional pre-shade-restore v2 builds get `false` (the
+  /// former because they're genuinely BT-only, the latter because
+  /// they won't be on the network long).
+  final bool isMesh;
 }
 
 abstract class BleScanner {
@@ -66,12 +70,19 @@ class FbpBleScanner implements BleScanner {
         // the 31-byte adv limit — see firmware ble_control.cpp:640-644).
         final mfg = r.advertisementData.manufacturerData[_lampMfgId];
         if (mfg == null || mfg.length < 3) continue;
-        // mfg payload v1 (8 bytes incl. magic; 6 here after company-ID
-        //   strip): [baseR, baseG, baseB, shadeR, shadeG, shadeB]
-        // mfg payload v2 (6 bytes incl. magic; 4 here after strip):
-        //   [baseR, baseG, baseB, meshFlag]. We dropped shade to keep
-        //   the total adv inside NimBLE's data-length cap.
-        final isV2 = mfg.length == 4;
+        // The 2-byte company ID prefix (= lamp magic 0xA455) is what
+        // fbp keys by; mfg here is the bytes AFTER that. Three shapes
+        // in the wild:
+        //   - 4 bytes [bR,bG,bB,meshFlag]: transitional v2 build that
+        //     dropped shade. Real shade only available via cache /
+        //     section read; adv shadeRgb defaults to 0.
+        //   - 6 bytes [bR,bG,bB,sR,sG,sB]: v1 firmware (legacy). Has
+        //     real base + shade in adv.
+        //   - 7 bytes [bR,bG,bB,sR,sG,sB,version]: current firmware
+        //     after shade-restore. Version byte at index 6 (>=2 means
+        //     "supports the app's mesh protocol").
+        final hasShade = mfg.length >= 6;
+        final isMesh = mfg.length >= 7 && mfg[6] >= 2;
         _ctrl.add(BleAdvertisement(
           id: r.device.remoteId.str,
           name: r.advertisementData.advName.isNotEmpty
@@ -81,11 +92,11 @@ class FbpBleScanner implements BleScanner {
               .map((g) => g.str128.toLowerCase())
               .toList(),
           baseRgb: (mfg[0] << 16) | (mfg[1] << 8) | mfg[2],
-          // v2 lamps don't advertise shade — fall back to black so the
-          // factory-default heuristic still has a sensible default.
-          shadeRgb: isV2 ? 0 : (mfg[3] << 16) | (mfg[4] << 8) | mfg[5],
+          shadeRgb: hasShade
+              ? (mfg[3] << 16) | (mfg[4] << 8) | mfg[5]
+              : 0,
           rssi: r.rssi,
-          onMesh: isV2 && mfg[3] != 0,
+          isMesh: isMesh,
         ));
       }
     });

@@ -1,5 +1,4 @@
-#ifndef LAMP_COMPONENTS_NETWORK_NEARBY_LAMPS_H
-#define LAMP_COMPONENTS_NETWORK_NEARBY_LAMPS_H
+#pragma once
 
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -9,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "../../util/color.hpp"
+#include "util/color.hpp"
 
 // Default prune age (milliseconds) shared between callers. NimBLE scan
 // timer uses this when it runs onScanEnd; if a lamp hasn't been heard on
@@ -71,6 +70,11 @@ class NearbyLamps {
   // SocialBehavior: only entries whose lastSeenViaBleMs is within maxAgeMs.
   std::vector<NearbyLamp> getReachableViaBle(uint32_t maxAgeMs);
 
+  // Cheap "is anyone in BLE range" check — early-exits on first hit, no
+  // heap allocation. For callers that only care about presence (e.g.
+  // mesh-state advertisement flag), not the full snapshot.
+  bool hasAnyReachableViaBle(uint32_t maxAgeMs);
+
   // Grid view / remote-config: only entries whose lastSeenViaEspNowMs
   // is within maxAgeMs.
   std::vector<NearbyLamp> getReachableViaEspNow(uint32_t maxAgeMs);
@@ -97,5 +101,3 @@ class NearbyLamps {
 extern NearbyLamps nearbyLamps;  // single global instance, defined in .cpp
 
 }  // namespace lamp
-
-#endif

@@ -6,7 +6,7 @@ import '../../../../core/theme/brand_colors.dart';
 import '../../../../core/widgets/info_panel.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 
-/// Surfaces when the active lamp's advertisement reports `onMesh: false`
+/// Surfaces when the active lamp's advertisement reports `isMesh: false`
 /// (or the lamp isn't in the nearby list at all). BT-only means the
 /// firmware predates ESP-NOW mesh support — fixing it is a firmware
 /// update, not a Wi-Fi config tweak. In the meantime the lamp's own
@@ -17,9 +17,9 @@ class BtOnlyInfoPane extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final onMesh = ref.watch(nearbyLampsNotifierProvider.select(
-        (list) => list.firstWhereOrNull((l) => l.id == lampId)?.onMesh));
-    if (onMesh == true) return const SizedBox.shrink();
+    final isMesh = ref.watch(nearbyLampsNotifierProvider.select(
+        (list) => list.firstWhereOrNull((l) => l.id == lampId)?.isMesh));
+    if (isMesh == true) return const SizedBox.shrink();
     return const InfoPanel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

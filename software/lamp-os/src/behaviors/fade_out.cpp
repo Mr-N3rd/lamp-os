@@ -1,13 +1,13 @@
-#include "./fade_out.hpp"
+#include "fade_out.hpp"
 
 #include <Arduino.h>
 
-#include "../util/color.hpp"
-#include "../util/fade.hpp"
+#include "util/color.hpp"
+#include "util/fade.hpp"
 
 namespace lamp {
 
-volatile bool fadeOutRebootRequested = false;
+std::atomic<bool> fadeOutRebootRequested{false};
 
 void FadeOutBehavior::draw() {
   for (int i = 0; i < fb->pixelCount; i++) {

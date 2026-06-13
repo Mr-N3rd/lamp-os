@@ -8,6 +8,7 @@ class ExpressionTypeMeta {
     required this.name,
     required this.icon,
     required this.tagline,
+    required this.description,
     required this.defaultParameters,
   });
 
@@ -23,6 +24,12 @@ class ExpressionTypeMeta {
   /// One-line description for the picker card. Keep under ~80 chars.
   final String tagline;
 
+  /// Longer explainer rendered at the bottom of the expression editor so
+  /// users can see, in plain language, what each slider in this type
+  /// actually controls. Tagline is the punchy card-line; description is
+  /// the in-editor cheat sheet.
+  final String description;
+
   /// Parameter defaults that match the firmware's hard-coded defaults so a
   /// freshly-created expression behaves the same as a no-parameters version.
   /// All values are `uint32_t` on the firmware side.
@@ -35,6 +42,9 @@ class ExpressionTypeMeta {
       name: 'Breathing',
       icon: Icons.air,
       tagline: 'A gentle, continuous breath between palette colors.',
+      description:
+          'A slow, continuous inhale/exhale across the chosen colors. '
+          'Breath cycle length sets the tempo.',
       defaultParameters: {'breathSpeed': 10},
     ),
     ExpressionTypeMeta(
@@ -42,13 +52,29 @@ class ExpressionTypeMeta {
       name: 'Pulse',
       icon: Icons.graphic_eq,
       tagline: 'A wave of color that sweeps across the strip.',
-      defaultParameters: {'pulseSpeed': 3},
+      description:
+          'A band of color that travels along the lamp, blending with '
+          'the colors already showing. Pulse speed sets how fast it '
+          'sweeps from end to end.',
+      defaultParameters: {
+        'pulseSpeed': 3,
+        // Mesh-trigger cascade convention (firmware-side, generic across
+        // expressions): when cascadeEnabled is 1, the lamp fans out a
+        // matching invocation to every reachable peer on local trigger,
+        // staggered by cascadeStaggerMs between successive lamps.
+        'cascadeEnabled': 0,
+        'cascadeStaggerMs': 0,
+      },
     ),
     ExpressionTypeMeta(
       key: 'shifty',
       name: 'Shifty',
       icon: Icons.shuffle,
       tagline: 'Slow ambient drift toward random palette colors.',
+      description:
+          'Slowly fades to a chosen color, holds there, then fades '
+          'back. Hold time is the dwell at peak; fade duration is the '
+          'crossfade in and out.',
       defaultParameters: {
         'shiftDurationMin': 300,
         'shiftDurationMax': 600,
@@ -60,7 +86,21 @@ class ExpressionTypeMeta {
       name: 'Glitchy',
       icon: Icons.bolt,
       tagline: 'Rare, sudden flickers of a random palette color.',
-      defaultParameters: {'durationMin': 1, 'durationMax': 3},
+      description:
+          'A brief stutter that flashes through the chosen colors. '
+          'Frequency sets how often, predictability tightens or '
+          'loosens the timing, and glitch duration controls how long '
+          'each flash holds.',
+      defaultParameters: {
+        'durationMin': 1,
+        'durationMax': 3,
+        // Mesh-trigger cascade convention (firmware-side, generic across
+        // expressions): when cascadeEnabled is 1, the lamp fans out a
+        // matching invocation to every reachable peer on local trigger,
+        // staggered by cascadeStaggerMs between successive lamps.
+        'cascadeEnabled': 0,
+        'cascadeStaggerMs': 0,
+      },
     ),
   ];
 

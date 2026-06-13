@@ -6,10 +6,6 @@ void main() {
     expect(BleUuids.controlService, '5f64f4d0-d6d9-4a44-9b3f-3a8d6f7e6b40');
   });
 
-  test('setup service UUID matches firmware', () {
-    expect(BleUuids.setupService, '5f64f4c1-d6d9-4a44-9b3f-3a8d6f7e6b40');
-  });
-
   test('every characteristic UUID is 36 chars and lowercase', () {
     for (final u in [
       BleUuids.brightness,

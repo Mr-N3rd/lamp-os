@@ -1,6 +1,4 @@
 #pragma once
-#ifndef STANDARD_LAMP_H
-#define STANDARD_LAMP_H
 
 #include <ArduinoJson.h>
 
@@ -46,5 +44,3 @@ void handleWebSocket();
  *                      for the configurator behaviors (use millis()).
  */
 void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs);
-
-#endif

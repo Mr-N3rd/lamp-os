@@ -19,7 +19,15 @@ mixin _$InventoryLamp {
 /// each lamp keeps the same critter friend across sessions and across
 /// the connecting/preview surfaces. Nullable for legacy entries adopted
 /// before this field existed — consumers fall back to a deviceId hash.
- int? get critterIndex; int? get lastSeenEpochMs; List<int>? get lastShadeColor; List<int>? get lastBaseColor;
+ int? get critterIndex; int? get lastSeenEpochMs;/// Cached last-seen colors written by `controlNotifier._updateSeen`
+/// on every successful connect-and-read and every settled slider
+/// drag. Persisted via `inventory.v1` in SharedPreferences and read
+/// back by `resolveLampColors` to render My Lamps / picker tiles.
+///
+/// Shape: `[R, G, B, W]` (4 ints). Legacy entries written before
+/// this field grew the W byte may be `[R, G, B]` (length 3) — the
+/// resolver treats those as `W = 0`, preserving the prior render.
+ List<int>? get lastShadeColor; List<int>? get lastBaseColor;
 /// Create a copy of InventoryLamp
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -231,7 +239,23 @@ class _InventoryLamp implements InventoryLamp {
 /// before this field existed — consumers fall back to a deviceId hash.
 @override final  int? critterIndex;
 @override final  int? lastSeenEpochMs;
+/// Cached last-seen colors written by `controlNotifier._updateSeen`
+/// on every successful connect-and-read and every settled slider
+/// drag. Persisted via `inventory.v1` in SharedPreferences and read
+/// back by `resolveLampColors` to render My Lamps / picker tiles.
+///
+/// Shape: `[R, G, B, W]` (4 ints). Legacy entries written before
+/// this field grew the W byte may be `[R, G, B]` (length 3) — the
+/// resolver treats those as `W = 0`, preserving the prior render.
  final  List<int>? _lastShadeColor;
+/// Cached last-seen colors written by `controlNotifier._updateSeen`
+/// on every successful connect-and-read and every settled slider
+/// drag. Persisted via `inventory.v1` in SharedPreferences and read
+/// back by `resolveLampColors` to render My Lamps / picker tiles.
+///
+/// Shape: `[R, G, B, W]` (4 ints). Legacy entries written before
+/// this field grew the W byte may be `[R, G, B]` (length 3) — the
+/// resolver treats those as `W = 0`, preserving the prior render.
 @override List<int>? get lastShadeColor {
   final value = _lastShadeColor;
   if (value == null) return null;

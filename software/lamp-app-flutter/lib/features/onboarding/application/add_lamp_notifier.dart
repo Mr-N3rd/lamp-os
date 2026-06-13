@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/ble/ble_client_provider.dart';
-import '../../../core/ble/setup_client.dart';
+import '../../../core/ble/lamp_crypto.dart';
 import '../../../core/ble/uuids.dart';
 import '../../control/application/auth_client.dart';
 import '../../inventory/application/active_lamp_notifier.dart';
@@ -53,7 +53,8 @@ class AddLampNotifier extends _$AddLampNotifier {
     state = state.copyWith(step: switch (state.step) {
       AddLampStep.scan => AddLampStep.connecting,
       AddLampStep.connecting => AddLampStep.name,
-      AddLampStep.name => AddLampStep.password,
+      AddLampStep.name => AddLampStep.meet,
+      AddLampStep.meet => AddLampStep.password,
       AddLampStep.password => AddLampStep.verifying,
       AddLampStep.verifying => AddLampStep.done,
       AddLampStep.done => AddLampStep.done,
@@ -65,7 +66,8 @@ class AddLampNotifier extends _$AddLampNotifier {
       AddLampStep.scan => AddLampStep.scan,
       AddLampStep.connecting => AddLampStep.scan,
       AddLampStep.name => AddLampStep.scan,
-      AddLampStep.password => AddLampStep.name,
+      AddLampStep.meet => AddLampStep.name,
+      AddLampStep.password => AddLampStep.meet,
       AddLampStep.verifying => AddLampStep.password,
       AddLampStep.done => AddLampStep.password,
     });
@@ -101,14 +103,44 @@ class AddLampNotifier extends _$AddLampNotifier {
       return;
     }
 
-    // Step 1: claim. Failures here are usually BLE-side (connect dropped,
-    // setup characteristics rejected) — surface as claimFailed and bail.
+    // Step 1: claim. Writes a single plaintext settings_blob to the
+    // control service carrying the new lamp.password + lamp.name. The
+    // firmware accepts this unauthenticated because the factory-default
+    // `lamp.password` is empty (`ble_control.cpp:96` early-returns true
+    // from `isAuthed` in that state). After the drain persists + reboots
+    // the lamp, every future write requires GCM auth keyed off the new
+    // password.
+    //
+    // The lamp tears down its BLE link mid-write as part of fade-out +
+    // reboot; the write throws a "not connected" / "disconnected"
+    // exception which we treat as success (same pattern as
+    // control_notifier.save). Real failures (connect dropped before the
+    // write even landed, characteristic missing, etc.) surface as
+    // claimFailed.
     try {
-      await SetupClient(ble: ble).claim(
-        deviceId: state.deviceId,
-        name: state.name,
-        password: state.password,
-      );
+      final blob = jsonEncode({
+        'lamp': {'password': state.password, 'name': state.name},
+      });
+      final payload = Uint8List.fromList([
+        LampCrypto.magicPlaintext,
+        ...utf8.encode(blob),
+      ]);
+      try {
+        await ble.write(
+          state.deviceId,
+          BleUuids.controlService,
+          BleUuids.settingsBlob,
+          payload,
+          allowLongWrite: true,
+        );
+      } catch (e) {
+        // Lamp reboots mid-write → fbp surfaces a disconnect error.
+        // Anything else is a real failure.
+        final msg = e.toString().toLowerCase();
+        final looksLikeReboot =
+            msg.contains('not connected') || msg.contains('disconnect');
+        if (!looksLikeReboot) rethrow;
+      }
     } catch (e) {
       state = state.copyWith(
         status: AddLampStatus.error,

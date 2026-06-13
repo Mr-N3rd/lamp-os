@@ -10,6 +10,7 @@ import '../../inventory/application/inventory_notifier.dart';
 import '../../inventory/presentation/widgets/lamp_picker_sheet.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
 import '../application/lamp_status.dart';
+import '../../social/presentation/social_screen.dart';
 import 'expressions_screen.dart';
 import 'info_screen.dart';
 import 'setup_screen.dart';
@@ -23,7 +24,7 @@ const _brandGradient = LinearGradient(
   colors: [BrandColors.auroraBlue, BrandColors.glowPink],
 );
 
-enum LampTab { control, expressions, setup, info }
+enum LampTab { control, expressions, setup, social, info }
 
 class LampShell extends ConsumerStatefulWidget {
   const LampShell({
@@ -56,6 +57,7 @@ class _LampShellState extends ConsumerState<LampShell> {
       LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsScreen(lampId: widget.lampId),
       LampTab.setup => SetupScreen(lampId: widget.lampId),
+      LampTab.social => SocialScreen(lampId: widget.lampId),
       LampTab.info => InfoScreen(lampId: widget.lampId),
     };
 
@@ -78,6 +80,12 @@ class _LampShellState extends ConsumerState<LampShell> {
 
     return Scaffold(
       appBar: AppBar(
+        // The LampChip in `title` already opens the switcher modal on tap
+        // — that's the on-screen nav. Skip GoRouter's auto-injected back
+        // arrow (now present because LampShell is pushed on top of My
+        // Lamps) so the AppBar doesn't carry two redundant nav controls.
+        // Android system back-gesture still pops to My Lamps.
+        automaticallyImplyLeading: false,
         title: LampChip(
           name: name,
           status: status,
@@ -87,12 +95,13 @@ class _LampShellState extends ConsumerState<LampShell> {
           ),
         ),
         actions: [
-          // Save is visible on Control and Setup. Setup edits (name, home
-          // WiFi, MQTT, advanced) ride the same isDirty + settings-blob
-          // save flow. Expressions has its own per-entry persistence via
-          // CHAR_EXPRESSION_OP, and Info is read-only — neither needs a
-          // global Save.
-          if (_tab == LampTab.control || _tab == LampTab.setup)
+          // Save is visible on the editing tabs (Colors, Setup,
+          // Expressions, Social). All ride the same isDirty + settings-blob
+          // save flow — Expressions edits live-preview via
+          // CHAR_EXPRESSION_OP for instant feedback but only persist to
+          // NVS when the global Save Changes pill is tapped. Info is
+          // read-only, so the action is hidden there.
+          if (_tab != LampTab.info)
             _SaveAction(lampId: widget.lampId),
         ],
       ),
@@ -131,11 +140,13 @@ class _LampShellState extends ConsumerState<LampShell> {
           onDestinationSelected: (i) =>
               setState(() => _tab = LampTab.values[i]),
           destinations: [
-            _gradientDestination(Icons.tune, 'Control', _tab == LampTab.control),
+            _gradientDestination(Icons.tune, 'Colors', _tab == LampTab.control),
             _gradientDestination(
                 Icons.auto_awesome, 'Expressions', _tab == LampTab.expressions),
             _gradientDestination(
                 Icons.settings, 'Setup', _tab == LampTab.setup),
+            _gradientDestination(Icons.handshake_outlined, 'Social',
+                _tab == LampTab.social),
             _gradientDestination(
                 Icons.info_outline, 'Info', _tab == LampTab.info),
           ],

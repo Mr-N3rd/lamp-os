@@ -1,3 +1,4 @@
+import '../../social/domain/social_mode.dart';
 import 'lamp_color.dart';
 
 /// CHAR_LAMP_SECTION payload, see firmware Config::asLampJson.
@@ -6,16 +7,20 @@ class LampSection {
     required this.name,
     required this.brightness,
     required this.advancedEnabled,
+    required this.socialMode,
   });
 
   final String name;
   final int brightness;
   final bool advancedEnabled;
+  final SocialMode socialMode;
 
   factory LampSection.fromJson(Map<String, dynamic> json) => LampSection(
         name: (json['name'] as String?) ?? '',
         brightness: (json['brightness'] as num?)?.toInt() ?? 100,
         advancedEnabled: json['advancedEnabled'] as bool? ?? false,
+        socialMode:
+            SocialMode.fromWire((json['socialMode'] as num?)?.toInt()),
       );
 }
 
@@ -25,6 +30,7 @@ class BaseSection {
     required this.px,
     required this.ac,
     required this.bpp,
+    required this.byteOrder,
     required this.colors,
     required this.knockout,
   });
@@ -32,6 +38,13 @@ class BaseSection {
   final int px;
   final int ac;
   final int bpp;
+
+  /// NeoPixel wire byte order: `GRBW` (4 bpp), `GRB` (3 bpp), or `BGR`
+  /// (3 bpp). Source of truth for strip type; `bpp` is kept in sync so
+  /// older firmware that hasn't grown the `byteOrder` field still
+  /// behaves correctly via the bpp-derived NeoPixel default.
+  final String byteOrder;
+
   final List<LampColor> colors;
 
   /// Per-LED brightness overrides (0..100). Indices absent from the map use
@@ -40,16 +53,30 @@ class BaseSection {
   final Map<int, int> knockout;
 
   factory BaseSection.fromJson(Map<String, dynamic> json) {
+    // Knockout is a positional int array: index = pixel, value = brightness
+    // % (0..100, default 100). Only non-default entries are kept in the
+    // map (firmware's `asBaseJson` emits a full-length array, but the app
+    // only cares about overrides).
     final knockoutList = (json['knockout'] as List?) ?? const [];
-    final knockoutMap = <int, int>{
-      for (final entry in knockoutList.cast<Map<String, dynamic>>())
-        if (entry['p'] is num && entry['b'] is num)
-          (entry['p'] as num).toInt(): (entry['b'] as num).toInt(),
-    };
+    final knockoutMap = <int, int>{};
+    for (var i = 0; i < knockoutList.length; i++) {
+      final raw = knockoutList[i];
+      if (raw is num) {
+        final b = raw.toInt();
+        if (b != 100) knockoutMap[i] = b;
+      }
+    }
+    final bpp = (json['bpp'] as num?)?.toInt() ?? 4;
+    // `byteOrder` lands as a string on the wire when the firmware
+    // supports it. When absent (older firmware), derive from `bpp`.
+    final byteOrder = (json['byteOrder'] as String?)?.trim().isNotEmpty == true
+        ? json['byteOrder'] as String
+        : (bpp == 4 ? 'GRBW' : 'GRB');
     return BaseSection(
       px: (json['px'] as num?)?.toInt() ?? 35,
       ac: (json['ac'] as num?)?.toInt() ?? 0,
-      bpp: (json['bpp'] as num?)?.toInt() ?? 4,
+      bpp: bpp,
+      byteOrder: byteOrder,
       colors: ((json['colors'] as List?) ?? const [])
           .map((e) => LampColor.fromHex(e as String))
           .toList(),
@@ -63,20 +90,32 @@ class ShadeSection {
   const ShadeSection({
     required this.px,
     required this.bpp,
+    required this.byteOrder,
     required this.colors,
   });
 
   final int px;
   final int bpp;
+
+  /// NeoPixel wire byte order; see BaseSection.byteOrder.
+  final String byteOrder;
+
   final List<LampColor> colors;
 
-  factory ShadeSection.fromJson(Map<String, dynamic> json) => ShadeSection(
-        px: (json['px'] as num?)?.toInt() ?? 38,
-        bpp: (json['bpp'] as num?)?.toInt() ?? 4,
-        colors: ((json['colors'] as List?) ?? const [])
-            .map((e) => LampColor.fromHex(e as String))
-            .toList(),
-      );
+  factory ShadeSection.fromJson(Map<String, dynamic> json) {
+    final bpp = (json['bpp'] as num?)?.toInt() ?? 4;
+    final byteOrder = (json['byteOrder'] as String?)?.trim().isNotEmpty == true
+        ? json['byteOrder'] as String
+        : (bpp == 4 ? 'GRBW' : 'GRB');
+    return ShadeSection(
+      px: (json['px'] as num?)?.toInt() ?? 38,
+      bpp: bpp,
+      byteOrder: byteOrder,
+      colors: ((json['colors'] as List?) ?? const [])
+          .map((e) => LampColor.fromHex(e as String))
+          .toList(),
+    );
+  }
 }
 
 /// CHAR_HOME_SECTION payload. Presence-only home mode: the lamp never

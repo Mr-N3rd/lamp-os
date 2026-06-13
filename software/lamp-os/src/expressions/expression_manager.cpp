@@ -1,33 +1,28 @@
-#include "./expression_manager.hpp"
+#include "expression_manager.hpp"
 #include <Arduino.h>
 #include <algorithm>
+#include <cstring>
 
-#include "../core/compositor.hpp"
+#include "components/network/show_receiver.hpp"
+#include "core/behavior_context.hpp"
+#include "core/compositor.hpp"
 
 namespace lamp {
-
-// Define the global frame buffer vector for expressions
-std::vector<FrameBuffer*> expressionFrameBuffers;
-
-// Global expression manager pointer
-static ExpressionManager* globalExpressionManager = nullptr;
-
-void setGlobalExpressionManager(ExpressionManager* manager) {
-  globalExpressionManager = manager;
-}
-
-ExpressionManager* getGlobalExpressionManager() {
-  return globalExpressionManager;
-}
 
 void ExpressionManager::begin(FrameBuffer* shade, FrameBuffer* base) {
   shadeBuffer = shade;
   baseBuffer = base;
 
-  // Set up global frame buffer references
-  expressionFrameBuffers.clear();
-  expressionFrameBuffers.push_back(shade);
-  expressionFrameBuffers.push_back(base);
+  // Publish the frame buffers into the shared BehaviorContext, replacing the
+  // previous `expressionFrameBuffers` extern vector. If the compositor has
+  // already been wired (setCompositor was called before begin()), publish now;
+  // otherwise setCompositor will publish.
+  if (compositor_) {
+    auto& ctx = compositor_->behaviorContext();
+    ctx.expressionFrameBuffers.clear();
+    ctx.expressionFrameBuffers.push_back(shade);
+    ctx.expressionFrameBuffers.push_back(base);
+  }
 }
 
 void ExpressionManager::loadFromConfig(const ExpressionSettings& settings) {
@@ -39,40 +34,46 @@ void ExpressionManager::loadFromConfig(const ExpressionSettings& settings) {
 }
 
 
+// Factory: build an Expression subclass instance for `type` bound to `buffer`,
+// configured with the given palette / interval range / target / params.
+// Returns nullptr for unknown types. Shared by addExpression (configured
+// entries) and triggerInvocation (transient one-shots from remote cascades) —
+// neither path needs to know the per-subclass constructor arguments.
+static std::unique_ptr<Expression> makeExpression(
+    const std::string& type, FrameBuffer* buffer,
+    const std::vector<Color>& colors,
+    uint32_t intervalMin, uint32_t intervalMax,
+    ExpressionTarget target,
+    const std::map<std::string, uint32_t>& parameters) {
+  std::unique_ptr<Expression> expr;
+  if (type == "glitchy") {
+    auto e = std::make_unique<GlitchyExpression>(buffer, 3);
+    e->configure(colors, intervalMin, intervalMax, target);
+    e->configureFromParameters(parameters);
+    expr = std::move(e);
+  } else if (type == "shifty") {
+    auto e = std::make_unique<ShiftyExpression>(buffer, 120);
+    e->configure(colors, intervalMin, intervalMax, target);
+    e->configureFromParameters(parameters);
+    expr = std::move(e);
+  } else if (type == "pulse") {
+    auto e = std::make_unique<PulseExpression>(buffer, 60);
+    e->configure(colors, intervalMin, intervalMax, target);
+    e->configureFromParameters(parameters);
+    expr = std::move(e);
+  } else if (type == "breathing") {
+    auto e = std::make_unique<BreathingExpression>(buffer, 60);
+    e->configure(colors, intervalMin, intervalMax, target);
+    e->configureFromParameters(parameters);
+    expr = std::move(e);
+  }
+  return expr;
+}
+
 void ExpressionManager::addExpression(const ExpressionConfig& config) {
   if (!shadeBuffer || !baseBuffer) return;
 
   auto target = static_cast<ExpressionTarget>(config.target);
-
-  // Lambda to create appropriate expression type
-  auto createExpression = [&](FrameBuffer* buffer) -> std::unique_ptr<Expression> {
-    std::unique_ptr<Expression> expr;
-
-    if (config.type == "glitchy") {
-      auto glitchyExpr = std::make_unique<GlitchyExpression>(buffer, 3);
-      glitchyExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
-      glitchyExpr->configureFromParameters(config.parameters);
-      expr = std::move(glitchyExpr);
-    } else if (config.type == "shifty") {
-      auto shiftyExpr = std::make_unique<ShiftyExpression>(buffer, 120);
-      shiftyExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
-      shiftyExpr->configureFromParameters(config.parameters);
-      expr = std::move(shiftyExpr);
-    } else if (config.type == "pulse") {
-      auto pulseExpr = std::make_unique<PulseExpression>(buffer, 60);
-      pulseExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
-      pulseExpr->configureFromParameters(config.parameters);
-      expr = std::move(pulseExpr);
-    } else if (config.type == "breathing") {
-      auto breathingExpr = std::make_unique<BreathingExpression>(buffer, 60);
-      breathingExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
-      breathingExpr->configureFromParameters(config.parameters);
-      expr = std::move(breathingExpr);
-    }
-
-    if (expr) expr->autoTriggerEnabled = config.enabled;
-    return expr;
-  };
 
   // Determine target buffers
   std::vector<FrameBuffer*> targetBuffers;
@@ -84,10 +85,85 @@ void ExpressionManager::addExpression(const ExpressionConfig& config) {
 
   // Create expressions for each target buffer
   for (auto* buffer : targetBuffers) {
-    if (auto expr = createExpression(buffer)) {
-      expressions.push_back({std::move(expr), config.type});
+    if (auto expr = makeExpression(config.type, buffer, config.colors,
+                                   config.intervalMin, config.intervalMax,
+                                   target, config.parameters)) {
+      expr->autoTriggerEnabled = config.enabled;
+      expressions.push_back({std::move(expr), config.type, config});
     }
   }
+}
+
+void ExpressionManager::setShowReceiver(ShowReceiver* receiver) {
+  showReceiver_ = receiver;
+}
+
+void ExpressionManager::setCompositor(Compositor* compositor) {
+  compositor_ = compositor;
+  if (!compositor_) return;
+  // Publish ourselves and (if begin() already ran) the frame buffer list
+  // into the compositor's BehaviorContext so registered behaviors can reach
+  // both without a global. Safe to call before or after begin().
+  auto& ctx = compositor_->behaviorContext();
+  ctx.expressionManager = this;
+  if (shadeBuffer && baseBuffer) {
+    ctx.expressionFrameBuffers.clear();
+    ctx.expressionFrameBuffers.push_back(shadeBuffer);
+    ctx.expressionFrameBuffers.push_back(baseBuffer);
+  }
+}
+
+void ExpressionManager::maybeCascade(const ExpressionEntry& entry) {
+  if (!showReceiver_ || !entry.expression) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: skip (no showReceiver=%d no expression=%d)\n",
+                  entry.config.type.c_str(), !showReceiver_, !entry.expression);
+#endif
+    return;
+  }
+  if (entry.config.getParameter(kParamCascadeEnabled, 0) == 0) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: skip (cascadeEnabled=0)\n",
+                  entry.config.type.c_str());
+#endif
+    return;
+  }
+
+  // "Cascade once per logical trigger" invariant. A TARGET_BOTH expression
+  // has TWO entries (shade + base) that fire independently from
+  // Expression::control() in the same loop tick; each calls
+  // onExpressionFired -> maybeCascade. Without this gate, receivers see
+  // two cascade invocations and the mesh does 2x the work for one logical
+  // trigger. Keying on (type, intervalIdx=target) is enough because both
+  // halves of a TARGET_BOTH config share the same target value, while a
+  // separate TARGET_SHADE-only entry of the same type has a distinct
+  // target and still gets its own cascade.
+  const uint32_t intervalIdx = static_cast<uint32_t>(entry.expression->getTarget());
+  const uint32_t nowMs = millis();
+  if (recentCascades_.seen(entry.config.type, intervalIdx, nowMs)) {
+#ifdef LAMP_DEBUG
+    Serial.printf("[cascade] %s: skip (RecentCascade dedup, target=%u)\n",
+                  entry.config.type.c_str(), (unsigned)intervalIdx);
+#endif
+    return;  // dedup: same logical trigger already cascaded
+  }
+  recentCascades_.record(entry.config.type, intervalIdx, nowMs);
+
+  const uint32_t staggerMs = entry.config.getParameter(kParamCascadeStaggerMs, 0);
+
+  ExpressionInvocation inv;
+  inv.type = entry.config.type;
+  inv.colors = entry.expression->getColors();
+  inv.target = static_cast<uint8_t>(entry.expression->getTarget());
+  inv.parameters = parametersWithoutCascadeKeys(entry.config.parameters);
+  // inv.delayMs defaults to 0; sendExpressionToAll assigns per-peer stagger.
+
+#ifdef LAMP_DEBUG
+  Serial.printf("[cascade] %s: fanning out (target=%u staggerMs=%u)\n",
+                entry.config.type.c_str(), (unsigned)intervalIdx,
+                (unsigned)staggerMs);
+#endif
+  showReceiver_->sendExpressionToAll(inv, staggerMs);
 }
 
 std::vector<AnimatedBehavior*> ExpressionManager::getBehaviors() {
@@ -104,24 +180,139 @@ void ExpressionManager::clear() {
 
 bool ExpressionManager::triggerExpression(const std::string& type) {
   bool triggered = false;
+  const ExpressionEntry* firstFired = nullptr;
+  // Suppress per-entry cascade callbacks from Expression::trigger() — we
+  // batch a single cascade for the logical trigger after the loop.
+  suppressCascade_ = true;
   for (auto& entry : expressions) {
     if (entry.type == type && entry.expression) {
       entry.expression->trigger();
       triggered = true;
+      if (!firstFired) firstFired = &entry;
     }
   }
+  suppressCascade_ = false;
+#ifdef LAMP_DEBUG
+  Serial.printf("[trigger] '%s' fired=%d (matched %s)\n",
+                type.c_str(), triggered,
+                firstFired ? "≥1 entry" : "no entries");
+#endif
+  // Cascade once per logical trigger, not once per entry — a TARGET_BOTH
+  // expression has two entries (shade + base) but should fan out a single
+  // invocation that receivers' own managers expand back to both sides.
+  if (firstFired) maybeCascade(*firstFired);
   return triggered;
 }
 
 bool ExpressionManager::triggerExpression(const std::string& type, ExpressionTarget target) {
   bool triggered = false;
+  const ExpressionEntry* firstFired = nullptr;
+  suppressCascade_ = true;
   for (auto& entry : expressions) {
     if (entry.type == type && entry.expression && entry.expression->getTarget() == target) {
       entry.expression->trigger();
       triggered = true;
+      if (!firstFired) firstFired = &entry;
     }
   }
+  suppressCascade_ = false;
+  if (firstFired) maybeCascade(*firstFired);
   return triggered;
+}
+
+void ExpressionManager::onExpressionFired(Expression* e) {
+  if (suppressCascade_ || !e) return;
+  for (auto& entry : expressions) {
+    if (entry.expression.get() == e) {
+      maybeCascade(entry);
+      return;
+    }
+  }
+}
+
+bool ExpressionManager::triggerInvocation(const ExpressionInvocation& inv,
+                                          const uint8_t srcMac[6]) {
+  if (!shadeBuffer || !baseBuffer) return false;
+
+  ExpressionTarget invTarget = static_cast<ExpressionTarget>(inv.target);
+
+  // Coalesce: if a transient with the same (sender, type) is still
+  // animating, drop this incoming cascade. Prevents pile-up from one
+  // chatty sender (e.g. spam-tapping Test on the originator) while still
+  // letting concurrent cascades from DIFFERENT senders both land — each
+  // sender contributes one in-flight transient.
+  for (const auto& t : transientExpressions_) {
+    if (t.type == inv.type && t.expression &&
+        std::memcmp(t.srcMac, srcMac, 6) == 0 &&
+        !t.expression->isAnimationComplete()) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[expr] coalesce %s from %02X:%02X:%02X:%02X:%02X:%02X (in flight)\n",
+                    inv.type.c_str(),
+                    srcMac[0], srcMac[1], srcMac[2],
+                    srcMac[3], srcMac[4], srcMac[5]);
+#endif
+      return false;
+    }
+  }
+
+  // Determine target buffers — same convention as addExpression. TARGET_BOTH
+  // fires on both halves of the lamp; specific target fires on one.
+  std::vector<FrameBuffer*> targetBuffers;
+  if (invTarget == TARGET_BOTH) {
+    targetBuffers = {shadeBuffer, baseBuffer};
+  } else if (invTarget == TARGET_SHADE) {
+    targetBuffers = {shadeBuffer};
+  } else if (invTarget == TARGET_BASE) {
+    targetBuffers = {baseBuffer};
+  } else {
+    return false;
+  }
+
+  // Loop-break invariant: the transient's trigger() will call
+  // onExpressionFired via the global manager pointer; suppress so a
+  // remote-received trigger can never re-cascade. Receivers are terminal in
+  // the propagation graph.
+  suppressCascade_ = true;
+
+  bool triggered = false;
+  for (auto* buffer : targetBuffers) {
+    // Build a fresh one-shot Expression instance directly from the
+    // invocation. NEVER consults this lamp's `expressions` (configured)
+    // vector — the receiver's local config is intentionally irrelevant.
+    // The cascade is a self-contained "execute this expression once and
+    // forget it" command; the receiver's own configured expressions remain
+    // entirely independent (untouched, unread, unmodified).
+    auto expr = makeExpression(inv.type, buffer, inv.colors,
+                               /*intervalMin*/ 60, /*intervalMax*/ 900,
+                               invTarget, inv.parameters);
+    if (!expr) continue;  // unknown type
+    expr->autoTriggerEnabled = false;  // pure one-shot — never re-fires itself
+
+    Expression* raw = expr.get();
+    if (compositor_) compositor_->addBehavior(raw);
+    TransientExpression t;
+    t.type = inv.type;
+    std::memcpy(t.srcMac, srcMac, 6);
+    t.expression = std::move(expr);
+    transientExpressions_.push_back(std::move(t));
+    raw->trigger();
+    triggered = true;
+  }
+
+  suppressCascade_ = false;
+  return triggered;
+}
+
+void ExpressionManager::gcTransients() {
+  if (transientExpressions_.empty()) return;
+  for (auto it = transientExpressions_.begin(); it != transientExpressions_.end();) {
+    if (it->expression && it->expression->isAnimationComplete()) {
+      if (compositor_) compositor_->removeBehavior(it->expression.get());
+      it = transientExpressions_.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 std::vector<Color> ExpressionManager::getExpressionColors(const std::string& type) const {

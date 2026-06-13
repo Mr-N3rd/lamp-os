@@ -41,6 +41,7 @@ dependencies:
   flutter_svg: ^2.0.10
   collection: ^1.18.0
   cryptography: ^2.7.0
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
@@ -67,6 +68,7 @@ flutter:
 
   assets:
     - assets/critters/
+    - assets/lamplit-logo.svg
 
   # To add assets to your application, add an assets section, like this:
   # assets:

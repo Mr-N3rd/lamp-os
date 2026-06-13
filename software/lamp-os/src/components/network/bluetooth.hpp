@@ -1,9 +1,8 @@
-#ifndef LAMP_COMPONENTS_NETWORK_BLUETOOTH_H
-#define LAMP_COMPONENTS_NETWORK_BLUETOOTH_H
+#pragma once
 
 #include <string>
 
-#include "../../config/config.hpp"
+#include "config/config.hpp"
 
 // Lamp manufacturer identifier
 #define BLE_LAMP_MAGIC_NUMBER 42069
@@ -31,10 +30,6 @@
 #define BLE_MINIMUM_RSSI_VALUE -94
 
 namespace lamp {
-// Set by ble_control on GATT connect/disconnect. While true, the scan
-// auto-restart in onScanEnd is suppressed. Defined in bluetooth.cpp.
-extern volatile bool scanPausedForGattClient;
-
 /**
  * @brief Entrypoint class to advertise and track lamps by Bluetooth LE
  */
@@ -60,15 +55,32 @@ class BluetoothComponent {
   void activateGattServices(Config* cfg, Preferences* prefs);
 
   /**
-   * @brief update the 9th manufacturer-data byte to reflect mesh state.
-   * Idempotent — re-applies setManufacturerData only when the flag flips,
-   * so it's safe (and cheap) to call every loop iteration. Older app
-   * builds read 8-byte payloads so the layout remains backwards
-   * compatible.
-   * @param onMesh true iff the lamp is currently joined to the mesh
-   *  (`wifi::isConnected()` is the current source of truth).
+   * @brief record the latest base + shade colors that should be
+   * reflected in the BLE advertisement. This is a *fast setter* —
+   * it does not touch NimBLE. The actual NimBLE update happens
+   * in tickAdvertising() on a debounced schedule so rapid
+   * baseColors writes (e.g. a user dragging the color picker)
+   * cannot starve the BLE host task. Mfg payload shape is
+   * `[magic16, baseRGB, shadeRGB, version=0x02]` = 9 bytes.
+   *
+   * Synchronously calling NimBLE's setAdvertisementData() from
+   * the loop task at sub-100ms intervals corrupts the host
+   * task's pending-advertisement buffer and crashes the lamp
+   * with `_invalid_pc_placeholder`. Don't do that again.
    */
-  void setMeshState(bool onMesh);
+  void setAdvertisedColors(Color base, Color shade);
+
+  /**
+   * @brief flush any pending advertisement-color update to
+   * NimBLE if at least the debounce interval has elapsed since
+   * the last flush. Call once per main-loop tick.
+   */
+  void tickAdvertising();
+
+ private:
+  Color m_pendingAdvBase;
+  Color m_pendingAdvShade;
+  bool m_advDirty = false;
+  uint32_t m_lastAdvFlushMs = 0;
 };
 }  // namespace lamp
-#endif

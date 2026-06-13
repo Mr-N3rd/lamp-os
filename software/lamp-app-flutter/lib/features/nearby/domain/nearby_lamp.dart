@@ -5,7 +5,7 @@ part 'nearby_lamp.g.dart';
 
 /// Firmware defaults from config_types.hpp — used to detect a factory-state
 /// lamp from the BLE advertisement alone.
-const _defaultName = 'standard';
+const _defaultName = 'stray';
 const _defaultBaseRgb = 0x300783;
 const _defaultShadeRgb = 0x000000;
 
@@ -21,14 +21,20 @@ abstract class NearbyLamp with _$NearbyLamp {
     required int baseRgb,
     required int shadeRgb,
     required int lastSeenEpochMs,
-    @Default(false) bool onMesh,
+    /// True iff this lamp's firmware advertises the version byte —
+    /// i.e. speaks the app's mesh protocol and is fully app-
+    /// controllable. Drives the BT-only routing decision in
+    /// MyLampsScreen and the `mesh` vs `bluetooth` status dot. v1
+    /// firmware (legacy BT-only) and transitional pre-shade-restore
+    /// v2 builds both get `false`.
+    @Default(false) bool isMesh,
   }) = _NearbyLamp;
 
   factory NearbyLamp.fromJson(Map<String, dynamic> json) =>
       _$NearbyLampFromJson(json);
 
   /// True when the advertisement still carries the firmware defaults
-  /// (name `standard`, base purple `0x300783`, shade off `0x000000`). The
+  /// (name `stray`, base purple `0x300783`, shade off `0x000000`). The
   /// AddLamp flow uses this to decide between the adopt wizard (factory
   /// default → user must claim and personalize it) and a one-tap add
   /// (anything else → already configured, just add to inventory).

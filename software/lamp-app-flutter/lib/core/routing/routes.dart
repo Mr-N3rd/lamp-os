@@ -2,9 +2,11 @@ abstract class AppRoutes {
   static const onboarding = '/onboarding';
   static const addLamp = '/onboarding/add';
   static const lampPicker = '/lamp-picker';
+  static const myLamps = '/lamps';
 
   static String lamp(String id) => '/lamp/$id';
   static String control(String id) => '/lamp/$id/control';
+  static String btOnly(String id) => '/lamp/$id/bt-only';
   static String expressions(String id) => '/lamp/$id/expressions';
   static String addExpression(String id) => '/lamp/$id/expressions/new';
   static String expressionEditor(String id, String type, int target) =>
