@@ -64,7 +64,7 @@ void Expression::control() {
 
 
   // Check for automatic trigger
-  if (animationState == STOPPED && millis() > nextTriggerMs) {
+  if (autoTriggerEnabled && animationState == STOPPED && millis() > nextTriggerMs) {
     trigger();
   }
 
@@ -105,8 +105,7 @@ void Expression::trigger() {
   }
 
 
-  // Save current state and start immediately
-  saveBufferState();
+  // Start immediately
   onTrigger();            // Expression-specific setup
   scheduleNextTrigger();  // Reset next automatic trigger
   playOnce();

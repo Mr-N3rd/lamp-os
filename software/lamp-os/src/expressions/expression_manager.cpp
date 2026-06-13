@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include <algorithm>
 
+#include "../core/compositor.hpp"
+
 namespace lamp {
 
 // Define the global frame buffer vector for expressions
@@ -32,9 +34,7 @@ void ExpressionManager::loadFromConfig(const ExpressionSettings& settings) {
   clear();
 
   for (const auto& config : settings.expressions) {
-    if (config.enabled) {
-      addExpression(config);
-    }
+    addExpression(config);
   }
 }
 
@@ -63,8 +63,14 @@ void ExpressionManager::addExpression(const ExpressionConfig& config) {
       pulseExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
       pulseExpr->configureFromParameters(config.parameters);
       expr = std::move(pulseExpr);
+    } else if (config.type == "breathing") {
+      auto breathingExpr = std::make_unique<BreathingExpression>(buffer, 60);
+      breathingExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
+      breathingExpr->configureFromParameters(config.parameters);
+      expr = std::move(breathingExpr);
     }
 
+    if (expr) expr->autoTriggerEnabled = config.enabled;
     return expr;
   };
 
@@ -92,31 +98,64 @@ std::vector<AnimatedBehavior*> ExpressionManager::getBehaviors() {
   return behaviors;
 }
 
-void ExpressionManager::removeExpression(size_t index) {
-  if (index < expressions.size()) {
-    expressions.erase(expressions.begin() + index);
-  }
-}
-
 void ExpressionManager::clear() {
   expressions.clear();
 }
 
 bool ExpressionManager::triggerExpression(const std::string& type) {
-
   bool triggered = false;
-  int matchCount = 0;
-
   for (auto& entry : expressions) {
     if (entry.type == type && entry.expression) {
-      matchCount++;
       entry.expression->trigger();
-      triggered = true;  // Don't return here, continue to trigger all matches
+      triggered = true;
     }
   }
-
-
   return triggered;
+}
+
+bool ExpressionManager::triggerExpression(const std::string& type, ExpressionTarget target) {
+  bool triggered = false;
+  for (auto& entry : expressions) {
+    if (entry.type == type && entry.expression && entry.expression->getTarget() == target) {
+      entry.expression->trigger();
+      triggered = true;
+    }
+  }
+  return triggered;
+}
+
+std::vector<Color> ExpressionManager::getExpressionColors(const std::string& type) const {
+  for (const auto& entry : expressions) {
+    if (entry.type == type && entry.expression) {
+      return entry.expression->getColors();
+    }
+  }
+  return {};
+}
+
+void ExpressionManager::upsertExpression(const ExpressionConfig& config, Compositor* compositor) {
+  ExpressionTarget target = static_cast<ExpressionTarget>(config.target);
+  removeExpression(config.type, target, compositor);
+
+  size_t prevCount = expressions.size();
+  addExpression(config);
+
+  if (compositor) {
+    for (size_t i = prevCount; i < expressions.size(); i++) {
+      compositor->addBehavior(expressions[i].expression.get());
+    }
+  }
+}
+
+void ExpressionManager::removeExpression(const std::string& type, ExpressionTarget target, Compositor* compositor) {
+  for (auto it = expressions.begin(); it != expressions.end();) {
+    if (it->type == type && it->expression && it->expression->getTarget() == target) {
+      if (compositor) compositor->removeBehavior(it->expression.get());
+      it = expressions.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 }  // namespace lamp

@@ -3,10 +3,7 @@
 
 #include <string>
 
-#include "./bluetooth_pool.hpp"
-
-// Stage manufacturer identifier
-#define BLE_STAGE_MAGIC_NUMBER 42007
+#include "../../config/config.hpp"
 
 // Lamp manufacturer identifier
 #define BLE_LAMP_MAGIC_NUMBER 42069
@@ -21,9 +18,10 @@
 // Scan time
 #define BLE_GAP_SCAN_TIME_MS 1000
 
-// Advertising intervals
-#define BLE_ADVERTISING_INTERVAL_MIN 400
-#define BLE_ADVERTISING_INTERVAL_MAX 650
+// Advertising intervals (BLE units of 0.625 ms). Lamp is mains-powered so
+// no reason not to advertise fast.
+#define BLE_ADVERTISING_INTERVAL_MIN 48
+#define BLE_ADVERTISING_INTERVAL_MAX 96
 
 // Tx power level in DB
 // @see platformio build flag MYNEWT_VAL_BLE_LL_TX_PWR_DBM as they must match
@@ -33,6 +31,10 @@
 #define BLE_MINIMUM_RSSI_VALUE -94
 
 namespace lamp {
+// Set by ble_control on GATT connect/disconnect. While true, the scan
+// auto-restart in onScanEnd is suppressed. Defined in bluetooth.cpp.
+extern volatile bool scanPausedForGattClient;
+
 /**
  * @brief Entrypoint class to advertise and track lamps by Bluetooth LE
  */
@@ -49,16 +51,13 @@ class BluetoothComponent {
   void begin(std::string name, Color inBaseColor, Color inShadeColor);
 
   /**
-   * @brief get a listing of all lamps within acceptable signal strength limits
-   * @return vector of all found lamps
+   * @brief register the GATT setup + control services, start the GATT server,
+   * start advertising. Must be called after begin() and after any preferences
+   * loaded. The scan-stop/restart bracket is handled internally because
+   * NimBLE's ble_gatts_mutable() returns false if any GAP procedure is
+   * active when ble_gatts_add_svcs runs (silent service registration drop).
    */
-  std::vector<BluetoothLampRecord>* getLamps();
-
-  /**
-   * @brief get a listing of all stages within acceptable signal strength limits
-   * @return vector of all found stages
-   */
-  std::vector<BluetoothStageRecord>* getStages();
+  void activateGattServices(Config* cfg, Preferences* prefs);
 };
 }  // namespace lamp
 #endif

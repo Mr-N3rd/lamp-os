@@ -26,38 +26,36 @@ class KnockoutPixel {
 
 /**
  * @brief Global lamp settings to control initialization
- * @property name - a name that can be used to identify this lamp. it can be up
- * to 12 characters long
+ * @property name - a name that can be used to identify this lamp. it can be up to 12 characters long
  * @property brightness - global brightness level for the lamp as a percentage
- * @property homeMode - if true it will disable some animations while at home
- * @property homeModeSSID - SSID to detect for home mode activation
- * @property homeModeBrightness - brightness level to use when home mode is active
- * @property password - password to protect lamp API and web access
+ * @property password - password to protect lamp BLE control surface
+ * @property advancedEnabled - if true, advanced settings UI is unlocked
  */
 class LampSettings {
  public:
   std::string name = "standard";
   uint8_t brightness = 100;
-  bool homeMode = false;
-  std::string homeModeSSID = "";
-  uint8_t homeModeBrightness = 80;
   std::string password = "";
+  bool advancedEnabled = false;
 };
 
 /**
  * @brief Settings used for the bulb neopixels
  * @property px - the total pixel count
+ * @property bpp - bytes per pixel: 4 = NEO_GRBW (RGBWW), 3 = NEO_GRB (RGB)
  * @property colors - a list of up to 5 colors to use
  */
 class ShadeSettings {
  public:
   uint8_t px = 38;
+  uint8_t bpp = 4;
   std::vector<Color> colors = {Color(0x00, 0x00, 0x00, 0xFF)};
 };
 
 /**
  * @brief Settings used for the base neopixels
  * @property px - the total pixel count
+ * @property bpp - bytes per pixel: 4 = NEO_GRBW (RGBWW), 3 = NEO_GRB (RGB)
  * @property colors - a list of up to 5 colors to use
  * @property knockoutPixels - a list of knockout pixels to profile the lamp base
  * @property ac - the preferred color index in a gradient
@@ -65,6 +63,7 @@ class ShadeSettings {
 class BaseSettings {
  public:
   uint8_t px = 35;
+  uint8_t bpp = 4;
   std::vector<Color> colors = {Color(0x30, 0x07, 0x83, 0x00)};
   std::vector<uint8_t> knockoutPixels = std::vector<uint8_t>(50, (uint8_t)100);
   uint8_t ac = 0;
@@ -105,6 +104,39 @@ class ExpressionConfig {
 class ExpressionSettings {
  public:
   std::vector<ExpressionConfig> expressions;
+};
+
+/**
+ * @brief Home mode: lamp joins this WiFi network as STA. While joined, the
+ *        lamp uses `brightness` (this struct's) instead of LampSettings.brightness.
+ *        WiFi is paused while a BLE client is connected (coexistence safety).
+ */
+class HomeModeSettings {
+ public:
+  std::string ssid;
+  std::string password;
+  uint8_t brightness = 60;
+};
+
+/**
+ * @brief Smart-home MQTT integration. Only runs while WiFi STA is connected
+ *        (which means: home mode is configured AND BLE isn't holding the radio).
+ *        Compiled in unconditionally; behavior fully gated by `enabled`.
+ * @property enabled       master on/off
+ * @property brokerHost    broker hostname or IP
+ * @property brokerPort    broker port (default 1883)
+ * @property username      optional broker auth user
+ * @property password      optional broker auth password
+ * @property topicPrefix   topic root; empty defaults to "homeassistant"
+ */
+class MqttSettings {
+ public:
+  bool enabled = false;
+  std::string brokerHost = "";
+  uint16_t brokerPort = 1883;
+  std::string username = "";
+  std::string password = "";
+  std::string topicPrefix = "";
 };
 
 }  // namespace lamp

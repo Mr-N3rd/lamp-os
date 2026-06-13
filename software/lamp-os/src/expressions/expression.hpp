@@ -62,6 +62,8 @@ class Expression : public AnimatedBehavior {
  public:
   using AnimatedBehavior::AnimatedBehavior;
 
+  virtual ~Expression() = default;
+
   /**
    * @brief Configure expression parameters (initial setup)
    * @param inColors Color palette for the expression
@@ -86,6 +88,13 @@ class Expression : public AnimatedBehavior {
    * @brief Get random color from configured palette
    */
   Color getRandomColor();
+
+  const std::vector<Color>& getColors() const { return colors; }
+  ExpressionTarget getTarget() const { return target; }
+
+  // Suppresses auto-trigger from control() while true. Manual trigger() and
+  // chain-triggered firing still work. Listing's enabled toggle drives this.
+  bool autoTriggerEnabled = true;
 
 protected:
   /**

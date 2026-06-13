@@ -1,255 +1,142 @@
 #include "./wifi.hpp"
 
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include <AsyncJson.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <ESPmDNS.h>
-#include <ElegantOTA.h>
-#include <Preferences.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
-#include "../../behaviors/dmx.hpp"
-#include "../../config/config.hpp"
-#include "../../util/color.hpp"
-#include "./artnet.hpp"
-#include "SPIFFS.h"
-
-namespace lamp {
-ArtnetWifi artnet;
-static AsyncWebServer server(80);
-static AsyncWebSocketMessageHandler wsHandler;
-static AsyncWebSocket ws("/ws", wsHandler.eventHandler());
-static AsyncCorsMiddleware cors;
-Preferences prefs;
-
-#ifdef LAMP_DEBUG
-void wsMonitor() {
-  wsHandler.onError([](AsyncWebSocket *server, AsyncWebSocketClient *client,
-                       uint16_t errorCode, const char *reason, size_t len) {
-    Serial.printf("Client %" PRIu32 " error: %" PRIu16 ": %s\n", client->id(),
-                  errorCode, reason);
-  });
-
-  wsHandler.onFragment([](AsyncWebSocket *server, AsyncWebSocketClient *client,
-                          const AwsFrameInfo *frameInfo, const uint8_t *data,
-                          size_t len) {
-    Serial.printf("Client %" PRIu32 " fragment %" PRIu32 ": %s\n", client->id(),
-                  frameInfo->num, (const char *)data);
-  });
-};
+// Default channel used when not associated to a home AP. All grid lamps
+// must agree on this for ESP-NOW broadcasts to be heard. Channel 1 is the
+// standard pick for hobbyist projects (least overlap with most APs).
+#ifndef LAMP_ESPNOW_CHANNEL
+#define LAMP_ESPNOW_CHANNEL 1
 #endif
 
-void onWiFiEvent(WiFiEvent_t event) {
+namespace wifi {
+
+static State s_state = IDLE;
+static std::string s_ssid;
+static std::string s_password;
+static std::string s_lastError;
+static std::vector<ScanResult> s_scanResults;
+static uint32_t s_connectStartMs = 0;
+static StateChangeCallback s_cb = nullptr;
+
+static constexpr uint32_t CONNECT_TIMEOUT_MS = 15000;
+
+static void setState(State next) {
+  if (s_state == next) return;
+  State prev = s_state;
+  s_state = next;
 #ifdef LAMP_DEBUG
-  Serial.printf("WIFI Event %d\n", event);
+  Serial.printf("[wifi] state -> %d (%s)\n", (int)next, s_lastError.c_str());
 #endif
-};
-
-class CaptiveRequestHandler : public AsyncWebHandler {
- public:
-  bool canHandle(__unused AsyncWebServerRequest *request) const override {
-    return true;
-  };
-
-  void handleRequest(AsyncWebServerRequest *request) {
-    request->send(SPIFFS, "/index.html.gz", String(), false);
-  };
-};
-
-WifiComponent::WifiComponent() {};
-
-void WifiComponent::begin(Config *inConfig) {
-#ifdef LAMP_DEBUG
-  Serial.printf("Starting Wifi Async Client\n");
-#endif
-  Serial.begin(115200);
-  config = inConfig;
-  serializeJson(config->asJsonDocument(), doc);
-  WiFi.setSleep(false);
-  WiFi.onEvent(onWiFiEvent);
-  toApMode();
-
-  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-  MDNS.begin("lamp");
-#ifdef LAMP_DEBUG
-  wsMonitor();
-#endif
-  wsHandler.onMessage([&](AsyncWebSocket *server, AsyncWebSocketClient *client, const uint8_t *data, size_t len) {
-#ifdef LAMP_DEBUG
-    Serial.printf("Client %" PRIu32 " data: %s\n", client->id(), (const char *)data);
-#endif
-    lastWebSocketUpdateTimeMs = millis();
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, data);
-
-    if (error) {
-#ifdef LAMP_DEBUG
-      Serial.printf("ws deserializeJson() failed: %s\n", error.c_str());
-#endif
-      return;  // use class defaults
-    }
-
-    newWebSocketData = true;
-    lastWebSocketData = doc;
-  });
-  wsHandler.onConnect([&](AsyncWebSocket *server, AsyncWebSocketClient *client) {
-#ifdef LAMP_DEBUG
-    Serial.printf("Client %" PRIu32 " connected\n", client->id());
-#endif
-    lastWebSocketUpdateTimeMs = millis();
-  });
-  wsHandler.onDisconnect([&](AsyncWebSocket *server, uint32_t clientId) {
-#ifdef LAMP_DEBUG
-    Serial.printf("Client %" PRIu32 " disconnected\n", clientId);
-#endif
-    lastWebSocketUpdateTimeMs = millis();
-  });
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/index.html.gz", "text/html");
-    response->addHeader("Content-Encoding", "gzip");
-    request->send(response);
-  });
-  server.on("/settings", HTTP_GET, [this](AsyncWebServerRequest *request) {
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    response->print(doc.c_str());
-    request->send(response);
-  });
-  server.on(
-      "/settings",
-      HTTP_PUT,
-      [](AsyncWebServerRequest *request) {},
-      nullptr,
-      [&](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-        size_t status = 0;
-        try {
-          String buf;
-          for (size_t i = 0; i < len; i++) {
-            buf.concat((char)data[i]);
-          }
-          prefs.begin("lamp", false);
-          status = prefs.putString("cfg", buf);
-          prefs.end();
-
-          if (status) {
-            requiresReboot = true;
-            request->send(200);
-            return;
-          }
-        } catch (int e) {
-#ifdef LAMP_DEBUG
-          Serial.printf("Setting threw with status %d - e: %d\n", status, e);
-#endif
-          request->send(500);
-          return;
-        }
-
-#ifdef LAMP_DEBUG
-        Serial.printf("Setting failed with status %d", status);
-#endif
-        request->send(500);
-        return;
-      });
-
-  cors.setMethods("POST, PUT, GET, OPTIONS, DELETE");
-  ElegantOTA.begin(&server);
-  ElegantOTA.onEnd([this](bool success) {
-    if (success) {
-      requiresReboot = true;
-    }
-  });
-  server.addMiddleware(&cors);
-  server.addHandler(&ws);
-  server.begin();
-  artnet.begin();
-};
-
-void WifiComponent::tick() {
-  uint32_t now = millis();
-
-  if (now > lastWebSocketCleanTimeMs + WEBSOCKET_CLEAN_TIME_MS &&
-      now > lastWebSocketUpdateTimeMs + WEBSOCKET_CLEAN_TIME_MS) {
-    ws.cleanupClients(1);
-    lastWebSocketCleanTimeMs = now;
-#ifdef LAMP_DEBUG
-    Serial.printf("WS free heap: %" PRIu32 "\n", ESP.getFreeHeap());
-#endif
+  // If we just left CONNECTED (AP gone / dropped), re-pin the radio to the
+  // grid channel so ESP-NOW stays usable across peers.
+  if (prev == CONNECTED && next != CONNECTED) {
+    esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
   }
+  if (s_cb) s_cb();
+}
 
-  // Update network scan every 30 seconds if home mode SSID is configured
-  // This mode has side effects on both Station and AP modes and will interrupt
-  // their connectivity. Check that:
-  // - The user has their lamp in home SSID scanning mode
-  // - The user is not using the web configuration tool at the moment
-  // - The lamp isn't actively receiving recent artnet packets
-  if (!config->lamp.homeModeSSID.empty() &&
-      ws.count() == 0 &&
-      (now < 5 || now > getLastArtnetFrameTimeMs() + DMX_ARTNET_TIMEOUT_MS - 1) &&
-      now > lastNetworkScanTimeMs + 30000) {
-    updateNetworkScan();
-    lastNetworkScanTimeMs = now;
-  }
-};
-
-ArtnetDetail WifiComponent::getArtnetData() {
-  return artnet.artnetData;
-};
-
-unsigned long WifiComponent::getLastArtnetFrameTimeMs() {
-  return artnet.lastDmxFrameMs;
-};
-
-bool WifiComponent::hasWebSocketData() { return newWebSocketData; };
-
-unsigned long WifiComponent::getLastWebSocketUpdateTimeMs() {
-  return lastWebSocketUpdateTimeMs;
-};
-
-JsonDocument WifiComponent::getWebSocketData() {
-  newWebSocketData = false;
-  return lastWebSocketData;
-};
-
-void WifiComponent::toStageMode(String inSsid, String inPassword) {
-  stageMode = true;
-  WiFi.begin(inSsid, inPassword, WIFI_PREFERRED_CHANNEL);
+void begin() {
+  WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-};
+  WiFi.disconnect(true, true);  // clear any stale config left over from a previous boot
+}
 
-void WifiComponent::toApMode() {
-  stageMode = false;
-  WiFi.setAutoReconnect(false);
-  WiFi.disconnect(true, true);
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(
-      config->lamp.name.substr(0, 12).append("-lamp").c_str(),
-      String(config->lamp.password.c_str()),
-      WIFI_PREFERRED_CHANNEL);
-};
+void connect(const std::string& ssid, const std::string& password) {
+  if (ssid.empty()) { disconnect(); return; }
+  s_ssid = ssid;
+  s_password = password;
+  s_lastError.clear();
+  WiFi.begin(s_ssid.c_str(), s_password.c_str());
+  s_connectStartMs = millis();
+  setState(CONNECTING);
+}
 
-bool WifiComponent::isHomeNetworkVisible() {
-  return homeNetworkVisible;
-};
+void disconnect() {
+  WiFi.disconnect(false, false);
+  if (s_state == CONNECTED || s_state == CONNECTING) setState(IDLE);
+}
 
-void WifiComponent::updateNetworkScan() {
-  if (config->lamp.homeModeSSID.empty()) {
-    homeNetworkVisible = false;
-    return;
-  }
+void forget() {
+  s_ssid.clear();
+  s_password.clear();
+  s_lastError.clear();
+  WiFi.disconnect(true, true);  // wipe SDK creds too
+  setState(IDLE);
+}
 
-  homeNetworkVisible = false;
+bool isConnected() { return s_state == CONNECTED && WiFi.status() == WL_CONNECTED; }
+State state() { return s_state; }
+std::string currentSsid() { return isConnected() ? s_ssid : std::string(); }
+std::string currentIp() { return isConnected() ? std::string(WiFi.localIP().toString().c_str()) : std::string(); }
+std::string lastError() { return s_lastError; }
 
-  int n = WiFi.scanNetworks();
-  if (n > 0) {
-    for (int i = 0; i < n; ++i) {
-      String ssid = WiFi.SSID(i);
-      if (ssid.equals(config->lamp.homeModeSSID.c_str())) {
-        homeNetworkVisible = true;
-        break;
+void startScan() {
+  s_scanResults.clear();
+  WiFi.scanDelete();
+  WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/false);
+  setState(SCANNING);
+}
+
+std::vector<ScanResult> consumeScanResults() {
+  std::vector<ScanResult> out = std::move(s_scanResults);
+  s_scanResults.clear();
+  return out;
+}
+
+void setStateChangeCallback(StateChangeCallback cb) { s_cb = cb; }
+
+void ensureGridChannel() {
+  // If we're associated to a home AP, leave the channel alone — that AP's
+  // channel wins and ESP-NOW rides on it. If not associated, pin the radio
+  // to LAMP_ESPNOW_CHANNEL so all unconnected grid lamps line up.
+  if (s_state == CONNECTED && WiFi.status() == WL_CONNECTED) return;
+  esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+}
+
+void tick() {
+  if (s_state == SCANNING) {
+    int16_t n = WiFi.scanComplete();
+    if (n >= 0) {
+      s_scanResults.reserve(n);
+      for (int16_t i = 0; i < n; i++) {
+        auto ssid = WiFi.SSID(i);
+        if (ssid.length() == 0) continue;
+        s_scanResults.push_back({
+          std::string(ssid.c_str()),
+          (int8_t)WiFi.RSSI(i),
+          WiFi.encryptionType(i) != WIFI_AUTH_OPEN,
+        });
       }
+      WiFi.scanDelete();
+      // Resume the connection state we were in before the scan
+      if (WiFi.status() == WL_CONNECTED) setState(CONNECTED);
+      else if (!s_ssid.empty())          setState(CONNECTING);
+      else                                setState(IDLE);
+    } else if (n == WIFI_SCAN_FAILED) {
+      s_lastError = "scan";
+      setState(FAILED);
     }
   }
-  WiFi.scanDelete();
-};
-}  // namespace lamp
+
+  if (s_state == CONNECTING) {
+    wl_status_t s = WiFi.status();
+    if (s == WL_CONNECTED) {
+      s_lastError.clear();
+      setState(CONNECTED);
+    } else if (s == WL_CONNECT_FAILED) {
+      s_lastError = "auth";
+      setState(FAILED);
+    } else if (s == WL_NO_SSID_AVAIL) {
+      s_lastError = "noap";
+      setState(FAILED);
+    } else if (millis() - s_connectStartMs > CONNECT_TIMEOUT_MS) {
+      s_lastError = "timeout";
+      setState(FAILED);
+    }
+  }
+}
+
+}  // namespace wifi
