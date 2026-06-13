@@ -1,0 +1,44 @@
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lamp_app/core/ble/ble_client.dart';
+
+void main() {
+  late InMemoryBleClient ble;
+
+  setUp(() => ble = InMemoryBleClient());
+
+  test('write then read returns the same bytes', () async {
+    await ble.write('dev1', 'svc', 'chr', Uint8List.fromList([1, 2, 3]));
+    final read = await ble.read('dev1', 'svc', 'chr');
+    expect(read, Uint8List.fromList([1, 2, 3]));
+  });
+
+  test('reading a missing characteristic throws BleNotFound', () async {
+    expect(
+      () => ble.read('dev1', 'svc', 'missing'),
+      throwsA(isA<BleNotFound>()),
+    );
+  });
+
+  test('subscribe streams subsequent writes', () async {
+    final events = <Uint8List>[];
+    final sub = ble.subscribe('dev1', 'svc', 'chr').listen(events.add);
+    await ble.write('dev1', 'svc', 'chr', Uint8List.fromList([7]));
+    await ble.write('dev1', 'svc', 'chr', Uint8List.fromList([8]));
+    await Future<void>.delayed(Duration.zero);
+    await sub.cancel();
+    expect(events.map((b) => b.first).toList(), [7, 8]);
+  });
+
+  test('scheduleEncryptionFailure throws insufficientEncryption once', () async {
+    ble.scheduleEncryptionFailure('dev1', 'svc', 'enc');
+    expect(
+      () => ble.write('dev1', 'svc', 'enc', Uint8List.fromList([0])),
+      throwsA(isA<BleEncryptionRequired>()),
+    );
+    // Second write succeeds.
+    await ble.write('dev1', 'svc', 'enc', Uint8List.fromList([1]));
+    expect(await ble.read('dev1', 'svc', 'enc'), Uint8List.fromList([1]));
+  });
+}

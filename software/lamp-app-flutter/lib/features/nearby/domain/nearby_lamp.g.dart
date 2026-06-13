@@ -1,0 +1,26 @@
+// GENERATED CODE - DO NOT MODIFY BY HAND
+
+part of 'nearby_lamp.dart';
+
+// **************************************************************************
+// JsonSerializableGenerator
+// **************************************************************************
+
+_NearbyLamp _$NearbyLampFromJson(Map<String, dynamic> json) => _NearbyLamp(
+  id: json['id'] as String,
+  name: json['name'] as String,
+  rssi: (json['rssi'] as num).toInt(),
+  serviceUuids: (json['serviceUuids'] as List<dynamic>)
+      .map((e) => e as String)
+      .toList(),
+  lastSeenEpochMs: (json['lastSeenEpochMs'] as num).toInt(),
+);
+
+Map<String, dynamic> _$NearbyLampToJson(_NearbyLamp instance) =>
+    <String, dynamic>{
+      'id': instance.id,
+      'name': instance.name,
+      'rssi': instance.rssi,
+      'serviceUuids': instance.serviceUuids,
+      'lastSeenEpochMs': instance.lastSeenEpochMs,
+    };
