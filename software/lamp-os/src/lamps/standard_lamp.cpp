@@ -9,7 +9,7 @@
 
 #include "../components/network/bluetooth.hpp"
 #include "../components/network/ble_control.hpp"
-#include "../components/network/mqtt.hpp"
+#include "../components/network/nearby_lamps.hpp"
 #include "../components/network/show_receiver.hpp"
 #include "../components/network/wifi.hpp"
 #include "../behaviors/show_behavior.hpp"
@@ -59,13 +59,17 @@ struct PendingKnockoutUpdate {
 };
 
 volatile int8_t pendingBrightness = -1;
+// Flag set from Core 0 (BLE callbacks) when the home-mode preview state
+// changes — either the flag itself flipped, or homeMode.brightness was
+// updated via CHAR_HOME_PREVIEW cmd 0x02. The loop task on Core 1 drains
+// it and calls applyEffectiveBrightness so the strip transitions cleanly.
+volatile bool pendingApplyEffectiveBrightness = false;
 PendingJsonUpdate pendingBaseColorsJson;
 PendingJsonUpdate pendingShadeColorsJson;
 PendingKnockoutUpdate pendingKnockout;
 PendingOpJsonUpdate pendingExpressionOpJson;
 PendingOpJsonUpdate pendingWifiOpJson;
 PendingOpJsonUpdate pendingTestActionJson;
-PendingOpJsonUpdate pendingMqttOpJson;
 PendingOpJsonUpdate pendingRemoteOpJson;
 // Slot for ESP-NOW-inbound CONTROL_OP payloads. ShowReceiver runs the recv
 // callback on the WiFi task; it memcpys the payload here and the loop task
@@ -85,6 +89,7 @@ static void postPendingJson(PendingJsonUpdate& slot, const char* data, size_t le
 void postPendingShadeColorsJson(const char* data, size_t len) { postPendingJson(pendingShadeColorsJson, data, len); }
 void postPendingBaseColorsJson(const char* data, size_t len)  { postPendingJson(pendingBaseColorsJson, data, len); }
 void postPendingBrightness(int8_t level) { pendingBrightness = level; }
+void postPendingApplyEffectiveBrightness() { pendingApplyEffectiveBrightness = true; }
 void postPendingKnockout(uint8_t pixel, uint8_t brightness) {
   portENTER_CRITICAL(&pendingMux);
   pendingKnockout.pixel = pixel;
@@ -129,13 +134,10 @@ void postPendingRemoteOpJson(const char* data, size_t len) {
   portEXIT_CRITICAL(&pendingMux);
 }
 
-void postPendingMqttOpJson(const char* data, size_t len) {
-  if (len > MAX_PENDING_OP_JSON) return;
-  portENTER_CRITICAL(&pendingMux);
-  pendingMqttOpJson.length = static_cast<uint16_t>(len);
-  memcpy(pendingMqttOpJson.json, data, len);
-  pendingMqttOpJson.valid = true;
-  portEXIT_CRITICAL(&pendingMux);
+void postPendingMqttOpJson(const char* /*data*/, size_t /*len*/) {
+  // MQTT was removed in the home-mode simplification — kept as a no-op so
+  // the BLE-side / remote-op dispatchers that still reference this symbol
+  // link cleanly. Drop the payload on the floor.
 }
 
 // Apply a remote-op payload locally (either from BLE remoteOp drain when
@@ -180,12 +182,8 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len) {
     serializeJson(doc, out);
     postPendingExpressionOpJson(out.data(), out.size());
 
-  } else if (strcmp(ch, "mqtt") == 0) {
-    doc.remove("char");
-    std::string out;
-    serializeJson(doc, out);
-    postPendingMqttOpJson(out.data(), out.size());
   }
+  // (MQTT forwarding removed.)
   // settings forwarding is intentionally deferred — it triggers a remote
   // reboot whose UX over the grid needs more thought. Follow-up plan.
 }
@@ -202,13 +200,20 @@ lamp::FadeOutBehavior baseFadeOutBehavior;
 lamp::KnockoutBehavior baseKnockoutBehavior;
 lamp::ExpressionManager expressionManager;
 lamp::Config config;
-lamp::MqttComponent mqtt;
 lamp::ShowReceiver showReceiver;
 lamp::ShowBehavior shadeShowBehavior;
 lamp::ShowBehavior baseShowBehavior;
 
+// Forward decl — defined later, alongside effectiveBrightness which
+// shares the same gate. initBehaviors uses it to seed compositor.begin.
+static bool calculateEffectiveHomeMode();
+
 void initBehaviors() {
   shadeSocialBehavior = lamp::SocialBehavior(&shade, 1200);
+  // Pause social greetings when the lamp is in home mode — home mode is
+  // the user's "I'm home, calm down" mode. Compositor gates this via
+  // the homeMode flag, kept in sync by reapplyHomeModeState().
+  shadeSocialBehavior.allowedInHomeMode = false;
   shadeConfiguratorBehavior = lamp::ConfiguratorBehavior(&shade, 120);
   shadeConfiguratorBehavior.colors = shade.defaultColors;
   baseConfiguratorBehavior = lamp::ConfiguratorBehavior(&base, 120);
@@ -253,7 +258,7 @@ void initBehaviors() {
   allBehaviors.push_back(&baseFadeOutBehavior);
   allBehaviors.push_back(&shadeFadeOutBehavior);
 
-  compositor.begin(allBehaviors, {&shade, &base}, /*homeMode=*/false);
+  compositor.begin(allBehaviors, {&shade, &base}, calculateEffectiveHomeMode());
   // Record where the initial expression behaviors end so runtime adds insert
   // before higher-priority behaviors (social, configurator, fade-out).
   compositor.setExpressionBandEnd(exprBehaviors.size());
@@ -355,15 +360,14 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
 
 extern void lamp_register_panic_handler();
 
-// Effective brightness depends on whether we're in home mode (joined to the
-// configured WiFi network). Falls back to the regular lamp brightness while
-// the BLE client has paused WiFi or no SSID is configured.
+// Effective brightness, mirroring calculateEffectiveHomeMode() so the
+// brightness value and the compositor's homeMode gate stay in lockstep.
+// See calculateEffectiveHomeMode below for the rule.
+static uint8_t effectiveBrightness();
+static bool calculateEffectiveHomeMode();
 static uint8_t effectiveBrightness() {
-  if (wifi::isConnected() && !config.homeMode.ssid.empty() &&
-      wifi::currentSsid() == config.homeMode.ssid) {
-    return config.homeMode.brightness;
-  }
-  return config.lamp.brightness;
+  return calculateEffectiveHomeMode() ? config.homeMode.brightness
+                                      : config.lamp.brightness;
 }
 
 static void applyEffectiveBrightness() {
@@ -372,8 +376,64 @@ static void applyEffectiveBrightness() {
   if (baseStrip) baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
 }
 
-static void onWifiStateChanged() {
+// Persist current in-memory config to NVS WITHOUT triggering a reboot.
+// Used for small config updates (wifi creds via wifi_op) that need
+// durability but shouldn't disrupt the active BLE session or restart
+// behaviors. Mirrors the settings_blob save path but omits the
+// fadeOutRebootRequested signal.
+static void persistConfigToNvs() {
+  JsonDocument doc = config.asJsonDocument();
+  String json;
+  serializeJson(doc, json);
+  prefs.begin("lamp", false);
+  prefs.putString("cfg", json.c_str());
+  prefs.end();
+#ifdef LAMP_DEBUG
+  Serial.printf("[loop] persistConfigToNvs wrote %u bytes\n",
+                (unsigned)json.length());
+#endif
+}
+
+// Two regimes:
+//   1. BT client connected (the app is the "configurator"): home mode is
+//      forced OFF unless the user is on the Home Mode page, in which case
+//      it's forced ON so they can preview brightness / behavior changes.
+//      The flag is set by the app via CHAR_HOME_MODE_FOCUS and cleared on
+//      BT disconnect.
+//   2. No BT client connected: presence-based. Home mode iff the user
+//      has enabled it AND has a saved SSID AND the most recent wifi scan
+//      saw that SSID nearby. The lamp never associates — just sniffs
+//      beacons. No password ever leaves the lamp.
+static bool calculateEffectiveHomeMode() {
+  if (ble_control::isClientConnected()) {
+    return ble_control::isHomeModePageActive();
+  }
+  return config.homeMode.enabled
+      && !config.homeMode.ssid.empty()
+      && wifi::homeSsidVisible(config.homeMode.ssid);
+}
+
+// Single funnel for "home mode state may have changed" — keeps the
+// compositor's behavior gate and the strip brightness in lockstep so
+// the lamp transitions cleanly when preview flips or WiFi associates /
+// disassociates.
+static void reapplyHomeModeState() {
+  compositor.setHomeMode(calculateEffectiveHomeMode());
   applyEffectiveBrightness();
+}
+
+static void onWifiStateChanged() {
+  // This callback fires from Arduino-ESP32's WiFi event task — NOT Core 1.
+  // Calling into compositor.setHomeMode / shadeStrip->setBrightness from
+  // here races Core 1's compositor.tick + frame_buffer.flush, corrupting
+  // the NeoPixel byte buffer and the behavior vector. Symptom: lamp
+  // crash-loops with rst:0x3 (SW_RESET) + _invalid_pc_placeholder on
+  // every BT connect (because BT-connect triggers wifi::disconnect,
+  // which fires this callback).
+  //
+  // Safe path: post the pending flag and let Core 1's loop drain call
+  // reapplyHomeModeState on its own thread.
+  postPendingApplyEffectiveBrightness();
   ble_control::notifyWifiState();
 }
 
@@ -399,15 +459,11 @@ void setup() {
   base.begin(lamp::buildGradientWithStops(config.base.px, config.base.colors), config.base.px, baseStrip);
   initBehaviors();
 
-  // Kick off WiFi STA if home mode is configured. BLE onConnect/onDisconnect
-  // pauses/resumes WiFi for coexistence — this is the boot-time entry.
-  if (!config.homeMode.ssid.empty()) {
-    wifi::connect(config.homeMode.ssid, config.homeMode.password);
-  } else {
-    // Not joining a home AP — pin the radio to the grid channel so peers can
-    // hear our HELLOs.
-    wifi::ensureGridChannel();
-  }
+  // Presence-only home mode — the lamp never associates to an AP. The
+  // radio sits on LAMP_ESPNOW_CHANNEL (set in wifi::begin) for grid
+  // peers, and a periodic background scan in wifi::tick checks whether
+  // the user's saved home SSID is currently visible.
+  wifi::ensureGridChannel();
 
   // Bring up ESP-NOW grid presence (HELLO + COLORS). Independent of home
   // WiFi — runs on whatever channel the radio is on. See lamp_protocol.hpp.
@@ -423,27 +479,9 @@ void setup() {
     portEXIT_CRITICAL(&pendingMux);
   });
 
-  // MQTT / Home Assistant integration. No-op unless config.mqtt.enabled and
-  // WiFi is up. brightness callback writes the same path the BLE brightness
-  // drain uses; power callback toggles to 0 (off) without losing the
-  // user's brightness setting.
-  mqtt.begin(
-      &config,
-      // brightness callback (HA slider -> lamp)
-      [](uint8_t level) {
-        if (level > 100) level = 100;
-        config.lamp.brightness = level;
-        shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-        baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-        applyEffectiveBrightness();
-        ble_control::notifyLampSection();
-      },
-      // power callback (HA on/off -> lamp)
-      [](bool on) {
-        uint8_t level = on ? config.lamp.brightness : 0;
-        if (shadeStrip) shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-        if (baseStrip)  baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-      });
+  // (MQTT / Home Assistant integration removed in the home-mode
+  // simplification — see plan. Re-add if the user wants smart-home
+  // control later.)
 };
 
 void loop() {
@@ -451,24 +489,68 @@ void loop() {
   // (JsonDocument parse, std::vector, gradient construction) happens here,
   // NOT in BLE callbacks on Core 0.
 
+  // Reflect mesh state on the manufacturer-data advertisement so the phone
+  // app's scanner can light a "mesh" dot beside this lamp.
+  //
+  // "On mesh" = we've heard at least one other lamp on BLE adv in the last
+  // 60 s. BLE-reachable is the most reliable proxy — it's the same signal
+  // SocialBehavior uses to greet neighbours and doesn't require Wi-Fi STA
+  // to be configured (ESP-NOW peer-to-peer falls back to channel 1 when
+  // STA isn't up, which doesn't reliably match other lamps).
+  //
+  // The setMeshState helper is idempotent: it only re-applies
+  // setManufacturerData when the flag flips, so calling it every loop
+  // tick is fine — once we're past the post-boot stabilisation window.
+  //
+  // Skip the first 5 seconds after boot. Otherwise the very first
+  // loop tick flips s_meshStateInitialized false→true and rebuilds
+  // the advertisement packet via setAdvertisementData, and the first
+  // HELLO from a neighbour 1-2 sec later flips meshFlag 0→1 and
+  // rebuilds it AGAIN. Both rebuilds momentarily stop + restart
+  // advertising on the BLE host task, which destabilises any phone
+  // that's mid-connection — the exact failure pattern the AddLamp
+  // verify reconnect hits about 5 s post-reboot.
+  if (millis() >= 5000) {
+    bt.setMeshState(!lamp::nearbyLamps.getReachableViaBle(60000).empty());
+  }
+
+  if (pendingApplyEffectiveBrightness) {
+    pendingApplyEffectiveBrightness = false;
+    // Preview enter/exit (cmd 0x01/0x00) and live home-brightness writes
+    // (cmd 0x02) all funnel here — refresh the compositor homeMode gate
+    // and the strip brightness together.
+    reapplyHomeModeState();
+  }
+
   if (pendingBrightness >= 0) {
     uint8_t level = static_cast<uint8_t>(pendingBrightness);
     pendingBrightness = -1;
 #ifdef LAMP_DEBUG
-    Serial.printf("[loop] drain brightness=%u\n", (unsigned)level);
+    Serial.printf("[drain] brightness=%u t_us=%lu home_focus=%d\n",
+                  (unsigned)level, (unsigned long)micros(),
+                  (int)ble_control::isHomeModePageActive());
 #endif
-    config.lamp.brightness = level;
+    // Route the write to home.brightness vs lamp.brightness based on
+    // which page the app is on. When the user is configuring home mode
+    // we want the slider to set the home value; otherwise it sets the
+    // regular lamp brightness.
+    if (ble_control::isHomeModePageActive()) {
+      config.homeMode.brightness = level;
+    } else {
+      config.lamp.brightness = level;
+    }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    // Apply the brightness the user wrote directly — they're either editing
-    // regular brightness, or live-previewing home-mode brightness (WiFi is
-    // paused while BLE is connected so effectiveBrightness would resolve to
-    // the regular path anyway, but trust the wire value here).
-    if (shadeStrip) shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-    if (baseStrip)  baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-    // Mirror to HA so the dashboard stays in sync (no-op unless MQTT is
-    // enabled, configured, and connected).
-    mqtt.publishState();
+    // Apply the wire value directly — the user just wrote `level`, so
+    // by definition that IS the effective brightness right now. Skipping
+    // the effectiveBrightness() lookup keeps this hot path off the
+    // wifi::homeSsidVisible string-compare loop, matching the pre-
+    // simplification behavior (commit 7023f29) where this drain was
+    // smooth under continuous slider drag.
+    if (shadeStrip) shadeStrip->setBrightness(
+        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
+    if (baseStrip)  baseStrip->setBrightness(
+        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
   }
 
   if (pendingShadeColorsJson.valid) {
@@ -482,7 +564,8 @@ void loop() {
     buf[len] = '\0';
 
 #ifdef LAMP_DEBUG
-    Serial.printf("[loop] drain shadeColors len=%u\n", (unsigned)len);
+    Serial.printf("[drain] shadeColors len=%u t_us=%lu\n",
+                  (unsigned)len, (unsigned long)micros());
 #endif
 
     JsonDocument doc;
@@ -512,7 +595,8 @@ void loop() {
     buf[len] = '\0';
 
 #ifdef LAMP_DEBUG
-    Serial.printf("[loop] drain baseColors len=%u\n", (unsigned)len);
+    Serial.printf("[drain] baseColors len=%u t_us=%lu\n",
+                  (unsigned)len, (unsigned long)micros());
 #endif
 
     JsonDocument doc;
@@ -580,7 +664,12 @@ void loop() {
           if (v.is<uint32_t>()) cfg.setParameter(key, v.as<uint32_t>());
           else if (v.is<int>()) cfg.setParameter(key, static_cast<uint32_t>(v.as<int>()));
         }
-        for (JsonVariant cv : entry["colors"].as<JsonArray>()) {
+        // Store the JsonArray in a local so iteration doesn't reference a
+        // temporary that's destroyed at the end of the full expression
+        // (ArduinoJson 7.4.x tightened lifetime semantics on chained
+        // calls; before this the same code happened to work).
+        JsonArray colorsArr = entry["colors"].as<JsonArray>();
+        for (JsonVariant cv : colorsArr) {
           cfg.colors.push_back(lamp::hexStringToColor(cv));
         }
         if (!cfg.type.empty()) {
@@ -652,58 +741,28 @@ void loop() {
       const char* op = doc["op"].as<const char*>();
       if (op && strcmp(op, "scan") == 0) {
         wifi::startScan();
-      } else if (op && strcmp(op, "connect") == 0) {
+      } else if (op && strcmp(op, "setHomeSsid") == 0) {
+        // Presence-only home mode — store the SSID the user chose from a
+        // scan. No password. No association. The lamp will check whether
+        // this SSID is visible in subsequent background scans to decide
+        // whether to apply home mode (see calculateEffectiveHomeMode).
         std::string ssid(doc["ssid"] | "");
-        std::string password(doc["password"] | "");
         if (!ssid.empty()) {
           config.homeMode.ssid = ssid;
-          config.homeMode.password = password;
-          wifi::connect(ssid, password);
+          config.homeMode.enabled = true;
+          persistConfigToNvs();
+          postPendingApplyEffectiveBrightness();
         }
       } else if (op && strcmp(op, "forget") == 0) {
         config.homeMode.ssid.clear();
-        config.homeMode.password.clear();
+        persistConfigToNvs();
         wifi::forget();
+        postPendingApplyEffectiveBrightness();
       }
     }
   }
 
-  if (pendingMqttOpJson.valid) {
-    char buf[MAX_PENDING_OP_JSON + 1];
-    uint16_t len;
-    portENTER_CRITICAL(&pendingMux);
-    len = pendingMqttOpJson.length;
-    memcpy(buf, pendingMqttOpJson.json, len);
-    pendingMqttOpJson.valid = false;
-    portEXIT_CRITICAL(&pendingMux);
-    buf[len] = '\0';
-
-#ifdef LAMP_DEBUG
-    Serial.printf("[loop] drain mqttOp len=%u\n", (unsigned)len);
-#endif
-
-    JsonDocument doc;
-    if (deserializeJson(doc, buf) == DeserializationError::Ok) {
-      const char* op = doc["op"].as<const char*>();
-      if (op && strcmp(op, "update") == 0) {
-        if (doc["enabled"].is<bool>())       config.mqtt.enabled    = doc["enabled"].as<bool>();
-        if (doc["brokerHost"].is<const char*>()) config.mqtt.brokerHost = std::string(doc["brokerHost"].as<const char*>());
-        if (doc["brokerPort"].is<int>())     config.mqtt.brokerPort = doc["brokerPort"].as<uint16_t>();
-        if (doc["username"].is<const char*>())   config.mqtt.username = std::string(doc["username"].as<const char*>());
-        // Password: "********" sentinel means "preserve stored value".
-        if (doc["password"].is<const char*>()) {
-          std::string p = doc["password"].as<const char*>();
-          if (p != "********") {
-            config.mqtt.password = p;
-          }
-        }
-        if (doc["topicPrefix"].is<const char*>()) config.mqtt.topicPrefix = std::string(doc["topicPrefix"].as<const char*>());
-
-        mqtt.applyConfig();
-        ble_control::notifyMqttSection();
-      }
-    }
-  }
+  // (MQTT op drain removed.)
 
   // Drain inbound ESP-NOW CONTROL_OP (deferred from ShowReceiver's WiFi
   // task) — JSON parse + local dispatch.
@@ -777,7 +836,6 @@ void loop() {
   }
 
   wifi::tick();
-  mqtt.tick();
   showReceiver.tick();
 
   compositor.tick();

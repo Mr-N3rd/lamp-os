@@ -45,12 +45,13 @@ void main() {
     expect(s.colors.single.w, 0xFF);
   });
 
-  test('HomeSection parses ssid + brightness', () {
+  test('HomeSection parses ssid + brightness (legacy password field ignored)',
+      () {
+    // Legacy lamps wrote a "password" field — we silently ignore it now.
     final s = HomeSection.fromJson(jsonDecode(
       '{"ssid":"home","password":"********","brightness":40}',
     ) as Map<String, dynamic>);
     expect(s.ssid, 'home');
-    expect(s.password, '********');
     expect(s.brightness, 40);
   });
 
@@ -58,24 +59,6 @@ void main() {
     final s = HomeSection.fromJson(<String, dynamic>{});
     expect(s.ssid, '');
     expect(s.brightness, 60);
-  });
-
-  test('MqttSection parses every field', () {
-    final s = MqttSection.fromJson(jsonDecode(
-      '{"enabled":true,"brokerHost":"ha","brokerPort":1884,'
-      '"username":"u","password":"********","topicPrefix":"x"}',
-    ) as Map<String, dynamic>);
-    expect(s.enabled, isTrue);
-    expect(s.brokerHost, 'ha');
-    expect(s.brokerPort, 1884);
-    expect(s.username, 'u');
-    expect(s.topicPrefix, 'x');
-  });
-
-  test('MqttSection defaults to disabled with the firmware default port', () {
-    final s = MqttSection.fromJson(<String, dynamic>{});
-    expect(s.enabled, isFalse);
-    expect(s.brokerPort, 1883);
   });
 
   test('ExpressionConfig round-trips through toJson + fromJson', () {

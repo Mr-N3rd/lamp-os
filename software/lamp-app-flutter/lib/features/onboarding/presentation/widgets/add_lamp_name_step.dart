@@ -5,8 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/brand_colors.dart';
 import '../../application/add_lamp_notifier.dart';
 
-const _suggestions = ['jacko', 'melonie', 'bowery'];
-
 class AddLampNameStep extends ConsumerStatefulWidget {
   const AddLampNameStep({super.key});
 
@@ -56,19 +54,6 @@ class _AddLampNameStepState extends ConsumerState<AddLampNameStep> {
               labelText: 'Lamp name',
               border: OutlineInputBorder(),
             ),
-          ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 8,
-            children: _suggestions.map((s) {
-              return ActionChip(
-                label: Text(s),
-                onPressed: () {
-                  _controller.text = s;
-                  notifier.setName(s);
-                },
-              );
-            }).toList(),
           ),
           const Spacer(),
           Row(

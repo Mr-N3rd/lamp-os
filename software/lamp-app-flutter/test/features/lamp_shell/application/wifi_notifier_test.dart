@@ -79,14 +79,14 @@ void main() {
     expect(jsonDecode(utf8.decode(plain)), {'op': 'scan'});
   });
 
-  test('connect() writes {op:connect, ssid, password}', () async {
+  test('setHomeSsid() writes {op:setHomeSsid, ssid}', () async {
     final c = await _seeded('{"state":"idle"}');
     addTearDown(c.dispose);
     await c.read(wifiNotifierProvider(_devId).future);
 
     await c
         .read(wifiNotifierProvider(_devId).notifier)
-        .connect('home', 'sekret');
+        .setHomeSsid('home');
 
     final ble = c.read(bleClientProvider);
     final written = await ble.read(
@@ -98,7 +98,7 @@ void main() {
         saltUuid16: uuidSaltLE16(BleUuids.wifiOp),
         charShortName: 'wifiOp');
     expect(jsonDecode(utf8.decode(plain)),
-        {'op': 'connect', 'ssid': 'home', 'password': 'sekret'});
+        {'op': 'setHomeSsid', 'ssid': 'home'});
   });
 
   test('forget() writes {op:forget}', () async {

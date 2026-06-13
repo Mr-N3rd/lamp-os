@@ -46,7 +46,16 @@ class _SetupBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final n = ref.read(controlNotifierProvider(lampId).notifier);
-    final homeOn = state.home.ssid.isNotEmpty;
+    final hasSsid = state.home.ssid.isNotEmpty;
+    final enabled = state.home.enabled;
+    final String homeSubtitle;
+    if (enabled) {
+      homeSubtitle = hasSsid
+          ? '${state.home.ssid} · ${state.home.brightness}%'
+          : 'On · not configured';
+    } else {
+      homeSubtitle = hasSsid ? 'Off · ${state.home.ssid} saved' : 'Off';
+    }
     return ListView(
       padding: const EdgeInsets.only(top: 8, bottom: 32),
       children: [
@@ -59,30 +68,22 @@ class _SetupBody extends ConsumerWidget {
         ),
         const SettingsGroupHeading('Connectivity'),
         SettingsRow(
-          icon: Icons.wifi,
-          title: 'Home Wi-Fi',
-          subtitle: homeOn ? state.home.ssid : 'Not connected',
+          icon: Icons.home_outlined,
+          title: 'Home Mode',
+          subtitle: homeSubtitle,
           trailing: Switch(
-            value: homeOn,
-            // Tapping the toggle directly when off drills in to pick a
-            // network; turning the toggle off clears the saved SSID.
+            value: enabled,
+            // Soft toggle: flips the enabled flag without wiping the saved
+            // SSID/password. Destructive "Forget network" lives inside the
+            // Home Mode pane. First-time on (no SSID yet): drill into the
+            // pane so the user can pick a network.
             onChanged: (v) {
-              if (!v) {
-                n.setHomeSsid('');
-                n.setHomePassword('');
-              } else {
-                context.push(AppRoutes.homeWifi(lampId));
+              n.setHomeEnabled(v);
+              if (v && !hasSsid) {
+                context.push(AppRoutes.homeMode(lampId));
               }
             },
           ),
-          onTap: () => context.push(AppRoutes.homeWifi(lampId)),
-        ),
-        SettingsRow(
-          icon: Icons.home_outlined,
-          title: 'Home Mode',
-          subtitle: homeOn
-              ? 'Brightness ${state.home.brightness}%'
-              : 'Requires home Wi-Fi',
           onTap: () => context.push(AppRoutes.homeMode(lampId)),
         ),
         const SettingsGroupHeading('LEDs'),

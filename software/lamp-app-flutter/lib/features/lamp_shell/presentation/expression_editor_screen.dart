@@ -109,6 +109,63 @@ class _ExpressionEditorScreenState
         parameters: p,
       );
 
+  /// Open the color picker with live preview wired to the lamp. While
+  /// the user drags R/G/B sliders, the picked color streams through
+  /// `setShadeColor` / `setBaseColors` (chosen by the expression's
+  /// target) so the lamp tracks visibly. On close — confirm OR cancel
+  /// — restore the lamp's main shade/base palette so the picker session
+  /// doesn't permanently contaminate it. Returns the user's picked
+  /// color, or null on cancel.
+  Future<LampColor?> _pickColorLive(
+    ControlState state,
+    ControlNotifier notifier,
+    LampColor initial,
+  ) async {
+    // Pick exactly ONE strip to drive the live preview. Writing to both
+    // shade AND base on every slider tick doubles BLE traffic (two
+    // WriteCoalescers, each ~33 writes/sec) and saturates the link past
+    // its ~20 writes/sec capacity at the typical ~49 ms connection
+    // interval — the user sees a laggy slider. One coalescer is all the
+    // BLE link can sustain smoothly. Route by target so the lamp shows
+    // the color on the strip the expression actually paints to (base-only
+    // expressions preview on base; everything else on shade).
+    final t = widget.targetKey;
+    final previewBase = (t == 2);
+    final originalShade = state.shade.colors;
+    final originalBase = state.base.colors;
+
+    // Stop any active expression test so the configurator is back in
+    // charge and the picker's writes are visible. Tests disable the
+    // configurator behavior, which would otherwise let the expression
+    // keep painting over our live writes.
+    notifier.completeExpressionTest();
+
+    void writeLive(LampColor c) {
+      if (previewBase) {
+        notifier.setBaseColors([c]);
+      } else {
+        notifier.setShadeColor(c);
+      }
+    }
+
+    final picked = await showColorPickerSheet(
+      context,
+      initial: initial,
+      onLive: writeLive,
+    );
+
+    // Restore whichever strip we drove regardless of confirm/cancel.
+    // The picker's writes were for preview only; the expression's
+    // palette is what should actually change (handled by the caller).
+    if (previewBase) {
+      notifier.setBaseColors(originalBase);
+    } else if (originalShade.isNotEmpty) {
+      notifier.setShadeColor(originalShade.first);
+    }
+
+    return picked;
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(controlNotifierProvider(widget.lampId));
@@ -132,30 +189,10 @@ class _ExpressionEditorScreenState
         title: Text(_existsInState(async.value)
             ? (meta?.name ?? widget.typeKey)
             : 'New ${meta?.name ?? widget.typeKey}'),
-        actions: [
-          // Context action in the AppBar — `Test` is the only one-shot,
-          // non-destructive action specific to this screen. Pattern: page-
-          // specific test/run actions live here; Save and Delete live in
-          // the page body so they aren't easy to mistap.
-          if (async.value != null)
-            _AppBarTestAction(
-              onPressed: () async {
-                final draft = ref.read(expressionDraftProvider(
-                    widget.lampId, widget.typeKey, widget.targetKey));
-                final notifier =
-                    ref.read(controlNotifierProvider(widget.lampId).notifier);
-                await notifier.testExpression(ExpressionConfig(
-                  type: draft.type,
-                  enabled: true,
-                  colors: draft.colors,
-                  intervalMin: draft.intervalMin,
-                  intervalMax: draft.intervalMax,
-                  target: draft.target,
-                  parameters: draft.parameters,
-                ));
-              },
-            ),
-        ],
+        // No Test action here — testExpression activates whatever is
+        // *saved* firmware-side, which would be misleading on this
+        // editing screen where the user expects to preview their draft.
+        // Workflow: edit → Save → preview from the expressions list.
       ),
       body: async.when(
         loading: () => ConnectingView(deviceId: widget.lampId),
@@ -193,27 +230,28 @@ class _ExpressionEditorScreenState
                     _ColorChip(
                       color: draft.colors[i],
                       onEdit: () async {
-                        final picked = await showColorPickerSheet(
-                          context,
-                          initial: draft.colors[i],
-                        );
+                        final picked = await _pickColorLive(
+                            state, notifier, draft.colors[i]);
                         if (picked == null) return;
                         final next = [...draft.colors];
                         next[i] = picked;
                         _updateDraft((d) => _withColors(d, next));
                       },
-                      onRemove: () => _updateDraft(
-                          (d) => _withColors(d, [...d.colors]..removeAt(i))),
+                      // Last swatch is non-removable so the palette can't
+                      // end up empty (firmware would have nothing to draw).
+                      onRemove: draft.colors.length > 1
+                          ? () => _updateDraft((d) =>
+                              _withColors(d, [...d.colors]..removeAt(i)))
+                          : null,
                     ),
                   TextButton.icon(
                     icon: const Icon(Icons.add, size: 18),
                     label: const Text('Add color'),
                     onPressed: () async {
-                      final picked = await showColorPickerSheet(
-                        context,
-                        initial:
-                            const LampColor(r: 0xFF, g: 0xFF, b: 0xFF, w: 0),
-                      );
+                      final picked = await _pickColorLive(
+                          state,
+                          notifier,
+                          const LampColor(r: 0xFF, g: 0xFF, b: 0xFF, w: 0));
                       if (picked == null) return;
                       _updateDraft((d) => _withColors(d, [...d.colors, picked]));
                     },
@@ -371,31 +409,6 @@ class _Header extends StatelessWidget {
   }
 }
 
-/// Pill-shaped, AppBar-tinted "Test" action. Placed in `AppBar.actions` per
-/// the agreed pattern: page-specific, non-destructive one-shot actions live
-/// in the title area; Save and Delete sit in the page body where they're
-/// harder to mistap.
-class _AppBarTestAction extends StatelessWidget {
-  const _AppBarTestAction({required this.onPressed});
-  final Future<void> Function() onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      child: TextButton.icon(
-        onPressed: onPressed,
-        icon: const Icon(Icons.play_arrow, size: 18),
-        label: const Text('Test'),
-        style: TextButton.styleFrom(
-          foregroundColor: BrandColors.auroraBlue,
-          shape: const StadiumBorder(),
-        ),
-      ),
-    );
-  }
-}
-
 /// Two-slider Frequency + Predictability control for an expression's
 /// random trigger interval.
 ///
@@ -537,7 +550,10 @@ class _ColorChip extends StatelessWidget {
 
   final LampColor color;
   final VoidCallback onEdit;
-  final VoidCallback onRemove;
+
+  /// Null when this swatch is the last one in the palette — the X button
+  /// hides entirely so the user can't end up with an empty colors list.
+  final VoidCallback? onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -548,31 +564,32 @@ class _ColorChip extends StatelessWidget {
           onTap: onEdit,
           child: LampColorSwatch(color: color, size: 40),
         ),
-        Positioned(
-          top: -6,
-          right: -6,
-          child: Semantics(
-            label: 'Remove color',
-            button: true,
-            child: InkWell(
-              onTap: onRemove,
-              customBorder: const CircleBorder(),
-              child: Container(
-                width: 18,
-                height: 18,
-                decoration: const BoxDecoration(
-                  color: BrandColors.ashGrey,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.close,
-                  size: 12,
-                  color: BrandColors.lampWhite,
+        if (onRemove != null)
+          Positioned(
+            top: -6,
+            right: -6,
+            child: Semantics(
+              label: 'Remove color',
+              button: true,
+              child: InkWell(
+                onTap: onRemove,
+                customBorder: const CircleBorder(),
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: const BoxDecoration(
+                    color: BrandColors.ashGrey,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.close,
+                    size: 12,
+                    color: BrandColors.lampWhite,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
       ],
     );
   }

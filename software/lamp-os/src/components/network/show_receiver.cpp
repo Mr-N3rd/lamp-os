@@ -116,12 +116,6 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, si
         h.sourceMac,
         Color(h.base[0],  h.base[1],  h.base[2],  h.base[3]),
         Color(h.shade[0], h.shade[1], h.shade[2], h.shade[3]));
-#ifdef LAMP_DEBUG
-    Serial.printf("[show] HELLO recv %.*s mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                  (int)h.nameLen, h.name,
-                  h.sourceMac[0], h.sourceMac[1], h.sourceMac[2],
-                  h.sourceMac[3], h.sourceMac[4], h.sourceMac[5]);
-#endif
     link_.broadcast(data, len);
   } else if (msgType == lamp_protocol::MSG_CONTROL_OP) {
     lamp_protocol::ParsedControlOp op;
@@ -168,10 +162,6 @@ void ShowReceiver::emitHello() {
                                        shade, base, name.data(), nameLen);
   if (n) {
     link_.broadcast(buf, n);
-#ifdef LAMP_DEBUG
-    Serial.printf("[show] HELLO emit seq=%u name=%s\n",
-                  (unsigned)(helloSeq_ - 1), name.c_str());
-#endif
   }
 }
 

@@ -13,14 +13,48 @@ class AddLampPasswordStep extends ConsumerStatefulWidget {
       _AddLampPasswordStepState();
 }
 
+Future<void> _confirmSkip(BuildContext context, AddLampNotifier notifier) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: BrandColors.midnightBlack,
+      title: const Text('Adopt without a password?',
+          style: TextStyle(color: BrandColors.lampWhite)),
+      content: const Text(
+        'Not recommended. Anyone within Bluetooth range will be able to '
+        'control this lamp. You can set a password later from the lamp\'s '
+        'Setup tab.',
+        style: TextStyle(color: BrandColors.fogGrey),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+              backgroundColor: BrandColors.slateGrey),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Skip anyway'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  notifier.setPassword('');
+  await notifier.submit();
+}
+
 class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
   late final TextEditingController _pwd = TextEditingController(
     text: ref.read(addLampNotifierProvider).password,
   );
+  final _confirm = TextEditingController();
 
   @override
   void dispose() {
     _pwd.dispose();
+    _confirm.dispose();
     super.dispose();
   }
 
@@ -28,7 +62,10 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
   Widget build(BuildContext context) {
     final notifier = ref.read(addLampNotifierProvider.notifier);
     final state = ref.watch(addLampNotifierProvider);
-    final canContinue = state.password.isNotEmpty;
+    final showMismatch =
+        _confirm.text.isNotEmpty && _confirm.text != state.password;
+    final canContinue = state.password.isNotEmpty &&
+        _confirm.text == state.password;
     return Padding(
       padding: const EdgeInsets.all(24),
       // SizedBox.expand fills the Padding's width so `crossAxisAlignment
@@ -68,10 +105,24 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
             controller: _pwd,
             autofocus: true,
             obscureText: true,
-            onChanged: notifier.setPassword,
+            onChanged: (v) {
+              notifier.setPassword(v);
+              setState(() {}); // re-evaluate the mismatch banner + button
+            },
             decoration: const InputDecoration(
               labelText: 'Lamp password',
               border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _confirm,
+            obscureText: true,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              labelText: 'Confirm password',
+              border: const OutlineInputBorder(),
+              errorText: showMismatch ? "Doesn't match" : null,
             ),
           ),
           const Spacer(),
@@ -93,6 +144,16 @@ class _AddLampPasswordStepState extends ConsumerState<AddLampPasswordStep> {
                 child: const Text('Back'),
               ),
               const Spacer(),
+              TextButton(
+                onPressed: (state.status != AddLampStatus.working &&
+                        state.step != AddLampStep.verifying)
+                    ? () => _confirmSkip(context, notifier)
+                    : null,
+                style: TextButton.styleFrom(
+                    foregroundColor: BrandColors.slateGrey),
+                child: const Text('Skip'),
+              ),
+              const SizedBox(width: 8),
               FilledButton(
                 onPressed: (canContinue &&
                         state.status != AddLampStatus.working &&

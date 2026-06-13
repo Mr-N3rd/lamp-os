@@ -27,7 +27,7 @@ void main() {
       overrides: [bleClientProvider.overrideWithValue(ble)],
     );
     addTearDown(c.dispose);
-    await c.read(addLampNotifierProvider.notifier).select('dev1');
+    c.read(addLampNotifierProvider.notifier).select('dev1');
     final s = c.read(addLampNotifierProvider);
     expect(s.deviceId, 'dev1');
     expect(s.step, AddLampStep.name);
@@ -68,7 +68,7 @@ void main() {
     await c.read(activeLampNotifierProvider.future);
 
     final n = c.read(addLampNotifierProvider.notifier);
-    await n.select('dev1');
+    n.select('dev1');
     n.setName('jacko');
     n.setPassword('secret');
     await n.submit();
@@ -109,7 +109,7 @@ void main() {
     await c.read(activeLampNotifierProvider.future);
 
     final n = c.read(addLampNotifierProvider.notifier);
-    await n.select('dev1');
+    n.select('dev1');
     n.setName('jacko');
     n.setPassword('wrong');
     await n.submit();
@@ -137,7 +137,7 @@ void main() {
     await c.read(activeLampNotifierProvider.future);
 
     final n = c.read(addLampNotifierProvider.notifier);
-    await n.select('dev1');
+    n.select('dev1');
     n.setName('jacko');
     n.setPassword('secret');
     await n.submit();

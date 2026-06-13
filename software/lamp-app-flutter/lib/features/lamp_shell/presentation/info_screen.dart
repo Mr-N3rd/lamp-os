@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/routing/routes.dart';
@@ -160,33 +161,32 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
   }
 }
 
-/// Stylised text logo. Tap target for the secret 5-tap unlock. We don't
-/// ship a vector asset yet — the wordmark is good enough until we drop
-/// `lamplit-logo.svg` into `assets/`.
+/// Lamplit brand mark — the SVG glyph from `assets/lamplit-logo.svg` plus
+/// the "Lamplit Art Society" sub-wordmark. The tap target for the 5-tap
+/// advanced-settings unlock wraps this whole column.
 class _LamplitWordmark extends StatelessWidget {
   const _LamplitWordmark();
 
   @override
   Widget build(BuildContext context) {
-    return const Column(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          'lamplit',
-          style: TextStyle(
-            color: BrandColors.lampWhite,
-            fontSize: 38,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1.2,
-          ),
+        SvgPicture.asset(
+          'assets/lamplit-logo.svg',
+          height: 140,
+          colorFilter: const ColorFilter.mode(
+              BrandColors.lampWhite, BlendMode.srcIn),
+          semanticsLabel: 'Lamplit logo',
         ),
-        SizedBox(height: 2),
-        Text(
-          'ART SOCIETY',
+        const SizedBox(height: 14),
+        const Text(
+          'Lamplit Art Society',
           style: TextStyle(
             color: BrandColors.headerYellow,
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: FontWeight.w600,
-            letterSpacing: 6,
+            letterSpacing: 4,
           ),
         ),
       ],

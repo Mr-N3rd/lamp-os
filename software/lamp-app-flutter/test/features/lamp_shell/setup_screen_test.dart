@@ -77,34 +77,24 @@ void main() {
     expect(find.text('jacko'), findsOneWidget);
   });
 
-  testWidgets('Home Wi-Fi row shows "Not connected" when SSID empty',
-      (tester) async {
+  testWidgets('Home Mode row shows "Off" when SSID empty', (tester) async {
     final c = await _makeContainer();
     addTearDown(c.dispose);
     await tester.pumpWidget(_wrap(c));
     await _pumpToData(tester);
-    expect(find.text('Home Wi-Fi'), findsOneWidget);
-    expect(find.text('Not connected'), findsOneWidget);
+    expect(find.text('Home Mode'), findsOneWidget);
+    expect(find.text('Off'), findsOneWidget);
   });
 
-  testWidgets('Home Wi-Fi row subtitle reflects SSID once set',
+  testWidgets('Home Mode row subtitle reflects SSID + brightness once set',
       (tester) async {
     final c = await _makeContainer(homeSsid: 'home');
     addTearDown(c.dispose);
     await tester.pumpWidget(_wrap(c));
     await _pumpToData(tester);
-    expect(find.text('home'), findsOneWidget);
-  });
-
-  testWidgets('Home Mode row tells the user to set Wi-Fi first when empty',
-      (tester) async {
-    final c = await _makeContainer();
-    addTearDown(c.dispose);
-    await tester.pumpWidget(_wrap(c));
-    await _pumpToData(tester);
-
-    expect(find.text('Home Mode'), findsOneWidget);
-    expect(find.text('Requires home Wi-Fi'), findsOneWidget);
+    // The merged row's subtitle now reads e.g. "home · 60%".
+    expect(find.textContaining('home'), findsWidgets);
+    expect(find.textContaining('%'), findsOneWidget);
   });
 
   testWidgets('Advanced LED row hidden by default', (tester) async {
@@ -154,19 +144,29 @@ void main() {
     );
   });
 
-  testWidgets('toggling Home Wi-Fi switch off clears the SSID',
+  testWidgets(
+      'toggling Home Mode switch off flips enabled but preserves the SSID',
       (tester) async {
     final c = await _makeContainer(homeSsid: 'home');
     addTearDown(c.dispose);
     await tester.pumpWidget(_wrap(c));
     await _pumpToData(tester);
 
+    // With homeSsid: 'home', HomeSection.fromJson defaults enabled=true
+    // (legacy lamps without the `enabled` field migrate to "ssid present
+    // => home mode on"). The switch should reflect that.
+    expect(
+      c.read(controlNotifierProvider(_devId)).value!.home.enabled,
+      isTrue,
+    );
+
     await tester.tap(find.byType(Switch).first);
     await tester.pump();
 
-    expect(
-      c.read(controlNotifierProvider(_devId)).value!.home.ssid,
-      isEmpty,
-    );
+    final home = c.read(controlNotifierProvider(_devId)).value!.home;
+    expect(home.enabled, isFalse);
+    // Soft toggle preserves credentials — Forget Network lives inside the
+    // Home Mode pane.
+    expect(home.ssid, 'home');
   });
 }

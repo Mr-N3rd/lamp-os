@@ -37,7 +37,11 @@ class _LampRow extends ConsumerWidget {
 
   Future<void> _onTap(BuildContext context, WidgetRef ref) async {
     if (lamp.isFactoryDefault) {
-      await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
+      // select() is synchronous — it records the deviceId and advances
+      // to Name without opening a BLE link. The link is opened in
+      // submit() so it doesn't sit idle through the form-fill and
+      // expire under LINK_SUPERVISION_TIMEOUT.
+      ref.read(addLampNotifierProvider.notifier).select(lamp.id);
     } else {
       // No confirm dialog — `add()` sets state.step to `done` and the
       // AddLampShell will swap in the AddLampDoneStep ("X is ready"),

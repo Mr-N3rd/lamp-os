@@ -27,10 +27,9 @@ void main() {
       BleUuids.shadeSection,
       BleUuids.exprSection,
       BleUuids.homeSection,
-      BleUuids.mqttSection,
-      BleUuids.mqttOp,
       BleUuids.nearbyLamps,
       BleUuids.remoteOp,
+      BleUuids.homeModeFocus,
       BleUuids.auth,
     ]) {
       expect(u.length, 36, reason: 'bad length: $u');

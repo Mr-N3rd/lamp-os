@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -279,12 +281,14 @@ class _NearbyLampTile extends ConsumerWidget {
 
   Future<void> _onTap(BuildContext context, WidgetRef ref) async {
     if (lamp.isFactoryDefault) {
-      await ref.read(addLampNotifierProvider.notifier).select(lamp.id);
-      if (context.mounted) {
-        Navigator.pop(context);
-        // `push` not `go` — same reason as the FAB above.
-        GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
-      }
+      // select() is synchronous now (no BLE I/O) — it just records the
+      // deviceId and jumps to Name. The BLE link is opened later by
+      // submit() so it doesn't sit idle through the form-fill and
+      // expire under LINK_SUPERVISION_TIMEOUT.
+      ref.read(addLampNotifierProvider.notifier).select(lamp.id);
+      Navigator.pop(context);
+      // `push` not `go` — same reason as the FAB above.
+      GoRouter.maybeOf(context)?.push(AppRoutes.addLamp);
     } else {
       // Skip the confirm dialog — the AddLampDoneStep ("X is ready") that
       // follows acts as the user-visible confirmation.
@@ -309,7 +313,10 @@ class _NearbyLampTile extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
         child: Row(
           children: [
-            const StatusDot(kind: StatusKind.bluetooth, size: 14),
+            StatusDot(
+              kind: lamp.onMesh ? StatusKind.mesh : StatusKind.bluetooth,
+              size: 14,
+            ),
             const SizedBox(width: 12),
             LampIcon(
               shade: _colorFromInt(lamp.shadeRgb),

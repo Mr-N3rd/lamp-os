@@ -6,7 +6,6 @@ import '../../features/lamp_shell/presentation/add_expression_picker_screen.dart
 import '../../features/lamp_shell/presentation/advanced_leds_screen.dart';
 import '../../features/lamp_shell/presentation/expression_editor_screen.dart';
 import '../../features/lamp_shell/presentation/home_mode_screen.dart';
-import '../../features/lamp_shell/presentation/home_wifi_screen.dart';
 import '../../features/inventory/application/active_lamp_notifier.dart';
 import '../../features/inventory/application/inventory_notifier.dart';
 import '../../features/lamp_shell/presentation/lamp_shell.dart';
@@ -71,10 +70,13 @@ GoRouter appRouter(Ref ref) {
           initialTab: LampTab.info,
         ),
       ),
+      // /setup/wifi was the old Home Wi-Fi pane; its UI was merged into
+      // the Home Mode pane below. Keep the route pointed at HomeModeScreen
+      // so any external bookmarks / deep links continue to resolve.
       GoRoute(
         path: '/lamp/:id/setup/wifi',
         builder: (_, state) =>
-            HomeWifiScreen(lampId: state.pathParameters['id']!),
+            HomeModeScreen(lampId: state.pathParameters['id']!),
       ),
       GoRoute(
         path: '/lamp/:id/setup/home-mode',

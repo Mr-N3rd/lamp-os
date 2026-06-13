@@ -3,7 +3,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 part 'add_lamp_state.freezed.dart';
 part 'add_lamp_state.g.dart';
 
-enum AddLampStep { scan, name, password, verifying, done }
+enum AddLampStep { scan, connecting, name, password, verifying, done }
 
 enum AddLampStatus { idle, working, error }
 

@@ -17,7 +17,6 @@ abstract class ControlState with _$ControlState {
     required BaseSection base,
     required ShadeSection shade,
     required HomeSection home,
-    required MqttSection mqtt,
     required ExpressionsSection expressions,
     @Default(true) bool connected,
     @Default(0) int reconnectAttempt,

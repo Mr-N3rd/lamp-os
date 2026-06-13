@@ -26,14 +26,20 @@ class AddLampNotifier extends _$AddLampNotifier {
   /// attempt to reconnect for the post-claim password-verification probe.
   /// Tests can override this to `Duration.zero`.
   @visibleForTesting
-  static Duration verifyDelay = const Duration(seconds: 5);
+  static Duration verifyDelay = const Duration(seconds: 8);
 
   @override
   AddLampState build() => const AddLampState();
 
-  Future<void> select(String deviceId) async {
-    final ble = ref.read(bleClientProvider);
-    await ble.connect(deviceId);
+  void select(String deviceId) {
+    // Record the picked device + jump to the Name form. We deliberately
+    // do NOT open the BLE link here: the user spends 30+ seconds in the
+    // Name + Password forms, and any idle link gets killed by Android's
+    // LINK_SUPERVISION_TIMEOUT, after which the next direct connect
+    // tends to fail with android-code 133. submit() opens the link
+    // immediately before the setup writes that need it, which is the
+    // same pattern ControlNotifier uses (connect-then-immediately-use,
+    // never sit idle on an open link).
     state = state.copyWith(
       deviceId: deviceId,
       step: AddLampStep.name,
@@ -45,7 +51,8 @@ class AddLampNotifier extends _$AddLampNotifier {
 
   void next() {
     state = state.copyWith(step: switch (state.step) {
-      AddLampStep.scan => AddLampStep.name,
+      AddLampStep.scan => AddLampStep.connecting,
+      AddLampStep.connecting => AddLampStep.name,
       AddLampStep.name => AddLampStep.password,
       AddLampStep.password => AddLampStep.verifying,
       AddLampStep.verifying => AddLampStep.done,
@@ -56,6 +63,7 @@ class AddLampNotifier extends _$AddLampNotifier {
   void previous() {
     state = state.copyWith(step: switch (state.step) {
       AddLampStep.scan => AddLampStep.scan,
+      AddLampStep.connecting => AddLampStep.scan,
       AddLampStep.name => AddLampStep.scan,
       AddLampStep.password => AddLampStep.name,
       AddLampStep.verifying => AddLampStep.password,
@@ -70,6 +78,28 @@ class AddLampNotifier extends _$AddLampNotifier {
       errorMessage: null,
     );
     final ble = ref.read(bleClientProvider);
+
+    // Step 0: open the BLE link. select() deliberately doesn't connect
+    // (avoids LINK_SUPERVISION_TIMEOUT during form-fill), so submit is
+    // where the link gets established. Retry once on the
+    // android-code 133 / deviceIsDisconnected race that Android throws
+    // when the previous link's cleanup is still in flight.
+    Future<void> doConnect() => ble.connect(state.deviceId);
+    try {
+      try {
+        await doConnect();
+      } catch (_) {
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        await doConnect();
+      }
+    } catch (e) {
+      state = state.copyWith(
+        status: AddLampStatus.error,
+        error: AddLampError.connectFailed,
+        errorMessage: e.toString(),
+      );
+      return;
+    }
 
     // Step 1: claim. Failures here are usually BLE-side (connect dropped,
     // setup characteristics rejected) — surface as claimFailed and bail.
@@ -98,6 +128,19 @@ class AddLampNotifier extends _$AddLampNotifier {
     );
     try {
       await Future<void>.delayed(verifyDelay);
+      // Force a fresh BLE link. After setupApply the firmware fades + reboots,
+      // but flutter_blue_plus typically still believes it's connected (it only
+      // notices via LINK_SUPERVISION_TIMEOUT, which can take >1s). Calling
+      // connect() in that stale state is a no-op, so the next write fires
+      // into a dead handle and Android returns GATT_ERROR (133). Explicitly
+      // disconnecting first guarantees a real reconnect against the rebooted
+      // lamp.
+      try {
+        await ble.disconnect(state.deviceId);
+      } catch (_) {
+        // already-disconnected is fine
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
       await ble.connect(state.deviceId);
       await AuthClient(ble: ble).authenticate(
         deviceId: state.deviceId,
