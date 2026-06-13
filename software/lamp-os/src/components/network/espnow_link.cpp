@@ -23,7 +23,32 @@ static void recvTrampoline(const esp_now_recv_info_t* info, const uint8_t* data,
 #endif
     return;
   }
-  EspNowLink::s_recv(info->src_addr, data, static_cast<size_t>(len));
+  // RSSI lives in the IDF rx_ctrl block. Older drivers / synthetic frames
+  // can hand us a null rx_ctrl, so guard and default to -127 ("unknown").
+  // -127 sorts to the back of the RSSI-desc list so a peer with no signal
+  // info ends up firing last in the cascade — sensible fallback.
+  int8_t rssi = -127;
+  if (info->rx_ctrl != nullptr) {
+    rssi = static_cast<int8_t>(info->rx_ctrl->rssi);
+  }
+  EspNowLink::s_recv(info->src_addr, data, static_cast<size_t>(len), rssi);
+}
+
+// TX-completion diagnostic. Fires on the WiFi task after the radio either
+// emits the frame or declines (queue full, driver error, no peer, etc.).
+// Added 2026-06-03 to diagnose cascade reception silence — log the actual
+// PHY result so we can tell whether broadcasts physically left the radio.
+static void sendTrampoline(const esp_now_send_info_t* /*info*/,
+                           esp_now_send_status_t status) {
+#ifdef LAMP_DEBUG
+  // TX diagnostic — only log failures. We already verified earlier in the
+  // 2026-06-04 session that all sends succeed at PHY layer; logging every
+  // OK floods serial and corrupts other logs. Keep the FAIL log so a real
+  // TX failure still surfaces.
+  if (status != ESP_NOW_SEND_SUCCESS) {
+    Serial.println("[espnow.tx] FAIL");
+  }
+#endif
 }
 
 bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
@@ -42,6 +67,7 @@ bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
   }
 
   esp_now_register_recv_cb(recvTrampoline);
+  esp_now_register_send_cb(sendTrampoline);
 
   esp_now_peer_info_t peer = {};
   std::memset(&peer, 0, sizeof(peer));
@@ -62,7 +88,21 @@ bool EspNowLink::begin(uint8_t channel, EspNowRecvFn recv) {
 
 bool EspNowLink::broadcast(const uint8_t* data, size_t len) {
   static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-  return esp_now_send(bcast, data, len) == ESP_OK;
+  const esp_err_t err = esp_now_send(bcast, data, len);
+#ifdef LAMP_DEBUG
+  // Submission diagnostic (added 2026-06-04 to chase asymmetric recv:
+  // wisp HELLOs arriving on meloni while jacko's MSG_EVENT broadcasts
+  // don't, despite zero PHY-layer FAILs on the send callback). If
+  // esp_now_send returns anything other than ESP_OK the frame never
+  // hits the driver queue, the send callback never fires, and callers
+  // (broadcastRaw, maybeCascade) currently discard this return value —
+  // so the silent drop is invisible without this log.
+  if (err != ESP_OK) {
+    Serial.printf("[espnow.tx] submit FAIL err=%d (0x%x) len=%u\n",
+                  (int)err, (unsigned)err, (unsigned)len);
+  }
+#endif
+  return err == ESP_OK;
 }
 
 void EspNowLink::getMac(uint8_t out[6]) {

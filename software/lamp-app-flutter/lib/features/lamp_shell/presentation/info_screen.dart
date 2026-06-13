@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
+import '../../../core/app_channel.dart';
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../../core/utils/tap_counter.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/advanced_session.dart';
+import '../../control/application/control_notifier.dart';
 
 /// Info tab — Lamplit branding only. Nearby + Seen lamp lists moved to
 /// the new Social tab (see `features/social/presentation/social_screen.dart`).
@@ -54,6 +57,23 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Firmware identity rides the cached CHAR_LAMP_SECTION read. While the
+    // notifier is still loading (BLE connect + per-section reads in flight)
+    // or has errored out, fall back to a "..." placeholder so the screen
+    // never flashes a misleading "Firmware 0.0.0 ()". Legacy firmware
+    // that pre-dates the fwVersion/fwChannel fields lands in the same
+    // placeholder branch via the null check below.
+    final async = ref.watch(controlNotifierProvider(widget.lampId));
+    final fwLine = async.maybeWhen(
+      data: (state) {
+        final v = state.lamp.fwVersion;
+        final ch = state.lamp.fwChannel;
+        if (v == null || ch == null) return 'Firmware ...';
+        return 'Firmware ${formatFirmwareSemver(v)} ($ch)';
+      },
+      orElse: () => 'Firmware ...',
+    );
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -95,6 +115,37 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
                 TextSpan(text: '.'),
               ],
             ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        // Version footer — firmware first (read from CHAR_LAMP_SECTION),
+        // then this app's version (PackageInfo + hardcoded kAppChannel).
+        Center(
+          child: Text(
+            fwLine,
+            style: const TextStyle(
+              color: BrandColors.fogGrey,
+              fontSize: 12,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Center(
+          child: FutureBuilder<PackageInfo>(
+            future: PackageInfo.fromPlatform(),
+            builder: (context, snap) {
+              final info = snap.data;
+              final v = info != null
+                  ? '${info.version}+${info.buildNumber} ($kAppChannel)'
+                  : '...';
+              return Text(
+                'App $v',
+                style: const TextStyle(
+                  color: BrandColors.fogGrey,
+                  fontSize: 12,
+                ),
+              );
+            },
           ),
         ),
       ],

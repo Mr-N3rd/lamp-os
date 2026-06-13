@@ -24,6 +24,7 @@ static std::vector<std::string> s_recentSsids;         // persistent presence ca
 static uint32_t s_lastScanCompleteMs = 0;
 static uint32_t s_lastBackgroundScanMs = 0;
 static StateChangeCallback s_cb = nullptr;
+static HomeModeEnabledGetter s_homeModeEnabledGetter = nullptr;
 
 // Guards s_scanResults + s_recentSsids + s_lastScanCompleteMs against
 // concurrent access. Writer: Core 1 wifi::tick() (scan-complete drain
@@ -46,6 +47,17 @@ static constexpr uint32_t SCAN_STALENESS_MS = 90 * 1000;
 // between responsiveness and ESP-NOW receive uptime.
 static constexpr uint32_t BACKGROUND_SCAN_INTERVAL_MS = 60 * 1000;
 
+// How long to dwell in FAILED before letting the state machine return to
+// IDLE so future background scans can be attempted. Without this, a single
+// transient `WiFi.scanNetworks()` failure leaves the wifi module stuck in
+// FAILED until reboot — and historically also stranded the radio on
+// whatever channel the scanner had last hopped to, silently killing
+// ESP-NOW recv (HELLO / CONTROL_OP / OVERRIDE / EVENT / WISP_HELLO all
+// missed). 5 min is long enough not to thrash, short enough that
+// home-presence detection comes back without manual intervention.
+static constexpr uint32_t FAILED_RETRY_MS = 5 * 60 * 1000;
+static uint32_t s_failedSinceMs = 0;
+
 static void setState(State next) {
   if (s_state == next) return;
   s_state = next;
@@ -63,6 +75,14 @@ void begin() {
   WiFi.disconnect(true, true);   // wipe any stale SDK creds from a previous boot
   WiFi.mode(WIFI_STA);            // enable STA so scanNetworks works
   esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  // Don't run the first periodic scan at boot. The boot-time WiFi stack
+  // is fragile (just came up from WiFi.disconnect+WIFI_STA), and a failed
+  // scan in this window strands the radio off LAMP_ESPNOW_CHANNEL —
+  // observed 2026-06-04 on jacko, killed mesh recv entirely. Seed
+  // s_lastBackgroundScanMs with the current millis() so the first
+  // periodic scan fires BACKGROUND_SCAN_INTERVAL_MS *after* boot, when
+  // the WiFi stack has settled.
+  s_lastBackgroundScanMs = millis();
 }
 
 void forget() {
@@ -87,6 +107,12 @@ void startScan() {
   // — scans only fire when BT is disconnected, but a scan started just
   // before a reconnect can spill ~5s into the BT session.
   Serial.println("[wifi] scan started");
+  // Trace which gate fired this scan (added 2026-06-04 for scan-storm
+  // diagnosis). lastBgMs is updated by the periodic gate immediately
+  // before this call, so if it's "now-ish" the caller is the periodic
+  // path; if much older, the caller was external (e.g. BLE op:scan).
+  Serial.printf("[wifi.sched] startScan() entry: lastBgMs=%u now=%u\n",
+                (unsigned)s_lastBackgroundScanMs, (unsigned)millis());
 #endif
   // Steal the existing results buffer, free OUTSIDE the critical section.
   std::vector<ScanResult> drop;
@@ -110,6 +136,10 @@ std::vector<ScanResult> consumeScanResults() {
 }
 
 void setStateChangeCallback(StateChangeCallback cb) { s_cb = cb; }
+
+void setHomeModeEnabledGetter(HomeModeEnabledGetter fn) {
+  s_homeModeEnabledGetter = fn;
+}
 
 bool homeSsidVisible(const std::string& ssid) {
   if (ssid.empty()) return false;
@@ -181,19 +211,47 @@ void tick() {
       setState(IDLE);
     } else if (n == WIFI_SCAN_FAILED) {
       s_lastError = "scan";
+      // The scanner can leave the radio on the last-hopped channel; re-pin
+      // to LAMP_ESPNOW_CHANNEL so ESP-NOW recv still works in FAILED.
+      // Symmetry with the success branch above. Before this re-pin, a
+      // failed scan silently broke ALL mesh recv on this lamp until
+      // reboot (observed on melonie 2026-06-03 — 2 of 21 MSG_EVENT
+      // broadcasts received during a cascade test).
+      esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+      s_failedSinceMs = millis();
       setState(FAILED);
     }
   }
 
-  // 2. Periodic background scan for home-presence detection. Only when
-  //    no BT client is connected — scanning during a BT session would
-  //    stress the shared radio and risk LINK_SUPERVISION_TIMEOUT drops.
-  //    On boot, s_lastBackgroundScanMs == 0 so the first scan fires
-  //    immediately (after BT settles).
-  if (s_state == IDLE && !ble_control::isClientConnected()) {
+  // FAILED → IDLE recovery so a transient scan failure doesn't permanently
+  // disable home-presence detection. The channel re-pin in the FAILED
+  // branch above keeps mesh recv alive in the meantime.
+  if (s_state == FAILED && millis() - s_failedSinceMs > FAILED_RETRY_MS) {
+    s_lastError.clear();
+    setState(IDLE);
+  }
+
+  // 2. Periodic background scan for home-presence detection. Gated on:
+  //    - no BT client connected (scanning during a BT session stresses
+  //      the shared radio)
+  //    - home-mode is enabled in config (otherwise scan results have no
+  //      consumer; no point spending radio time on them)
+  //    - BACKGROUND_SCAN_INTERVAL_MS elapsed since the last scan
+  //
+  //    The first periodic scan fires BACKGROUND_SCAN_INTERVAL_MS after
+  //    boot, not at boot — see wifi::begin() for the rationale (boot-
+  //    time scan failures stranded the radio off LAMP_ESPNOW_CHANNEL).
+  const bool homeModeEnabled =
+      s_homeModeEnabledGetter && s_homeModeEnabledGetter();
+  if (s_state == IDLE && !ble_control::isClientConnected() && homeModeEnabled) {
     const uint32_t now = millis();
-    if (s_lastBackgroundScanMs == 0 ||
-        now - s_lastBackgroundScanMs > BACKGROUND_SCAN_INTERVAL_MS) {
+    const uint32_t elapsed = now - s_lastBackgroundScanMs;
+    if (elapsed > BACKGROUND_SCAN_INTERVAL_MS) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[wifi.sched] scan DECIDED elapsed=%u lastBgMs=%u now=%u\n",
+                    (unsigned)elapsed,
+                    (unsigned)s_lastBackgroundScanMs, (unsigned)now);
+#endif
       s_lastBackgroundScanMs = now;
       startScan();
     }

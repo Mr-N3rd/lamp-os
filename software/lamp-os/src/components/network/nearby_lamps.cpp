@@ -57,7 +57,9 @@ void NearbyLamps::addOrUpdateFromBle(const std::string& name,
 }
 
 void NearbyLamps::addOrUpdateFromEspNow(const std::string& name, const uint8_t mac[6],
-                                        const Color& base, const Color& shade) {
+                                        const Color& base, const Color& shade,
+                                        uint32_t firmwareVersion,
+                                        int8_t rssi) {
   uint32_t now = millis();
   // Bounded take: this runs on the ESP-NOW recv callback (WiFi task). A long
   // wait here stalls subsequent recv frames and the immediate
@@ -88,6 +90,8 @@ void NearbyLamps::addOrUpdateFromEspNow(const std::string& name, const uint8_t m
     std::memcpy(e.mac, mac, 6);
     e.hasMac = true;
     e.lastSeenViaEspNowMs = now;
+    e.firmwareVersion = firmwareVersion;
+    e.lastRssi = rssi;
     store_.push_back(e);
   } else {
     store_[idx].baseColor = base;
@@ -95,6 +99,14 @@ void NearbyLamps::addOrUpdateFromEspNow(const std::string& name, const uint8_t m
     std::memcpy(store_[idx].mac, mac, 6);
     store_[idx].hasMac = true;
     store_[idx].lastSeenViaEspNowMs = now;
+    // Don't clobber a known version with a 0 — pre-HELLO BLE-only callers
+    // pass the default; we only refresh once we actually got a HELLO.
+    if (firmwareVersion != 0) store_[idx].firmwareVersion = firmwareVersion;
+    // RSSI freshens on every HELLO so the cascade-stagger sort key tracks
+    // current signal strength rather than a one-shot first-seen value.
+    // -127 is the "unknown" sentinel; only overwrite the stored value
+    // when the caller supplied a real reading.
+    if (rssi != -127) store_[idx].lastRssi = rssi;
   }
   xSemaphoreGive(mutex_);
 }
@@ -176,6 +188,51 @@ void NearbyLamps::acknowledge(const std::string& name) {
   size_t idx = findIndexLocked(name);
   if (idx < store_.size()) store_[idx].acknowledged = true;
   xSemaphoreGive(mutex_);
+}
+
+void NearbyLamps::cacheWispHello(const uint8_t mac[6],
+                                 uint32_t wispVersion,
+                                 uint8_t flags,
+                                 const char* paletteIdPrefix,
+                                 const char* carriedFwChannel,
+                                 uint32_t carriedFwVersion) {
+  // Loop-task-only writer; the WiFi recv path memcpys into a typed pending
+  // slot and the drain calls this on Core 1. portMAX_DELAY is fine here
+  // because the only contended reader is also on Core 1 (we never hold
+  // this mutex from Core 0). See the addOrUpdate paths above for the
+  // bounded-take pattern when the writer is Core 0.
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  std::memcpy(wispCache_.mac, mac, 6);
+  wispCache_.present = true;
+  wispCache_.lastHelloMs = millis();
+  wispCache_.wispVersion = wispVersion;
+  wispCache_.flags = flags;
+  // 8-byte fixed-width on-wire slots — copy as bytes, then ensure the
+  // trailing NUL for safe logging. The caller's source pointers are NOT
+  // NUL-terminated.
+  std::memcpy(wispCache_.paletteIdPrefix, paletteIdPrefix, 8);
+  wispCache_.paletteIdPrefix[8] = '\0';
+  std::memcpy(wispCache_.carriedFwChannel, carriedFwChannel, 8);
+  wispCache_.carriedFwChannel[8] = '\0';
+  wispCache_.carriedFwVersion = carriedFwVersion;
+  xSemaphoreGive(mutex_);
+}
+
+WispCache NearbyLamps::getWispCache() {
+  // Bounded take: ShowReceiver's MSG_OVERRIDE_BRIGHTNESS branch on the
+  // WiFi recv task (Core 0) reads this synchronously to decide whether
+  // a below-floor brightness is wisp-paired. A long wait would stall the
+  // recv task; on contention we return a "not present" snapshot — the
+  // floor check then drops the suspect frame, which is the safe default.
+  // Loop-task callers (the wispHello drain) take their own write side
+  // with portMAX_DELAY; the only contention here is brief.
+  WispCache snap;  // present=false by default
+  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(2)) != pdTRUE) {
+    return snap;
+  }
+  snap = wispCache_;
+  xSemaphoreGive(mutex_);
+  return snap;
 }
 
 }  // namespace lamp

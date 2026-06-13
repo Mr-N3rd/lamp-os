@@ -1,5 +1,10 @@
 #pragma once
 
+// Forward-decl avoids a ble_control.hpp ↔ write_router.hpp include cycle
+// (ble_control.cpp already includes write_router.hpp). See the comment
+// in ble_control.cpp at the definition for what this does and why.
+namespace ble_control { void markActivity(); }
+
 // WriteRouter — single NimBLECharacteristicCallbacks subclass that handles
 // the auth-gated, bounds-checked write path shared by most JSON-payload
 // characteristics on the lamp's BLE control service. Replaces the bulk
@@ -127,6 +132,11 @@ class WriteRouter : public NimBLECharacteristicCallbacks {
   }
 
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override {
+    // Stamp BLE activity before any auth / decode work so even rejected
+    // writes refresh the conn-params idle timer. The peer doesn't know
+    // we rejected — it just knows it sent a write, and the link is "in
+    // use" from their perspective. Aligns our timer with the peer's view.
+    ble_control::markActivity();
     const uint16_t handle = info.getConnHandle();
     const std::string raw = c->getValue();
 

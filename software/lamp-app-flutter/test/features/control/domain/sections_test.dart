@@ -13,6 +13,25 @@ void main() {
     expect(s.brightness, 42);
   });
 
+  test('LampSection parses fwVersion + fwChannel when emitted', () {
+    final s = LampSection.fromJson(jsonDecode(
+      '{"name":"jacko","brightness":42,"advancedEnabled":false,'
+      '"fwVersion":65536,"fwChannel":"stable"}',
+    ) as Map<String, dynamic>);
+    expect(s.fwVersion, 0x010000);
+    expect(s.fwChannel, 'stable');
+  });
+
+  test('LampSection.fwVersion + fwChannel null on legacy firmware', () {
+    // Old firmware that doesn't yet emit fwVersion/fwChannel — the Info
+    // tab renders these as "..." rather than crashing on a null cast.
+    final s = LampSection.fromJson(jsonDecode(
+      '{"name":"jacko","brightness":42,"advancedEnabled":false}',
+    ) as Map<String, dynamic>);
+    expect(s.fwVersion, isNull);
+    expect(s.fwChannel, isNull);
+  });
+
   test('BaseSection parses colors, ac, px', () {
     final s = BaseSection.fromJson(jsonDecode(
       '{"px":35,"ac":1,"bpp":4,"colors":["#300783FF","#FF0000AA"],"knockout":[]}',

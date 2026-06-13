@@ -8,6 +8,8 @@ class LampSection {
     required this.brightness,
     required this.advancedEnabled,
     required this.socialMode,
+    this.fwVersion,
+    this.fwChannel,
   });
 
   final String name;
@@ -15,12 +17,23 @@ class LampSection {
   final bool advancedEnabled;
   final SocialMode socialMode;
 
+  /// Firmware semver, packed as `(major << 16) | (minor << 8) | patch`.
+  /// Nullable for backward compat with older firmware that doesn't yet
+  /// emit this field (the Info tab renders "..." in that case).
+  final int? fwVersion;
+
+  /// Firmware release channel: `'dev' | 'beta' | 'stable'`. Nullable for
+  /// the same backward-compat reason as `fwVersion`.
+  final String? fwChannel;
+
   factory LampSection.fromJson(Map<String, dynamic> json) => LampSection(
         name: (json['name'] as String?) ?? '',
         brightness: (json['brightness'] as num?)?.toInt() ?? 100,
         advancedEnabled: json['advancedEnabled'] as bool? ?? false,
         socialMode:
             SocialMode.fromWire((json['socialMode'] as num?)?.toInt()),
+        fwVersion: (json['fwVersion'] as num?)?.toInt(),
+        fwChannel: json['fwChannel'] as String?,
       );
 }
 

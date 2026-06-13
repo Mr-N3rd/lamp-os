@@ -5,12 +5,15 @@
 #include <algorithm>
 #include <cstring>
 
+#include "../../version.hpp"
+
 namespace lamp {
 
 ShowReceiver* ShowReceiver::s_instance = nullptr;
 
-void ShowReceiver::onRecv(const uint8_t* mac, const uint8_t* data, size_t len) {
-  if (s_instance) s_instance->handleRecv(mac, data, len);
+void ShowReceiver::onRecv(const uint8_t* mac, const uint8_t* data, size_t len,
+                          int8_t rssi) {
+  if (s_instance) s_instance->handleRecv(mac, data, len, rssi);
 }
 
 void ShowReceiver::begin(Config* cfg) {
@@ -40,34 +43,12 @@ void ShowReceiver::setControlOpHandler(ControlOpHandler h) {
   controlOpHandler_ = std::move(h);
 }
 
-// Serialize + size-check + send. Returns false (and logs in debug) when the
-// payload would exceed the ~230-byte ESP-NOW CONTROL_OP cap so we don't fail
-// silently inside sendControlOp's own bounds check.
-static bool sendInvocationToMac(ShowReceiver& self, const uint8_t mac[6],
-                                const ExpressionInvocation& inv) {
-  std::string json;
-  serializeInvocation(inv, json);
-  if (json.size() > lamp_protocol::CONTROL_MAX_PAYLOAD) {
-#ifdef LAMP_DEBUG
-    Serial.printf("[show] triggerExpression payload %u > max %u, dropping\n",
-                  (unsigned)json.size(),
-                  (unsigned)lamp_protocol::CONTROL_MAX_PAYLOAD);
-#endif
-    return false;
-  }
-  // Expression cascades are intentionally local: receivers apply the
-  // invocation but the FLAG_LOCAL_ONLY bit tells them not to relay it.
-  // Reach is therefore whatever direct ESP-NOW radio range delivers —
-  // "lamps in the same physical space", which is the user's mental model
-  // of a cascade. Set true here so every per-peer frame carries the flag.
-  return self.sendControlOp(mac,
-                            reinterpret_cast<const uint8_t*>(json.data()),
-                            json.size(),
-                            /*localOnly=*/true);
-}
-
 bool ShowReceiver::sendExpressionTo(const std::string& peerName,
                                     const ExpressionInvocation& inv) {
+  // Single-peer named unicast. The MSG_EVENT cascade path covers the
+  // "fan out to every peer with RSSI-ordered stagger" case; this entry
+  // point is preserved for callers that explicitly want to address one
+  // lamp by name (BLE remoteOp targeted at a specific peer, etc.).
   auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
   for (const auto& p : peers) {
     if (p.name != peerName) continue;
@@ -78,7 +59,19 @@ bool ShowReceiver::sendExpressionTo(const std::string& peerName,
 #endif
       continue;
     }
-    return sendInvocationToMac(*this, p.mac, inv);
+    std::string json;
+    serializeInvocation(inv, json);
+    if (json.size() > lamp_protocol::CONTROL_MAX_PAYLOAD) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[show] sendExpressionTo payload %u > max %u, dropping\n",
+                    (unsigned)json.size(),
+                    (unsigned)lamp_protocol::CONTROL_MAX_PAYLOAD);
+#endif
+      return false;
+    }
+    return sendControlOp(p.mac,
+                         reinterpret_cast<const uint8_t*>(json.data()),
+                         json.size());
   }
 #ifdef LAMP_DEBUG
   Serial.printf("[show] sendExpressionTo: peer '%s' not reachable\n",
@@ -87,52 +80,15 @@ bool ShowReceiver::sendExpressionTo(const std::string& peerName,
   return false;
 }
 
-void ShowReceiver::sendExpressionToAll(const ExpressionInvocation& inv,
-                                       uint32_t staggerMs) {
-  auto peers = nearbyLamps.getReachableViaEspNow(LAMP_PRUNE_TIME_MS);
-  std::vector<NearbyLamp> targets;
-  targets.reserve(peers.size());
-  for (const auto& p : peers) {
-    if (!p.hasMac) continue;
-    if (std::memcmp(p.mac, myMac_, 6) == 0) continue;  // never send to self
-    targets.push_back(p);
-  }
-  // Deterministic name order so the cascade direction is stable visit-to-visit
-  // (otherwise NearbyLamps internal insertion order would leak in).
-  std::sort(targets.begin(), targets.end(),
-            [](const NearbyLamp& a, const NearbyLamp& b) {
-              return a.name < b.name;
-            });
-#ifdef LAMP_DEBUG
-  Serial.printf("[fanout] %s → %u peers (staggerMs=%u)\n",
-                inv.type.c_str(), (unsigned)targets.size(),
-                (unsigned)staggerMs);
-  if (targets.empty()) {
-    Serial.println("[fanout]   NO peers — check HELLOs / LAMP_PRUNE_TIME_MS");
-  }
-#endif
-  for (size_t i = 0; i < targets.size(); i++) {
-    ExpressionInvocation perPeer = inv;
-    perPeer.delayMs = inv.delayMs + static_cast<uint32_t>(i) * staggerMs;
-#ifdef LAMP_DEBUG
-    Serial.printf("[fanout]   → '%s' (delayMs=%u)\n",
-                  targets[i].name.c_str(), (unsigned)perPeer.delayMs);
-#endif
-    sendInvocationToMac(*this, targets[i].mac, perPeer);
-  }
-}
-
 bool ShowReceiver::sendControlOp(const uint8_t targetMac[6],
-                                 const uint8_t* payload, size_t payloadLen,
-                                 bool localOnly) {
+                                 const uint8_t* payload, size_t payloadLen) {
   if (payloadLen > lamp_protocol::CONTROL_MAX_PAYLOAD) return false;
   uint8_t buf[lamp_protocol::CONTROL_MAX_SIZE];
   // sourceMac is THIS lamp — peers and the originator can dedup our own
   // re-broadcasts based on it.
   const size_t n = lamp_protocol::buildControlOp(buf, sizeof(buf), controlOpSeq_++,
                                                  targetMac, myMac_,
-                                                 payload, payloadLen,
-                                                 localOnly);
+                                                 payload, payloadLen);
   if (!n) return false;
   // Record in our own dedup ring so the inbound re-broadcast (from a peer)
   // doesn't loop back as an "apply locally".
@@ -140,80 +96,54 @@ bool ShowReceiver::sendControlOp(const uint8_t targetMac[6],
   return link_.broadcast(buf, n);
 }
 
-bool ShowReceiver::hasRecentFrame(uint32_t maxAgeMs) {
-  bool have;
-  uint32_t lastMs;
-  portENTER_CRITICAL(&mux_);
-  have = haveFrame_;
-  lastMs = latestFrameMs_;
-  portEXIT_CRITICAL(&mux_);
-  if (!have) return false;
-  return (millis() - lastMs) <= maxAgeMs;
+bool ShowReceiver::broadcastRaw(const uint8_t* data, size_t len) {
+  return link_.broadcast(data, len);
 }
 
-bool ShowReceiver::snapshot(uint8_t shade[4], uint8_t base[4], uint8_t* mode, uint8_t* parameter) {
-  bool have;
-  portENTER_CRITICAL(&mux_);
-  have = haveFrame_;
-  if (have) {
-    std::memcpy(shade, latestShade_, 4);
-    std::memcpy(base, latestBase_, 4);
-    if (mode) *mode = latestMode_;
-    if (parameter) *parameter = latestParam_;
-  }
-  portEXIT_CRITICAL(&mux_);
-  return have;
+uint16_t ShowReceiver::nextEventSeq() {
+  return eventSeq_++;
 }
 
-void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len) {
+// Decide whether `targetMac` addresses this lamp. Single helper so the
+// per-message-type branches below stay readable. Broadcast = all-FF.
+static bool addressedToUs(const uint8_t targetMac[6], const uint8_t myMac[6]) {
+  static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  return std::memcmp(targetMac, myMac, 6) == 0 ||
+         std::memcmp(targetMac, bcast, 6) == 0;
+}
+
+void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
+                              size_t len, int8_t rssi) {
   const uint8_t msgType = lamp_protocol::inspect(data, len);
-  if (msgType == lamp_protocol::MSG_COLORS) {
-    lamp_protocol::ParsedColors c;
-    if (!lamp_protocol::parseColors(data, len, c)) return;
-    // Dedup by (targetMac, seq) — also gates whether to rebroadcast.
-    if (!colorsDedup_.record(c.targetMac, lamp_protocol::MSG_COLORS, c.seq)) return;
-
-    // Rebroadcast unseen COLORS once for gossip range extension.
-    link_.broadcast(data, len);
-
-    // If addressed to us, latch the state.
-    if (std::memcmp(c.targetMac, myMac_, 6) == 0) {
-      portENTER_CRITICAL(&mux_);
-      std::memcpy(latestShade_, c.shade, 4);
-      std::memcpy(latestBase_,  c.base,  4);
-      latestMode_ = c.mode;
-      latestParam_ = c.parameter;
-      latestFrameMs_ = millis();
-      haveFrame_ = true;
-      portEXIT_CRITICAL(&mux_);
-    }
-  } else if (msgType == lamp_protocol::MSG_HELLO) {
+  if (msgType == lamp_protocol::MSG_HELLO) {
     lamp_protocol::ParsedHello h;
     if (!lamp_protocol::parseHello(data, len, h)) return;
     if (!helloDedup_.record(h.sourceMac, lamp_protocol::MSG_HELLO, h.seq)) return;
     // Don't rebroadcast our OWN hellos.
     if (std::memcmp(h.sourceMac, myMac_, 6) == 0) return;
     // Record into the unified nearbyLamps store so the BLE CHAR_NEARBY_LAMPS
-    // read + SocialBehavior + any other consumer all see this lamp.
+    // read + SocialBehavior + any other consumer all see this lamp. RSSI
+    // feeds the cascade sort so peers physically closer to the originator
+    // fire first when a MSG_EVENT cascade comes through.
     const std::string peerName = h.nameLen ? std::string(h.name, h.nameLen) : std::string();
     nearbyLamps.addOrUpdateFromEspNow(
         peerName,
         h.sourceMac,
         Color(h.base[0],  h.base[1],  h.base[2],  h.base[3]),
-        Color(h.shade[0], h.shade[1], h.shade[2], h.shade[3]));
+        Color(h.shade[0], h.shade[1], h.shade[2], h.shade[3]),
+        h.firmwareVersion,
+        rssi);
     link_.broadcast(data, len);
   } else if (msgType == lamp_protocol::MSG_CONTROL_OP) {
     lamp_protocol::ParsedControlOp op;
     if (!lamp_protocol::parseControlOp(data, len, op)) return;
     // Dedup by (sourceMac, seq) so a loop-relayed copy doesn't fire twice.
     if (!controlOpDedup_.record(op.sourceMac, lamp_protocol::MSG_CONTROL_OP, op.seq)) return;
-    // Rebroadcast for grid relay UNLESS the sender flagged this op localOnly
-    // (expression cascades do — see ShowReceiver::sendInvocationToMac). When
-    // localOnly is set, reach is limited to the sender's direct radio range
-    // instead of fanning across the whole mesh via relays.
-    if (!op.localOnly) {
-      link_.broadcast(data, len);
-    }
+    // Rebroadcast for grid relay — extends mesh reach beyond direct radio
+    // range. The cascade no longer rides this path (MSG_EVENT broadcast
+    // replaces the per-peer unicast hack), so CONTROL_OP is unconditionally
+    // gossip-relayed now.
+    link_.broadcast(data, len);
     // Apply locally if addressed to us or broadcast.
     static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     const bool forUs = (std::memcmp(op.targetMac, myMac_, 6) == 0) ||
@@ -227,6 +157,192 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data, si
 #endif
       controlOpHandler_(op.payload, op.payloadLen, op.sourceMac);
     }
+  } else if (msgType == lamp_protocol::MSG_WISP_HELLO) {
+    // Wisp presence beacon. Parse → dedup → forward to NearbyLamps via a
+    // pending slot (loop drain on Core 1 calls cacheWispHello). Keep
+    // recv-task work to memcpy + dedup so the WiFi task can return
+    // quickly to its next frame.
+    lamp_protocol::ParsedWispHello h;
+    if (!lamp_protocol::parseWispHello(data, len, h)) return;
+    if (!wispHelloDedup_.record(h.sourceMac, lamp_protocol::MSG_WISP_HELLO, h.seq)) return;
+    PendingWispHello slot;
+    std::memcpy(slot.sourceMac, h.sourceMac, 6);
+    slot.wispVersion = h.wispVersion;
+    slot.flags = h.flags;
+    std::memcpy(slot.paletteIdPrefix, h.paletteIdPrefix,
+                lamp_protocol::WISP_HELLO_PALETTE_ID_PREFIX_LEN);
+    std::memcpy(slot.carriedFwChannel, h.carriedFwChannel,
+                lamp_protocol::WISP_HELLO_FW_CHANNEL_LEN);
+    slot.carriedFwVersion = h.carriedFwVersion;
+    postPendingWispHello(slot);
+    // Rebroadcast so wisps in adjacent rooms (no direct line of sight to
+    // this room) still propagate. Same gossip semantics as MSG_HELLO.
+    link_.broadcast(data, len);
+  } else if (msgType == lamp_protocol::MSG_OVERRIDE_COLORS) {
+    lamp_protocol::ParsedOverrideColors p;
+    if (!lamp_protocol::parseOverrideColors(data, len, p)) return;
+    if (!overrideColorsDedup_.record(p.sourceMac,
+                                     lamp_protocol::MSG_OVERRIDE_COLORS,
+                                     p.seq)) return;
+    // OVERRIDE/RESTORE messages do NOT relay (per design: unicast paint,
+    // no gossip). Reach is whatever direct radio delivers — keeps wisp's
+    // paint scoped to "lamps the wisp can hear" without spillover.
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    PendingOverrideColors slot;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    slot.surface = p.surface;
+    slot.sourceKind = p.sourceKind;
+    slot.fadeDurationMs = p.fadeDurationMs;
+    slot.numColors = p.numColors;
+    for (uint8_t i = 0; i < p.numColors; ++i) {
+      slot.colors[i] = Color(p.colors[i][0], p.colors[i][1],
+                             p.colors[i][2], p.colors[i][3]);
+    }
+    postPendingOverrideColors(slot);
+  } else if (msgType == lamp_protocol::MSG_RESTORE_COLORS) {
+    lamp_protocol::ParsedRestoreColors p;
+    if (!lamp_protocol::parseRestoreColors(data, len, p)) return;
+    if (!restoreColorsDedup_.record(p.sourceMac,
+                                    lamp_protocol::MSG_RESTORE_COLORS,
+                                    p.seq)) return;
+    // No relay — see OVERRIDE_COLORS branch.
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    PendingRestoreColors slot;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    slot.surface = p.surface;
+    slot.sourceKind = p.sourceKind;
+    slot.fadeDurationMs = p.fadeDurationMs;
+    postPendingRestoreColors(slot);
+  } else if (msgType == lamp_protocol::MSG_OVERRIDE_BRIGHTNESS) {
+    lamp_protocol::ParsedOverrideBrightness p;
+    if (!lamp_protocol::parseOverrideBrightness(data, len, p)) return;
+    if (!overrideBrightnessDedup_.record(p.sourceMac,
+                                         lamp_protocol::MSG_OVERRIDE_BRIGHTNESS,
+                                         p.seq)) return;
+    // No relay — see OVERRIDE_COLORS branch.
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    // Anti-defeat brightness floor: a peer-swap or random source can't
+    // drag brightness arbitrarily low. Wisp-paired sources bypass the
+    // floor (the wisp owns a lobby "go dark" scenario) — check by
+    // matching sourceMac against the cached MSG_WISP_HELLO sender within
+    // the watchdog window.
+    if (p.brightness < lamp_protocol::kBrightnessOverrideMin) {
+      const auto wisp = nearbyLamps.getWispCache();
+      const uint32_t now = millis();
+      // 60s pairing window — matches the override watchdog. A wisp that
+      // hasn't beaconed in this long loses the floor-bypass; defeat-by-
+      // silent-source is then the same risk as for any other unknown
+      // sender (i.e. dropped).
+      constexpr uint32_t kWispPairingWindowMs = 60000;
+      const bool wispPaired = wisp.present &&
+                              std::memcmp(wisp.mac, p.sourceMac, 6) == 0 &&
+                              (now - wisp.lastHelloMs) < kWispPairingWindowMs;
+      if (!wispPaired) return;  // drop silently — defeat-the-defeat
+    }
+    PendingOverrideBrightness slot;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    slot.surface = p.surface;
+    slot.sourceKind = p.sourceKind;
+    slot.fadeDurationMs = p.fadeDurationMs;
+    slot.brightness = p.brightness;
+    postPendingOverrideBrightness(slot);
+  } else if (msgType == lamp_protocol::MSG_RESTORE_BRIGHTNESS) {
+    lamp_protocol::ParsedRestoreBrightness p;
+    if (!lamp_protocol::parseRestoreBrightness(data, len, p)) return;
+    if (!restoreBrightnessDedup_.record(p.sourceMac,
+                                        lamp_protocol::MSG_RESTORE_BRIGHTNESS,
+                                        p.seq)) return;
+    // No relay — see OVERRIDE_COLORS branch.
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    PendingRestoreBrightness slot;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    slot.surface = p.surface;
+    slot.sourceKind = p.sourceKind;
+    slot.fadeDurationMs = p.fadeDurationMs;
+    postPendingRestoreBrightness(slot);
+  } else if (msgType == lamp_protocol::MSG_EVENT) {
+    lamp_protocol::ParsedEvent ev;
+    if (!lamp_protocol::parseEvent(data, len, ev)) return;
+    // Dedup by (sourceMac, seq). The cascade sender emits two back-to-back
+    // copies of MSG_EVENT for broadcast-loss resilience (ESP-NOW broadcasts
+    // are not link-layer ACK'd); both share the same seq so the second
+    // copy collapses here. Also collapses any future relay (we don't relay
+    // MSG_EVENT today, but a peer's stack might).
+    if (!eventDedup_.record(ev.sourceMac, lamp_protocol::MSG_EVENT, ev.seq)) return;
+    // Drop our own broadcast — would otherwise re-trigger us locally.
+    // The cascade originator is firing on its own clock already; no need
+    // to round-trip through the wire.
+    if (std::memcmp(ev.sourceMac, myMac_, 6) == 0) return;
+    // v0x03 lock-in: gossip-relay MSG_EVENT.
+    //
+    // Old semantics (pre-v0x03): MSG_EVENT was single-hop. The cascade
+    // originator's broadcast (×2 back-to-back) reached whatever was in
+    // direct radio range, full stop. When the originator was BLE-coex'd
+    // — common case: the app was open on the triggerer's phone — IDF
+    // #14904's SW-coex packet loss dropped reliability to ~22% in the
+    // field. No relay meant no other lamp could help.
+    //
+    // New semantics: every lamp that successfully receives a MSG_EVENT
+    // for the first time (dedup gate above) AND isn't the originator
+    // (self-MAC gate above) rebroadcasts the frame verbatim. Three things
+    // bound the storm:
+    //   1. eventDedup_.record() (64-slot ring per the v0x03 capacity bump)
+    //      collapses any (sourceMac, seq) we've already seen. Total
+    //      airborne copies per cascade ≤ N + 1 in an N-lamp mesh, not
+    //      N² — each lamp emits at most one relay.
+    //   2. The self-MAC gate at line 275 prevents the originator from
+    //      re-firing its own gossip. The originator only emits its
+    //      explicit broadcast pair from ExpressionManager::maybeCascade.
+    //   3. Reach saturates at the dedup horizon: a frame arriving on
+    //      lamp X after X already relayed it gets dropped before re-relay.
+    //
+    // Why BEFORE the eventKind filter below: forward-compat. If a future
+    // EventKind (0x02..0xFF) ships on a newer fleet member, v0x03 lamps
+    // still relay it (helping its propagation) while individually dropping
+    // it from local application. That keeps the mesh from being a
+    // single-version straightjacket — unknown-but-well-formed events still
+    // hitchhike through the grid.
+    //
+    // The mode change from "best-effort sender re-emit" to "gossip-cascade
+    // through all peers" is the primary cascade-reliability fix in the
+    // production lock-in. Combined with HW coex (Commit F), targeted ≥90%
+    // cascade reception on a 2-lamp BT-connected source.
+    // why: cascade reliability fix per validated plan §"Layer 1".
+    link_.broadcast(data, len);
+    // Built-in event kinds: today only ExpressionTriggered. Drop unknown
+    // kinds silently (forward-compat with user-defined kinds in 0x10+).
+    // NOTE: this filter runs AFTER the gossip-relay above — see rationale.
+    if (ev.eventKind != lamp_protocol::EventKind::ExpressionTriggered) return;
+    // Look up our own MAC in the stagger entries. If present, take the
+    // supplied delayMs; if absent (sender's peer list was truncated past
+    // kMaxStaggerEntries, or we just joined the mesh between the sender's
+    // last HELLO scrape and the cascade emit), tail-fire at
+    // numStaggerEntries * kTailFireStaggerMs so we still participate but
+    // don't pile onto the wavefront. 50 ms matches the typical
+    // cascadeStaggerMs the app sets — a sensible default for "we missed
+    // the wave; fall in behind."
+    constexpr uint16_t kTailFireStaggerMs = 50;
+    uint16_t delayMs = static_cast<uint16_t>(ev.numStaggerEntries) * kTailFireStaggerMs;
+    for (uint8_t i = 0; i < ev.numStaggerEntries; ++i) {
+      if (std::memcmp(ev.staggerEntries[i].mac, myMac_, 6) == 0) {
+        delayMs = ev.staggerEntries[i].delayMs;
+        break;
+      }
+    }
+    // Payload is already capped at maxEventPayloadFor(numStaggerEntries)
+    // by the parser; the PendingEvent.payload buffer is sized to the
+    // zero-stagger best case so this memcpy can never overrun for any
+    // valid frame. Defensive check anyway so a future protocol drift
+    // can't silently overflow the slot.
+    if (ev.payloadLen > lamp_protocol::maxEventPayloadFor(ev.numStaggerEntries)) return;
+    PendingEvent slot;
+    std::memcpy(slot.sourceMac, ev.sourceMac, 6);
+    slot.delayMs = delayMs;
+    slot.payloadLen = ev.payloadLen;
+    if (ev.payloadLen && ev.payload) {
+      std::memcpy(slot.payload, ev.payload, ev.payloadLen);
+    }
+    postPendingEvent(slot);
   }
 }
 
@@ -252,7 +368,8 @@ void ShowReceiver::emitHello() {
 
   uint8_t buf[lamp_protocol::HELLO_MAX_SIZE];
   size_t n = lamp_protocol::buildHello(buf, sizeof(buf), helloSeq_++, myMac_,
-                                       shade, base, name.data(), nameLen);
+                                       shade, base, FIRMWARE_VERSION,
+                                       name.data(), nameLen);
   if (n) {
     link_.broadcast(buf, n);
   }

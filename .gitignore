@@ -31,3 +31,6 @@ node_modules/
 
 # Firmware binary — published via GitHub Releases, not committed
 docs/distribution.bin
+
+# Linked git worktrees
+.worktrees/

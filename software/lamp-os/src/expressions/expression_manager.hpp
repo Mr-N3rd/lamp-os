@@ -28,6 +28,15 @@ class Compositor;
 class ExpressionManager;
 class ShowReceiver;
 
+// Forwarder implemented in standard_lamp.cpp. tryHandleExpressionEvent
+// uses this to push a delayed invocation into the loop-task pendingTriggers
+// queue when suppliedDelayMs > 0; immediate fires go straight to
+// triggerInvocation. Keeps the queue's storage in standard_lamp where the
+// drain lives — the manager doesn't need to own a second queue.
+void enqueueDelayedInvocation(const ExpressionInvocation& inv,
+                              const uint8_t srcMac[6],
+                              uint32_t delayMs);
+
 /**
  * @brief Manages active expressions and their lifecycle
  */
@@ -198,6 +207,26 @@ class ExpressionManager {
    */
   bool triggerInvocation(const ExpressionInvocation& inv,
                          const uint8_t srcMac[6]);
+
+  /**
+   * @brief MSG_EVENT receive-side handler. Called from the Core 1 drain
+   *        for an ExpressionTriggered event. Does a cheap JSON peek for
+   *        `"type":"..."` first so an unconfigured-cascade-type event can
+   *        be dropped without paying the full JsonDocument parse. Then
+   *        checks the local cascadeEnabled config + RecentCascade dedup
+   *        before the full parseInvocation + triggerInvocation with
+   *        fireAtMs = millis() + suppliedDelayMs.
+   *
+   *        suppliedDelayMs is the stagger value the recv-side already
+   *        looked up from the MSG_EVENT staggerEntries list (own MAC →
+   *        delayMs, or tail-fire fallback if absent). Clamped to
+   *        kMaxDelayMs defensively here so an attacker who builds a
+   *        stagger entry with a huge delay can't hold a pendingTriggers
+   *        slot for ~49 days.
+   */
+  void tryHandleExpressionEvent(const uint8_t sourceMac[6],
+                                uint16_t suppliedDelayMs,
+                                const uint8_t* payload, uint16_t payloadLen);
 
   /**
    * @brief Called by Expression::trigger() after onTrigger() runs, regardless

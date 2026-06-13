@@ -62,7 +62,6 @@ Captured at end of the session that landed:
 
 - **OTA firmware updates.** Info-page button that polls a release manifest URL when on home WiFi, downloads `firmware.bin`, verifies hash, flashes via `FadeOutBehavior` reboot. Gotcha: `partitions.csv` needs to be OTA-capable; the first OTA-enabling flash must go over USB.
 - **Web UI hybrid.** Small `ESPAsyncWebServer` bound to STA, serves a stripped-down `lamp-ui` for desktop browser config when the lamp is on home WiFi. BLE stays the primary control path.
-- **Repeater repurpose.** `software/artnet-repeater/` hardware needs a new identity now that ArtNet is gone. Likely "scene controller" emitting scripted COLORS into the grid.
 
 ## Stale concerns to verify or close
 

@@ -13,7 +13,6 @@ import '../domain/lamp_color.dart';
 import 'widgets/base_card.dart';
 import 'widgets/base_editor_sheet.dart';
 import 'widgets/brightness_card.dart';
-import 'widgets/bt_only_info_pane.dart';
 import 'widgets/connect_password_prompt.dart';
 import 'widgets/connecting_view.dart';
 import 'widgets/connection_banner.dart';
@@ -31,38 +30,39 @@ class ControlScreen extends ConsumerStatefulWidget {
 }
 
 class _ControlScreenState extends ConsumerState<ControlScreen> {
-  /// Defense-in-depth: if the user somehow landed here for a lamp whose
-  /// adv reports `isMesh: false` (legacy/BT-only firmware), bounce them
-  /// to the BT-only pane instead of letting the control flow trap them
-  /// on a ConnectingView that will never complete the GATT handshake.
-  /// We only act on the FIRST observation of `isMesh` so a transient
-  /// adv drop later in the session doesn't yank the user away.
-  bool _initialMeshChecked = false;
+  /// Defense-in-depth: if the lamp's most recent adv reports
+  /// `isMesh: false` AND the BLE connection attempt failed (not auth-
+  /// required — a real connect/handshake failure), bounce the user to
+  /// the BT-only screen. Auth failures keep us here so the password
+  /// prompt can surface; successful connections keep us here regardless
+  /// of the cached adv (the adv may simply be stale).
+  ///
+  /// One-shot: we redirect at most once per ControlScreen instance so a
+  /// transient adv drop later in the session can't yank the user away.
+  bool _btOnlyRedirectChecked = false;
 
   @override
   Widget build(BuildContext context) {
     final lampId = widget.lampId;
-    final isMesh = ref.watch(nearbyLampsNotifierProvider.select(
-      (list) => list.firstWhereOrNull((l) => l.id == lampId)?.isMesh,
-    ));
-    if (!_initialMeshChecked && isMesh != null) {
-      _initialMeshChecked = true;
-      // Only short-circuit when we can actually navigate. Without a
-      // GoRouter in the tree (some widget tests pump ControlScreen
-      // directly), fall through so the embedded BtOnlyInfoPane below
-      // can still render as the secondary surface.
-      final router = GoRouter.maybeOf(context);
-      if (isMesh == false && router != null) {
-        // Schedule the redirect post-frame — pushReplacement during
-        // build is illegal. Once-only via the flag above.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          router.pushReplacement(AppRoutes.btOnly(lampId));
-        });
-        return ConnectingView(deviceId: lampId);
+    final async = ref.watch(controlNotifierProvider(lampId));
+    if (!_btOnlyRedirectChecked && async is AsyncError) {
+      final err = async.error;
+      if (err is! LampAuthRequiredException) {
+        final isMesh = ref.read(nearbyLampsNotifierProvider).firstWhereOrNull(
+              (l) => l.id == lampId,
+            )?.isMesh;
+        final router = GoRouter.maybeOf(context);
+        if (isMesh == false && router != null) {
+          _btOnlyRedirectChecked = true;
+          // pushReplacement during build is illegal — defer to post-frame.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            router.pushReplacement(AppRoutes.btOnly(lampId));
+          });
+          return ConnectingView(deviceId: lampId);
+        }
       }
     }
-    final async = ref.watch(controlNotifierProvider(lampId));
     return async.when(
       loading: () => ConnectingView(deviceId: lampId),
       error: (e, _) {
@@ -136,7 +136,6 @@ class _ControlScreenState extends ConsumerState<ControlScreen> {
                       ],
                     ),
                   ),
-                  BtOnlyInfoPane(lampId: lampId),
                   ShadeCard(
                     color: shade,
                     bpp: state.shade.bpp,

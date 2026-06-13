@@ -8,6 +8,7 @@ namespace lamp {
 // included from animated_behavior.hpp without dragging in compositor/manager
 // definitions.
 class Compositor;
+class ConfiguratorBehavior;
 class ExpressionManager;
 class FrameBuffer;
 
@@ -30,6 +31,13 @@ struct BehaviorContext {
   // populates [shade, base] in begin() so Expression::shouldAffectBuffer()
   // can route by target without grabbing a global.
   std::vector<FrameBuffer*> expressionFrameBuffers;
+  // Phase C: transient color overrides drive their target colors + fade
+  // duration through ConfiguratorBehavior::beginFade() so per-pixel fade
+  // stays a single source of truth in the configurator's draw loop. The
+  // standard lamp wires these at setup; ColorOverride::bind() routes to
+  // the right surface (base vs shade) at apply time.
+  ConfiguratorBehavior* baseConfigurator = nullptr;
+  ConfiguratorBehavior* shadeConfigurator = nullptr;
 };
 
 }  // namespace lamp
