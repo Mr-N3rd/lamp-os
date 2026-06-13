@@ -15,7 +15,6 @@ static constexpr uint32_t kGlitchyLinearFactor = 485u * 511u;  // == 247835
 GlitchyExpression::GlitchyExpression(FrameBuffer* inBuffer, uint32_t inFrames)
     : Expression(inBuffer, inFrames) {
   allowedInHomeMode = false;  // Glitchy should not work in home mode
-  isExclusive = true;  // Glitchy takes exclusive control when active
 }
 
 void GlitchyExpression::configureFromParameters(const std::map<std::string, uint32_t>& parameters) {

@@ -15,14 +15,15 @@
  */
 namespace lamp {
 
-// Phase C: duration-controlled fade replaces the old frame-counted ease.
-// kDefaultFadeMs is the value the configurator uses when nothing has called
-// beginFade() since the last colors-write — picked to match the pre-Phase-C
-// "easeFrames=60 @ ~60fps ≈ 1s, perceptually a tad sharper than that under
-// the quad ease curve" UX so BLE color picker drags look the same. The
-// override path overrides this per-call (the wisp typically asks for 100ms
-// snap-in, peer-swap might ask for several hundred ms breathe).
-constexpr uint16_t kDefaultFadeMs = 250;
+// Per-pixel fade window for BLE color writes (no explicit fadeDurationMs
+// supplied by the caller). 100ms sits right at the human just-noticeable
+// fade vs snap boundary — smooth enough to avoid stepping on slow drags,
+// snappy enough that the lamp tracks the slider in near-real-time.
+// Lowered from 250 (Phase C migration value, chosen to mimic the old
+// easeFrames=60 quad-ease feel) once the slider lag became noticeable.
+// Override callers (ColorOverride for wisp paint, peer-swap, etc.) pass
+// their own fadeDurationMs and don't touch this default.
+constexpr uint16_t kDefaultFadeMs = 100;
 
 class ConfiguratorBehavior : public AnimatedBehavior {
   using AnimatedBehavior::AnimatedBehavior;
@@ -35,7 +36,6 @@ class ConfiguratorBehavior : public AnimatedBehavior {
   uint8_t brightness = 100;
   std::vector<Color> colors;
   unsigned long lastWebSocketUpdateTimeMs = 0;
-  bool disabled = false;  // Can be disabled during expression previews
 
   void draw() override;
 

@@ -108,7 +108,6 @@ class BrightnessOverride {
   uint16_t restoreDurationMs_ = 0;
 
   lamp_protocol::OverrideSource activeSource_ = lamp_protocol::OverrideSource::None;
-  uint8_t activeMac_[6] = {0};
   lamp_protocol::OverrideSurface activeSurface_ = lamp_protocol::OverrideSurface::Any;
 
   std::function<void()> onChange_;

@@ -94,6 +94,7 @@ class NearbyLampsNotifier extends _$NearbyLampsNotifier {
           l,
       updated,
     ];
+    _sortRoster(next);
     _scheduleStateEmit(next);
     // Lazy-start the prune timer on first adv. Widget tests that don't
     // pipe through the scanner stream never create a timer and so don't
@@ -141,6 +142,28 @@ class NearbyLampsNotifier extends _$NearbyLampsNotifier {
     // emit), skip the redundant state assignment.
     if (_listEquals(pending, state)) return;
     state = pending;
+  }
+
+  /// Stable sort for the roster. Pre-fix, `_onAd` appended the just-
+  /// heard lamp to the end of the list — two lamps adverting at similar
+  /// rates ping-ponged positions every ~100 ms because RSSI didn't even
+  /// enter the sort. Now: bucket by RSSI tier (10 dBm bands so lamps
+  /// "roughly the same distance" group together — typical RSSI jitter
+  /// is ±5 dBm and would otherwise flip neighbours), then alphabetical
+  /// by name within bucket (stable even when RSSI wobbles inside a
+  /// bucket). Recency would re-flip on every adv arrival, defeating the
+  /// stability goal — name is the right tiebreaker even when the
+  /// user notices the order isn't strictly closest-first.
+  static void _sortRoster(List<NearbyLamp> list) {
+    list.sort((a, b) {
+      // RSSI is negative; less-negative = closer. Bucket by 10 dBm,
+      // sort DESC so bucket -6 (-60..-69 dBm) precedes bucket -7
+      // (-70..-79 dBm) etc.
+      final bucketA = a.rssi ~/ 10;
+      final bucketB = b.rssi ~/ 10;
+      if (bucketA != bucketB) return bucketB.compareTo(bucketA);
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
   }
 
   /// Lightweight content equality for the roster. Lists of @freezed

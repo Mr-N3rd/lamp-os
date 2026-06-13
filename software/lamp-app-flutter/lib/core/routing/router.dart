@@ -16,6 +16,7 @@ import '../widgets/back_button_leading.dart';
 import '../../features/nearby/presentation/nearby_lamps_screen.dart';
 import '../../features/onboarding/presentation/add_lamp_shell.dart';
 import '../../features/onboarding/presentation/onboarding_placeholder.dart';
+import '../../features/wisp/presentation/wisp_config_screen.dart';
 import 'routes.dart';
 
 part 'router.g.dart';
@@ -154,6 +155,11 @@ GoRouter appRouter(Ref ref) {
           typeKey: state.pathParameters['type']!,
           targetKey: int.parse(state.pathParameters['target']!),
         ),
+      ),
+      GoRoute(
+        path: '/lamp/:id/wisp',
+        builder: (_, state) =>
+            WispConfigScreen(lampId: state.pathParameters['id']!),
       ),
     ],
   );

@@ -276,11 +276,15 @@ class ExpressionConfig {
     'disabledDuringWispOverride',
   };
 
-  /// Type-aware default for `disabledDuringWispOverride` when the JSON
-  /// key is missing. Mirrors the firmware-side default in
-  /// `software/lamp-os/src/config/config.cpp` so the app and firmware
-  /// agree on what an old NVS payload (pre-feature firmware) should
-  /// parse to without needing a migration write.
+  /// Type-aware value for `disabledDuringWispOverride`. The toggle was
+  /// removed from the operator UX in commit 3575f43 — the behavior
+  /// should be uniform across the fleet per type. We normalize on load
+  /// here so any stale stored value (from when the toggle was
+  /// user-toggleable) is overwritten on the next Save with the current
+  /// type default. Mirrors firmware-side
+  /// `software/lamp-os/src/config/config.cpp`. A future custom-lamps
+  /// power-user surface can re-introduce per-instance overrides via a
+  /// separate mechanism if needed.
   static bool _defaultDisabledDuringWispOverrideForType(String type) {
     return type == 'breathing' || type == 'shifty';
   }
@@ -302,9 +306,10 @@ class ExpressionConfig {
       intervalMax: (json['intervalMax'] as num?)?.toInt() ?? 900,
       target: (json['target'] as num?)?.toInt() ?? 3,
       parameters: params,
+      // Force the type default — ignore any stored value. See doc on
+      // `_defaultDisabledDuringWispOverrideForType` above for the why.
       disabledDuringWispOverride:
-          json['disabledDuringWispOverride'] as bool? ??
-              _defaultDisabledDuringWispOverrideForType(type),
+          _defaultDisabledDuringWispOverrideForType(type),
     );
   }
 

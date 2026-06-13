@@ -13,7 +13,6 @@ static constexpr uint32_t BREATHING_MAX_FRAMES = 100000;
 
 BreathingExpression::BreathingExpression(FrameBuffer* inBuffer, uint32_t inFrames)
     : Expression(inBuffer, inFrames) {
-  isExclusive = false;  // This can run and blend with other things
   allowedInHomeMode = true;
 }
 
@@ -153,9 +152,6 @@ void BreathingExpression::control() {
 }
 
 void BreathingExpression::draw() {
-  // Pause if an exclusive behavior is running
-  if (shouldPause()) return;
-
   if (!shouldAffectBuffer()) {
     nextFrame();
     return;

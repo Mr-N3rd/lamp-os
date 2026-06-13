@@ -9,11 +9,12 @@ import '../../../features/control/presentation/control_screen.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../../inventory/presentation/widgets/lamp_picker_sheet.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
+import '../../nearby/application/scan_grace_provider.dart';
 import '../application/lamp_status.dart';
 import '../../social/presentation/social_screen.dart';
 import '../../wisp/application/wisp_notifier.dart';
-import '../../wisp/presentation/wisp_pane.dart';
 import 'expressions_screen.dart';
+import 'info_screen.dart';
 
 /// Diagonal aurora-blue → glow-pink gradient used on the active tab
 /// indicator and the AppBar Save action. Ported from the prior Vue app's
@@ -24,10 +25,13 @@ const _brandGradient = LinearGradient(
   colors: [BrandColors.auroraBlue, BrandColors.glowPink],
 );
 
-/// Bottom-nav tabs for the lamp shell. Pre-restructure this enum
-/// carried `setup` + `info` as well; both moved into the AppBar gear
-/// → /setup standalone pane.
-enum LampTab { control, expressions, wisp, social }
+/// Bottom-nav tabs for the lamp shell. Wisp used to be a bottom-nav
+/// destination but moved out: when only one wisp is painting a given
+/// lamp (enforced by the wisp-side multi-wisp coordination), the floating
+/// orb indicator is already onscreen advertising it. Tapping the orbs
+/// five times unlocks the dedicated wisp config route (`/lamp/:id/wisp`).
+/// Same gesture pattern as the Lamplit-wordmark advanced-unlock.
+enum LampTab { control, expressions, social, info }
 
 class LampShell extends ConsumerStatefulWidget {
   const LampShell({
@@ -56,20 +60,20 @@ class _LampShellState extends ConsumerState<LampShell> {
     // is released with the shell.
     ref.watch(controlNotifierProvider(widget.lampId));
 
-    // Same lifecycle treatment for the wisp notifier: it holds the saved /
-    // draft manual-palette state and the current `WispSourceMode`, neither
-    // of which can be reconstructed from CHAR_WISP_STATUS alone (the
-    // palette colors don't fit in the 230-byte payload budget — only the
-    // 8-char ID prefix is shipped). Without this watch, switching away
-    // from the Wisp tab unmounts WispPane, the provider auto-disposes,
-    // and on return the editor opens empty with source reverted to Off.
+    // Same lifecycle treatment for the wisp notifier even though the
+    // Wisp tab is gone from the bottom nav: the WispIndicator on the
+    // Setup tab still consumes it, and the dedicated wisp config route
+    // pushed from the 5-tap-orbs gesture should reuse the same
+    // notifier instance (manual-palette draft + source mode). Without
+    // this lamp-shell-level watch, the indicator would dispose the
+    // notifier the moment the user navigated away from the Setup tab.
     ref.watch(wispNotifierProvider(widget.lampId));
 
     final body = switch (_tab) {
       LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsScreen(lampId: widget.lampId),
-      LampTab.wisp => WispPane(lampId: widget.lampId),
       LampTab.social => SocialScreen(lampId: widget.lampId),
+      LampTab.info => InfoScreen(lampId: widget.lampId),
     };
 
     final inventory = ref.watch(inventoryNotifierProvider).value;
@@ -83,10 +87,12 @@ class _LampShellState extends ConsumerState<LampShell> {
     // actually flips — not on every shade/base color tick during a drag.
     final connected = ref.watch(controlNotifierProvider(widget.lampId)
         .select((async) => async.value?.connected ?? false));
+    final inScanGrace = ref.watch(scanGraceActiveProvider);
     final status = statusFor(
       lampId: widget.lampId,
       nearby: nearby,
       connected: connected,
+      inScanGrace: inScanGrace,
     );
 
     return Scaffold(
@@ -107,17 +113,28 @@ class _LampShellState extends ConsumerState<LampShell> {
         ),
         actions: [
           // Save pill — visible on tabs that ride the isDirty +
-          // settings-blob save flow. Wisp writes go straight through
-          // CHAR_WISP_OP with no dirty state, so the pill belongs to
-          // the settings-blob flow only. Configuration drilldown lives
-          // inline at the bottom of the Setup tab body (not the AppBar)
-          // per the operator's intent that config feels like part of
-          // Setup, not chrome above it.
-          if (_tab != LampTab.wisp) _SaveAction(lampId: widget.lampId),
+          // settings-blob save flow. Info is read-only (branding +
+          // firmware + version) so the pill is hidden there. The Wisp
+          // bottom-nav tab is gone entirely; the dedicated wisp config
+          // screen (pushed via the 5-tap-orbs gesture) is its own
+          // route with its own AppBar.
+          if (_tab != LampTab.info) _SaveAction(lampId: widget.lampId),
         ],
       ),
       body: body,
-      bottomNavigationBar: NavigationBarTheme(
+      // Tab nav is gated on the BLE connection. When the link is
+      // down (post-disconnect, mid-reconnect), the per-tab views would
+      // either render stale data or hang on a write the lamp can't
+      // hear — both confusing. Greying + ignoring the buttons makes
+      // the reconnect-in-flight state visible without taking the user
+      // off the page they were on. ConnectionBanner (at the top of the
+      // tab body) carries the attempt counter; this is the
+      // complementary affordance on the bottom nav.
+      bottomNavigationBar: IgnorePointer(
+        ignoring: !connected,
+        child: Opacity(
+          opacity: connected ? 1.0 : 0.4,
+          child: NavigationBarTheme(
         data: NavigationBarThemeData(
           // Vue active state: `linear-gradient(135deg, auroraBlue, glowPink)`
           // with a soft shadow. Material 3's NavigationBar only lets us set
@@ -159,11 +176,13 @@ class _LampShellState extends ConsumerState<LampShell> {
             _gradientDestination(Icons.tune, 'Setup', _tab == LampTab.control),
             _gradientDestination(
                 Icons.auto_awesome, 'Expressions', _tab == LampTab.expressions),
-            _gradientDestination(
-                Icons.bubble_chart, 'Wisp', _tab == LampTab.wisp),
             _gradientDestination(Icons.handshake_outlined, 'Social',
                 _tab == LampTab.social),
+            _gradientDestination(
+                Icons.info_outline, 'Info', _tab == LampTab.info),
           ],
+        ),
+      ),
         ),
       ),
     );
@@ -237,7 +256,20 @@ class _SaveAction extends ConsumerWidget {
     final async = ref.watch(controlNotifierProvider(lampId));
     final notifier = ref.read(controlNotifierProvider(lampId).notifier);
     final state = async.value;
-    final connected = state?.connected ?? false;
+    // AsyncLoading (state == null) means build() is still running — we've
+    // never been connected to this lamp in this session. "Connecting…"
+    // matches that mental model; "Reconnecting…" is reserved for the
+    // post-disconnect recovery path so the two states stay legible.
+    if (state == null) {
+      return Tooltip(
+        message: 'Connecting to this lamp…',
+        child: _outlined(
+            label: 'Connecting…',
+            icon: Icons.bluetooth_searching,
+            onPressed: null),
+      );
+    }
+    final connected = state.connected;
     if (!connected) {
       return Tooltip(
         message: 'Reconnecting to this lamp…',

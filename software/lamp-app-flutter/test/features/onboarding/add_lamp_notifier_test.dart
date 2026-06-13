@@ -323,4 +323,9 @@ class _HangingBleClient implements BleClient {
   @override
   Stream<bool> watchConnected(String deviceId) =>
       Stream.value(_connected.contains(deviceId));
+
+  @override
+  Future<void> cycleAdapter(String deviceId) async {
+    _connected.remove(deviceId);
+  }
 }

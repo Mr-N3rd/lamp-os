@@ -66,10 +66,10 @@ class BaseCard extends ConsumerWidget {
         child: Row(
           children: [
             Container(
-              width: 28,
-              height: 60,
+              width: 56,
+              height: 56,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(14),
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,

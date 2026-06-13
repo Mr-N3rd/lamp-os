@@ -40,7 +40,6 @@ class AnimatedBehavior {
   uint32_t frame = 0;
   uint32_t currentLoop = 0;
   bool allowedInHomeMode = true;
-  bool isExclusive = false;  // If true, pauses other non-exclusive behaviors
   AnimationState animationState = STOPPED;
 
   /**

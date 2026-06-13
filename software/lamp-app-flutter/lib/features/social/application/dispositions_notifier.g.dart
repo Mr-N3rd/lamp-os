@@ -17,6 +17,15 @@ part of 'dispositions_notifier.dart';
 ///
 /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
 /// Missing keys default to 3 (neutral) at the call site via `get`.
+///
+/// KNOWN LIMITATION (audit ux-H6): dispositions are keyed by the PEER's
+/// user-set name (`NearbyLamp.name`). When a peer renames itself, its
+/// disposition entry orphans on every lamp that already learned its old
+/// name. The fix is firmware-side: dispositions need to be keyed by
+/// the peer's stable MAC and surface the current name as a display
+/// alias. Tracked separately — would require a CHAR_SOCIAL_DISPOSITIONS
+/// wire-format bump on the firmware side and a one-time migration of
+/// existing maps.
 
 @ProviderFor(Dispositions)
 final dispositionsProvider = DispositionsFamily._();
@@ -30,6 +39,15 @@ final dispositionsProvider = DispositionsFamily._();
 ///
 /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
 /// Missing keys default to 3 (neutral) at the call site via `get`.
+///
+/// KNOWN LIMITATION (audit ux-H6): dispositions are keyed by the PEER's
+/// user-set name (`NearbyLamp.name`). When a peer renames itself, its
+/// disposition entry orphans on every lamp that already learned its old
+/// name. The fix is firmware-side: dispositions need to be keyed by
+/// the peer's stable MAC and surface the current name as a display
+/// alias. Tracked separately — would require a CHAR_SOCIAL_DISPOSITIONS
+/// wire-format bump on the firmware side and a one-time migration of
+/// existing maps.
 final class DispositionsProvider
     extends $AsyncNotifierProvider<Dispositions, Map<String, int>> {
   /// Per-peer social disposition for a given lamp.
@@ -41,6 +59,15 @@ final class DispositionsProvider
   ///
   /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
   /// Missing keys default to 3 (neutral) at the call site via `get`.
+  ///
+  /// KNOWN LIMITATION (audit ux-H6): dispositions are keyed by the PEER's
+  /// user-set name (`NearbyLamp.name`). When a peer renames itself, its
+  /// disposition entry orphans on every lamp that already learned its old
+  /// name. The fix is firmware-side: dispositions need to be keyed by
+  /// the peer's stable MAC and surface the current name as a display
+  /// alias. Tracked separately — would require a CHAR_SOCIAL_DISPOSITIONS
+  /// wire-format bump on the firmware side and a one-time migration of
+  /// existing maps.
   DispositionsProvider._({
     required DispositionsFamily super.from,
     required String super.argument,
@@ -77,7 +104,7 @@ final class DispositionsProvider
   }
 }
 
-String _$dispositionsHash() => r'399c037f04416cf54efe76fac029b1f1a53c6b59';
+String _$dispositionsHash() => r'0a0e2b1762bd4a88c101020f8bf8346fbca89388';
 
 /// Per-peer social disposition for a given lamp.
 ///
@@ -88,6 +115,15 @@ String _$dispositionsHash() => r'399c037f04416cf54efe76fac029b1f1a53c6b59';
 ///
 /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
 /// Missing keys default to 3 (neutral) at the call site via `get`.
+///
+/// KNOWN LIMITATION (audit ux-H6): dispositions are keyed by the PEER's
+/// user-set name (`NearbyLamp.name`). When a peer renames itself, its
+/// disposition entry orphans on every lamp that already learned its old
+/// name. The fix is firmware-side: dispositions need to be keyed by
+/// the peer's stable MAC and surface the current name as a display
+/// alias. Tracked separately — would require a CHAR_SOCIAL_DISPOSITIONS
+/// wire-format bump on the firmware side and a one-time migration of
+/// existing maps.
 
 final class DispositionsFamily extends $Family
     with
@@ -116,6 +152,15 @@ final class DispositionsFamily extends $Family
   ///
   /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
   /// Missing keys default to 3 (neutral) at the call site via `get`.
+  ///
+  /// KNOWN LIMITATION (audit ux-H6): dispositions are keyed by the PEER's
+  /// user-set name (`NearbyLamp.name`). When a peer renames itself, its
+  /// disposition entry orphans on every lamp that already learned its old
+  /// name. The fix is firmware-side: dispositions need to be keyed by
+  /// the peer's stable MAC and surface the current name as a display
+  /// alias. Tracked separately — would require a CHAR_SOCIAL_DISPOSITIONS
+  /// wire-format bump on the firmware side and a one-time migration of
+  /// existing maps.
 
   DispositionsProvider call(String lampId) =>
       DispositionsProvider._(argument: lampId, from: this);
@@ -133,6 +178,15 @@ final class DispositionsFamily extends $Family
 ///
 /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
 /// Missing keys default to 3 (neutral) at the call site via `get`.
+///
+/// KNOWN LIMITATION (audit ux-H6): dispositions are keyed by the PEER's
+/// user-set name (`NearbyLamp.name`). When a peer renames itself, its
+/// disposition entry orphans on every lamp that already learned its old
+/// name. The fix is firmware-side: dispositions need to be keyed by
+/// the peer's stable MAC and surface the current name as a display
+/// alias. Tracked separately — would require a CHAR_SOCIAL_DISPOSITIONS
+/// wire-format bump on the firmware side and a one-time migration of
+/// existing maps.
 
 abstract class _$Dispositions extends $AsyncNotifier<Map<String, int>> {
   late final _$args = ref.$arg as String;

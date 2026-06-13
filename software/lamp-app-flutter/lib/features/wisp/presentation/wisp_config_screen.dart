@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/brand_colors.dart';
 import '../../../core/widgets/app_snackbar.dart';
+import '../../../core/widgets/empty_state_pane.dart';
 import '../../../core/widgets/friendly_error.dart';
 import '../../../core/widgets/password_prompt_dialog.dart';
 import '../../../core/widgets/settings_row.dart';
@@ -20,14 +21,19 @@ import '../domain/wisp_status.dart';
 import '../domain/zone_source.dart';
 import 'palette_gradient_bar.dart';
 
-/// Wisp tab — controls how the wisp drives the lamp grid's paint.
+/// Wisp config — controls how the wisp drives the lamp grid's paint.
+///
+/// Pushed from the WispIndicator's 5-tap-orbs gesture on a wisp-painted
+/// lamp. The bottom-nav Wisp tab is gone; the orbs are the only entry
+/// point (same gesture style as the Lamplit-wordmark advanced-unlock).
 ///
 /// The wisp is a separate ESP32-C6 node that can either follow an Aurora
 /// zone (subscription palette) or repaint the mesh from an operator-
 /// defined palette. From the lamp app's perspective it's an opaque peer;
 /// we talk to it through the lamp's BLE control service which proxies
 /// wispOps onto the mesh and caches the wisp's status broadcasts back
-/// at us.
+/// at us. The lamp parameter is the BLE proxy — same lamp the user is
+/// connected to in LampShell.
 ///
 /// Layout (top-down):
 ///   0. Palette gradient bar — full-width, no padding, mirrors the wisp's
@@ -46,29 +52,34 @@ import 'palette_gradient_bar.dart';
 ///   8. Palette prefix indicator (wisp's last published palette)
 ///   9. WiFi config — tappable row that opens the lamp's scanned-network
 ///      picker (shared with Home Mode) → password prompt → setWifi op
-class WispPane extends ConsumerWidget {
-  const WispPane({super.key, required this.lampId});
+class WispConfigScreen extends ConsumerWidget {
+  const WispConfigScreen({super.key, required this.lampId});
 
   final String lampId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controlAsync = ref.watch(controlNotifierProvider(lampId));
-    return controlAsync.when(
-      loading: () => ConnectingView(deviceId: lampId),
-      error: (e, _) => FriendlyError.page(
-        title: "Couldn't reach your lamp.",
-        subtitle:
-            "They may have wandered out of range. Bring your phone closer "
-            'and try again.',
-        rawError: e,
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Wisp'),
       ),
-      data: (state) {
-        if (!state.connected) {
-          return ConnectingView(deviceId: lampId);
-        }
-        return _WispBody(lampId: lampId);
-      },
+      body: controlAsync.when(
+        loading: () => ConnectingView(deviceId: lampId),
+        error: (e, _) => FriendlyError.page(
+          title: "Couldn't reach your lamp.",
+          subtitle:
+              "They may have wandered out of range. Bring your phone closer "
+              'and try again.',
+          rawError: e,
+        ),
+        data: (state) {
+          if (!state.connected) {
+            return ConnectingView(deviceId: lampId);
+          }
+          return _WispBody(lampId: lampId);
+        },
+      ),
     );
   }
 }
@@ -126,20 +137,26 @@ class _WispBodyState extends ConsumerState<_WispBody> {
 
     final async = ref.watch(wispNotifierProvider(widget.lampId));
     return async.when(
-      loading: () => const Center(
-        child: CircularProgressIndicator(color: BrandColors.fogGrey),
-      ),
+      loading: () => const _WispLoading(),
       // A read error here almost always means "this lamp doesn't have
       // the wisp characteristic" — pre-FriendlyError, this dead-ended
       // a user on a non-wisp lamp who switched to the Wisp tab. Now
-      // we render the same empty-state body as for `status.present ==
-      // false`, which surfaces the "No wisp detected" guidance and
-      // keeps the tab usable. Audit ux-H4. True catastrophic errors
-      // (BLE disconnect during read) get the same UI, which is fine —
-      // the user's next action is reconnect, and the rest of the app
-      // handles that out-of-band.
-      error: (_, _) => _buildBody(context, WispStatus.empty),
-      data: (status) => _buildBody(context, status),
+      // we render the no-wisp empty state, which surfaces the "No wisp
+      // detected" guidance and keeps the tab usable. Audit ux-H4.
+      error: (_, _) => const _NoWispEmpty(),
+      data: (status) {
+        // Three-state UX: until the lamp's wispStatus is populated
+        // (mac populated → present == true), don't render the source
+        // picker or the manual-palette editor. Pre-fix, this fell
+        // through to _buildBody and showed the SharedPreferences-
+        // mirrored manual palette from a prior session — confusing
+        // because that palette was NOT what the wisp was actually
+        // painting (or there was no wisp at all).
+        if (!status.present) {
+          return const _NoWispEmpty();
+        }
+        return _buildBody(context, status);
+      },
     );
   }
 
@@ -278,6 +295,111 @@ class _WispBodyState extends ConsumerState<_WispBody> {
       AppSnackbar.error(context, "Couldn't reach the wisp — try again.");
     }
   }
+}
+
+/// Loading state shown while the wisp tab is doing its first
+/// `readStatus()` after the user opens it. The control screen has
+/// already confirmed the lamp is connected (we're past
+/// `controlAsync.when`); what we're waiting on here is purely the
+/// BLE round-trip for `CHAR_WISP_STATUS`. Tagged "Connecting to wisp"
+/// rather than "Loading" so the user can tell apart "still hearing
+/// from the lamp" (which would have shown a different ConnectingView
+/// outside this widget) from "lamp is connected, asking it about the
+/// wisp."
+class _WispLoading extends StatelessWidget {
+  const _WispLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircularProgressIndicator(color: BrandColors.fogGrey),
+          SizedBox(height: 12),
+          Text(
+            'Connecting to wisp…',
+            style: TextStyle(color: BrandColors.fogGrey, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown when the lamp returned `WispStatus.empty` (no wispMac
+/// populated) — either no wisp has been heard on the mesh from this
+/// lamp's perspective, or the lamp itself doesn't carry the wisp
+/// characteristic (legacy / standalone deployment). No source picker,
+/// no editor — those would only let the user accidentally configure
+/// a wisp they're not actually talking to.
+class _NoWispEmpty extends StatelessWidget {
+  const _NoWispEmpty();
+
+  @override
+  Widget build(BuildContext context) {
+    return const EmptyStatePane(
+      icon: _TwoOrbsIcon(size: 56),
+      title: 'No wisp detected',
+      subtitle: "This lamp hasn't heard a wisp on the mesh yet. "
+          "Make sure the wisp is powered on and within range.",
+    );
+  }
+}
+
+/// Static two-orb glyph for the no-wisp / loading affordances. Mirrors
+/// the live [WispIndicator] (base + shade orbs) without animation, so
+/// the empty state reads as "the thing that would be here." Material's
+/// nearest off-the-shelf option was `bubble_chart` — three circles —
+/// which broke the metaphor; the wisp paints exactly two surfaces, so
+/// two orbs it is.
+class _TwoOrbsIcon extends StatelessWidget {
+  const _TwoOrbsIcon({required this.size});
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: size,
+      child: CustomPaint(
+        painter: _TwoOrbsPainter(),
+      ),
+    );
+  }
+}
+
+class _TwoOrbsPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    // Mid-drift snapshot of the live WispIndicator: orbs arranged
+    // diagonally (upper-right + lower-left) rather than vertically
+    // stacked, with the shade orb visibly larger than the base orb so
+    // they read as two distinct entities at a glance. Greyscale per
+    // empty-state visual language — the live indicator uses the wisp's
+    // actual paint colors here.
+    final paint = Paint()
+      ..color = BrandColors.slateGrey
+      ..style = PaintingStyle.fill;
+    final rShade = size.width * 0.22;
+    final rBase = size.width * 0.16;
+    // Upper-right: bigger (shade)
+    canvas.drawCircle(
+      Offset(cx + size.width * 0.13, cy - size.height * 0.16),
+      rShade,
+      paint,
+    );
+    // Lower-left: smaller (base)
+    canvas.drawCircle(
+      Offset(cx - size.width * 0.13, cy + size.height * 0.16),
+      rBase,
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_TwoOrbsPainter old) => false;
 }
 
 class _WispHeader extends StatelessWidget {

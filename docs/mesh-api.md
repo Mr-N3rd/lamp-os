@@ -168,11 +168,20 @@ surface(1) + sourceKind(1) + fadeDurationMs(2 LE) +
 numColors(1) + colors[numColors × 4 RGBW]
 = 23 + 4N bytes (= 31 for N=2)
 
-surface:        0x01 Base, 0x02 Shade, 0x10+ reserved
+surface:        0x01 Base, 0x02 Shade, 0x03 BaseAndShade, 0xFF Any
 sourceKind:     0x01 Wisp, 0x02 PeerSwap, 0x10+ user-defined
 fadeDurationMs: u16 0..65535. 0 = instant snap; otherwise lamp-side
                 duration-controlled fade via ConfiguratorBehavior.
 numColors:      1..8 (kMaxOverrideColorsPerFrame, single source of truth)
+
+surface = 0x03 (BaseAndShade) carries TWO RGBW colors in a single frame:
+colors[0] → base, colors[1] → shade. The wisp's PaintDistributor uses
+this exclusively, halving ESP-NOW unicast traffic per peer per cycle
+(was two separate frames). Atomic delivery: either both surfaces update
+or neither does. Eliminated the asymmetric Base-loss / Shade-loss
+pattern (measured 31% Base / 15% Shade loss under BLE coex pre-fix).
+The lamp's `standard_lamp.cpp` drainOverrideColors dispatches
+colors[0]→baseColorOverride and colors[1]→shadeColorOverride.
 ```
 
 **`MSG_RESTORE_COLORS` (0x22)** — Drop colors override, restore baseline.
@@ -325,26 +334,30 @@ lamp A                       mesh                            lamp B (in range)
   │                            │                              │     fireAt=now+0)
 ```
 
-### Wisp paints a lamp's base colors
+### Wisp paints a lamp's base + shade (combined frame)
 
 ```
 wisp                                mesh                    lamp
   │                                   │                       │
   │── Aurora palette change           │                       │
   │── TupleSampler.assign(macA, p)    │                       │
-  │   → {colorA, colorB}              │                       │
+  │   → {baseColor, shadeColor}       │                       │
   │── MSG_OVERRIDE_COLORS unicast ───►│── ESP-NOW unicast ───►│
   │   targetMac=lamp A                │                       │
-  │   surface=Base                    │                       │
+  │   surface=BaseAndShade (0x03)     │                       │
   │   sourceKind=Wisp                 │                       │
   │   fadeDurationMs=1500             │                       │
-  │   colors=[colorA, colorB]         │                       │
+  │   numColors=2                     │                       │
+  │   colors[0]=base, colors[1]=shade │                       │
   │                                   │                       │── parse, pending slot
   │                                   │                       │── Core 1 drain:
-  │                                   │                       │   ColorOverride.apply()
-  │                                   │                       │── snapshot config.base.colors
-  │                                   │                       │── baseConfigurator
-  │                                   │                       │   ::beginFade(target, 1500)
+  │                                   │                       │   surface==BaseAndShade →
+  │                                   │                       │   baseColorOverride.apply(
+  │                                   │                       │     colors[0], numColors=1)
+  │                                   │                       │   shadeColorOverride.apply(
+  │                                   │                       │     colors[1], numColors=1)
+  │                                   │                       │── snapshot config.{base,shade}
+  │                                   │                       │   .colors via beginFade
   │                                   │                       │── ConfiguratorBehavior
   │                                   │                       │   ::draw interpolates
   │                                   │                       │   per-pixel for 1.5s
@@ -353,6 +366,13 @@ wisp                                mesh                    lamp
   │  ...60s no refresh OR             │                       │── tick() watchdog fires
   │     MSG_RESTORE_COLORS arrives    │                       │── restore baseline w/ fade
 ```
+
+Pre-2026-06-11 the wisp sent TWO unicasts per peer per cycle (one Base,
+one Shade, 10 ms apart). That model suffered asymmetric loss under BLE
+coex (Base lost ~31%, Shade ~15%) because ESP-NOW's send-fail callback
+on the first frame raced the second send. The combined-frame model
+(`surface=BaseAndShade, numColors=2`) halves traffic and makes delivery
+atomic — both colors land or neither does.
 
 ### Phone picks a wisp zone via mesh proxy (Phase D)
 

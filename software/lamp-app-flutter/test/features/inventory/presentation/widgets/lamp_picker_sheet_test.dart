@@ -11,6 +11,8 @@ import 'package:lamp_app/features/inventory/presentation/widgets/lamp_picker_she
 import 'package:lamp_app/features/nearby/application/nearby_lamps_notifier.dart';
 import 'package:lamp_app/features/nearby/domain/nearby_lamp.dart';
 
+import '../../../../_support/scan_grace_override.dart';
+
 // Note: pumpAndSettle() times out because StatusDot runs an infinite
 // AnimationController. Following the pattern from status_dot_test.dart
 // and lamp_chip_test.dart we use pump(fixed duration) throughout.
@@ -39,7 +41,10 @@ void main() {
   // and pre-populate inventory with [lamps].
   Future<ProviderContainer> withInventory(List<InventoryLamp> lamps) async {
     final c = ProviderContainer(
-      overrides: [bleScannerProvider.overrideWithValue(FakeBleScanner())],
+      overrides: [
+        bleScannerProvider.overrideWithValue(FakeBleScanner()),
+        scanGraceTestOverride,
+      ],
     );
     await c.read(inventoryNotifierProvider.future);
     for (final l in lamps) {

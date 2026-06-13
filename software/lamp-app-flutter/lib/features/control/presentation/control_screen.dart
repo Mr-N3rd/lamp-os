@@ -18,6 +18,7 @@ import 'widgets/connect_password_prompt.dart';
 import 'widgets/connecting_view.dart';
 import 'widgets/connection_banner.dart';
 import 'widgets/lamp_preview.dart';
+import 'widgets/wisp_indicator.dart';
 import 'widgets/shade_card.dart';
 
 
@@ -132,6 +133,12 @@ class _ControlScreenState extends ConsumerState<ControlScreen> {
                             ],
                           ),
                         ),
+                        // Top-right wisp indicator. Hides itself when no
+                        // wisp is currently controlling either surface;
+                        // pops on with a soft glow + drift when wisp
+                        // takes over (firmware sends a CHAR_WISP_STATUS
+                        // notify on every override transition).
+                        WispIndicator(lampId: lampId, size: 56),
                       ],
                     ),
                   ),

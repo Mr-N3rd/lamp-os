@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/brand_colors.dart';
 
-enum StatusKind { offline, bluetooth, mesh }
+enum StatusKind { offline, bluetooth, mesh, searching }
 
 class StatusDot extends StatefulWidget {
   const StatusDot({super.key, required this.kind, this.size = 10});
@@ -49,6 +49,25 @@ class _StatusDotState extends State<StatusDot>
 
   @override
   Widget build(BuildContext context) {
+    // Searching is the "we've started scanning but haven't heard back yet"
+    // state — render an indeterminate spinner rather than a dot so the
+    // user can distinguish it from a true Offline.
+    if (widget.kind == StatusKind.searching) {
+      return Semantics(
+        label: 'Searching',
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: CircularProgressIndicator(
+            strokeWidth: (widget.size * 0.18).clamp(1.5, 3.0),
+            valueColor: AlwaysStoppedAnimation<Color>(
+              BrandColors.slateGrey.withValues(alpha: 0.85),
+            ),
+          ),
+        ),
+      );
+    }
+
     // Mesh-connected lamps glow brand green (mesh is the live, healthy
     // state). BT-only is auroraBlue at ~45 % so it reads as "online but not
     // the live link." Offline is a neutral grey.
@@ -56,6 +75,7 @@ class _StatusDotState extends State<StatusDot>
       StatusKind.offline => BrandColors.slateGrey,
       StatusKind.bluetooth => BrandColors.auroraBlue.withValues(alpha: 0.45),
       StatusKind.mesh => BrandColors.lumenGreen,
+      StatusKind.searching => BrandColors.slateGrey, // unreachable
     };
 
     // Screen-readers see only the visual dot otherwise — name it (audit
@@ -64,6 +84,7 @@ class _StatusDotState extends State<StatusDot>
       StatusKind.offline => 'Offline',
       StatusKind.bluetooth => 'Bluetooth only',
       StatusKind.mesh => 'Mesh connected',
+      StatusKind.searching => 'Searching', // unreachable
     };
 
     return Semantics(

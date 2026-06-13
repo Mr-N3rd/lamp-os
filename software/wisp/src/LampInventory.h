@@ -24,6 +24,13 @@ struct InventoryEntry {
   uint8_t shadeColor[4] = {0};  // RGBW
   uint32_t firmwareVersion = 0;
   uint32_t lastSeenMs = 0;
+  // RSSI of the most recent MSG_HELLO from this lamp, as reported by
+  // ESP-NOW. Used by the WispRoster claim-decision logic to figure out
+  // which wisp is closest to each lamp. Defaults to INT8_MIN to mean
+  // "never measured" — entries that came in via a code path that didn't
+  // surface RSSI keep this sentinel and won't be chosen as the closer
+  // wisp until a real measurement lands.
+  int8_t rssi = INT8_MIN;
 };
 
 /**
@@ -46,9 +53,12 @@ class LampInventory {
   // Called from MeshLink recv handler (WiFi task). Bounded mutex take so a
   // contended loop reader can't stall recv; on contention we drop the update
   // — HELLOs repeat every 2 s, so the lamp is caught on the next beacon.
+  // `rssi` is the signed ESP-NOW RX RSSI for the frame that delivered this
+  // hello, or INT8_MIN to mean "no measurement available" (test rigs etc.).
   void recordHello(const uint8_t mac[6], const std::string& name,
                    const uint8_t baseRGBW[4], const uint8_t shadeRGBW[4],
-                   uint32_t firmwareVersion, uint32_t nowMs);
+                   uint32_t firmwareVersion, uint32_t nowMs,
+                   int8_t rssi = INT8_MIN);
 
   // Drop entries older than maxAgeMs. Call periodically from loop().
   void prune(uint32_t nowMs, uint32_t maxAgeMs);

@@ -153,6 +153,18 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
     // Rebroadcast so wisps in adjacent rooms (no direct line of sight to
     // this room) still propagate. Same gossip semantics as MSG_HELLO.
     link_.broadcast(data, len);
+  } else if (msgType == lamp_protocol::MSG_WISP_CLAIM) {
+    // Wisp-to-wisp coordination. Lamps don't act on the payload — they
+    // just gossip-relay so a wisp on the other side of the mesh learns
+    // about claims from wisps it can't directly hear. Dedup BEFORE
+    // rebroadcast so the gossip storm dies out instead of cycling.
+    lamp_protocol::ParsedWispClaim wc;
+    if (!lamp_protocol::parseWispClaim(data, len, wc)) return;
+    if (!wispClaimDedup_.record(wc.sourceMac,
+                                lamp_protocol::MSG_WISP_CLAIM, wc.seq)) {
+      return;
+    }
+    link_.broadcast(data, len);
   } else if (msgType == lamp_protocol::MSG_OVERRIDE_COLORS) {
     lamp_protocol::ParsedOverrideColors p;
     if (!lamp_protocol::parseOverrideColors(data, len, p)) return;
@@ -163,6 +175,15 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
     // no gossip). Reach is whatever direct radio delivers — keeps wisp's
     // paint scoped to "lamps the wisp can hear" without spillover.
     if (!addressedToUs(p.targetMac, myMac_)) return;
+    // Debug-session telemetry: record every per-surface arrival so we can
+    // diagnose base-flicker (paired Base+Shade sends, Base loses ESP-NOW
+    // races more often per PaintDistributor.cpp:130-139).
+    Serial.printf("[recv] OVERRIDE_COLORS surface=0x%02X src=%02X:%02X:%02X:%02X:%02X:%02X seq=%u fade=%ums kind=%u\n",
+                  (unsigned)p.surface,
+                  p.sourceMac[0], p.sourceMac[1], p.sourceMac[2],
+                  p.sourceMac[3], p.sourceMac[4], p.sourceMac[5],
+                  (unsigned)p.seq, (unsigned)p.fadeDurationMs,
+                  (unsigned)p.sourceKind);
     PendingOverrideColors slot;
     std::memcpy(slot.sourceMac, p.sourceMac, 6);
     slot.surface = p.surface;
@@ -182,6 +203,11 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
                                     p.seq)) return;
     // No relay — see OVERRIDE_COLORS branch.
     if (!addressedToUs(p.targetMac, myMac_)) return;
+    Serial.printf("[recv] RESTORE_COLORS surface=0x%02X src=%02X:%02X:%02X:%02X:%02X:%02X seq=%u kind=%u\n",
+                  (unsigned)p.surface,
+                  p.sourceMac[0], p.sourceMac[1], p.sourceMac[2],
+                  p.sourceMac[3], p.sourceMac[4], p.sourceMac[5],
+                  (unsigned)p.seq, (unsigned)p.sourceKind);
     PendingRestoreColors slot;
     std::memcpy(slot.sourceMac, p.sourceMac, 6);
     slot.surface = p.surface;

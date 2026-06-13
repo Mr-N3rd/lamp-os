@@ -73,7 +73,7 @@ void BrightnessOverride::apply(const uint8_t sourceMac[6],
   state_ = FadeState::FadingIn;
   activeSource_ = source;
   activeSurface_ = surface;
-  std::memcpy(activeMac_, sourceMac, 6);
+  (void)sourceMac;  // not used post-apply; ownership check is by source kind, not MAC
   fadeStartMs_ = ::millis();
   fadeDurationMs_ = fadeDurationMs;
   lastApplyMs_ = fadeStartMs_;
@@ -157,7 +157,9 @@ void BrightnessOverride::tick(uint32_t nowMs, uint8_t baseline) {
       const uint32_t elapsed = nowMs - lastApplyMs_;
       if (elapsed >= kPaintWatchdogMs) {
         // Auto-restore. Pass Any to bypass the source-ownership check.
-        restore(activeMac_, lamp_protocol::OverrideSource::Any,
+        // restore() does (void)sourceMac internally; pass a zero MAC.
+        static const uint8_t kZeroMac[6] = {0};
+        restore(kZeroMac, lamp_protocol::OverrideSource::Any,
                 /*fadeDurationMs=*/currentFadeDurationMs_);
       }
       break;
@@ -167,7 +169,6 @@ void BrightnessOverride::tick(uint32_t nowMs, uint8_t baseline) {
       if (elapsed >= restoreDurationMs_) {
         state_ = FadeState::Idle;
         activeSource_ = lamp_protocol::OverrideSource::None;
-        std::memset(activeMac_, 0, 6);
       }
       break;
     }

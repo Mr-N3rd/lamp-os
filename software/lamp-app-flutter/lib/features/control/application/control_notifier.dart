@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/widgets.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/ble/ble_client.dart';
@@ -9,6 +10,7 @@ import '../../../core/ble/ble_client_provider.dart';
 import '../../../core/ble/lamp_crypto.dart';
 import '../../../core/ble/uuids.dart';
 import '../../../core/ble/write_coalescer.dart';
+import '../../../core/lifecycle/app_lifecycle.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../domain/lamp_color.dart';
 import '../domain/sections.dart';
@@ -86,6 +88,12 @@ class ControlNotifier extends _$ControlNotifier {
 
   StreamSubscription<bool>? _connSub;
   Timer? _reconnectTimer;
+  /// Single-slot guard against concurrent reconnect attempts. Set true at
+  /// the top of `_tryReconnect`, cleared in `finally`. Lets us safely
+  /// kick `_tryReconnect` from BOTH the scheduled timer (`_scheduleReconnect`)
+  /// AND the watchConnected→true edge (`_onConnectionChange`) without
+  /// stacking ble.connect + auth + canary calls on top of each other.
+  bool _reconnectInFlight = false;
   static const _reconnectDelays = [500, 1000, 2000, 4000, 8000]; // ms, capped
   /// Max number of consecutive reconnect attempts before we give up and
   /// surface an error state instead of polling forever (audit perf-M4).
@@ -315,8 +323,24 @@ class ControlNotifier extends _$ControlNotifier {
           v,
           withoutResponse: true,
         );
-      } catch (_) {
-        // intentionally dropped — live-preview writes are fire-and-forget
+      } catch (e) {
+        // A live-preview write throwing a disconnect-shaped error is the
+        // canonical "link has zombified" signal — fbp's connectionState
+        // stream sometimes misses the false edge (backgrounded socket
+        // teardown, gatts_if slot leak). Treat it as the disconnect we
+        // never observed and kick the reconnect ladder so the user
+        // doesn't have to force-stop the app to recover.
+        if (isBleDisconnectError(e) && ref.mounted) {
+          // Notifier dispose during a live-preview write happens routinely
+          // (lamp switch, back-nav, post-save reboot) — `safeWrite`'s
+          // own onWrite closure outlives ref. Guard against mutating
+          // state on a disposed notifier.
+          _onConnectionChange(false);
+        }
+        // Other exception types (e.g. encryption-required surfaced mid-
+        // session, or a transient write rejection) are still dropped —
+        // a live-preview write tearing the UI down on an isolated failure
+        // would be a worse outcome than the missed paint.
       }
     }
 
@@ -365,6 +389,20 @@ class ControlNotifier extends _$ControlNotifier {
     ref.onDispose(() {
       _connSub?.cancel();
       _reconnectTimer?.cancel();
+    });
+
+    // Probe the BLE link whenever the app comes back to the foreground.
+    // Backgrounded apps can have their GATT connection torn down by the
+    // OS (Android process priority, iOS suspend); fbp's connectionState
+    // stream doesn't always emit the `false` edge in those cases, so a
+    // bare _onConnectionChange listener stays stuck on `true` and any
+    // user interaction silently fails. The probe forces a real GATT
+    // round-trip — if the link is dead, the read throws
+    // BleDisconnectedException and we kick the reconnect ladder.
+    ref.listen<AppLifecycleState>(appLifecycleStateProvider, (prev, next) {
+      if (next == AppLifecycleState.resumed && prev != next) {
+        _probeLink();
+      }
     });
 
     await _updateSeen(
@@ -702,9 +740,16 @@ class ControlNotifier extends _$ControlNotifier {
   }
 
   Future<void> setShadeColor(LampColor color) async {
+    // Single-color convenience: wraps the color in a 1-element list and
+    // routes through `setShadeColors`. Existing callers (expression
+    // editor live-preview, lamp_preview thumbnails) keep their old
+    // signature.
+    return setShadeColors([color]);
+  }
+
+  Future<void> setShadeColors(List<LampColor> colors) async {
     final cur = state.value;
     if (cur == null) return;
-    final colors = [color];
     state = AsyncData(cur.copyWith(
       shade: ShadeSection(
         px: cur.shade.px,
@@ -714,7 +759,12 @@ class ControlNotifier extends _$ControlNotifier {
       ),
     ));
     _shadeColorsWriter?.schedule(_encodeColors(colors));
-    _queueSeen(shade: color);
+    // Inventory "last seen" cache mirrors the first stop — same shape as
+    // the pre-gradient single-color path, so the lamp picker's swatch
+    // preview stays representative.
+    if (colors.isNotEmpty) {
+      _queueSeen(shade: colors.first);
+    }
   }
 
   Future<void> setBaseColors(List<LampColor> colors) async {
@@ -1391,10 +1441,18 @@ class ControlNotifier extends _$ControlNotifier {
     final cur = state.value;
     if (cur == null) return;
     if (isConnected && !cur.connected) {
-      // Reconnect succeeded — clear flags + push local state to the lamp.
+      // fbp's connectionState emitted `true` mid-reconnect — but the
+      // GATT services aren't necessarily discovered yet (observed on
+      // hardware: a 4-second window where writes failed with
+      // "primary service not found" before the canary lands).
+      //
+      // Don't flip the UI to "connected" on this edge — _tryReconnect's
+      // canary read is the truthful "the link can actually be used"
+      // signal. Kick _tryReconnect immediately rather than waiting for
+      // the soft 500ms reconnect timer; the in-flight guard prevents
+      // doubling up with a timer-scheduled run that's already running.
       _reconnectTimer?.cancel();
-      state = AsyncData(cur.copyWith(connected: true, reconnectAttempt: 0));
-      _pushLocalState(cur);
+      unawaited(_tryReconnect());
       return;
     }
     if (!isConnected && cur.connected) {
@@ -1405,6 +1463,55 @@ class ControlNotifier extends _$ControlNotifier {
       _scheduleReconnect();
     }
   }
+
+  /// Fires a no-op GATT read against the lamp to verify the link is
+  /// actually alive. Used by the foreground-resume listener: fbp may
+  /// still report `isConnected == true` for a connection the OS killed
+  /// while the app was backgrounded, but any real I/O immediately
+  /// throws BleDisconnectedException. We surface that as the disconnect
+  /// edge we never observed, and the existing _onConnectionChange path
+  /// schedules a reconnect.
+  ///
+  /// No-op when:
+  ///   - notifier state is still loading / errored (nothing connected yet)
+  ///   - we're already in a reconnect cycle (banner showing attempts)
+  Future<void> _probeLink() async {
+    final cur = state.value;
+    if (cur == null || !cur.connected) return;
+    final ble = ref.read(bleClientProvider);
+    if (!ble.isConnected(_deviceId)) {
+      // fbp itself has dropped the link — surface the missing false edge.
+      _onConnectionChange(false);
+      return;
+    }
+    try {
+      // Cheap real GATT op: read the lamp section (small payload, part
+      // of the cold-start sweep, no side effects). If this throws a
+      // disconnect-shaped error, the slot is zombified.
+      await ble.readSection(_deviceId, 'lamp');
+    } on BleDisconnectedException {
+      // The await above is the dispose window: the user can switch
+      // lamps mid-probe, disposing the notifier. Touching state after
+      // that throws. The `mounted` check matches the pattern in
+      // _tryReconnect's catch.
+      if (!ref.mounted) return;
+      _onConnectionChange(false);
+    } catch (_) {
+      // Any other error (transient read failure, encryption etc.) is
+      // not a clean disconnect signal. Don't disturb the connection
+      // state — the next user action will surface a real failure if
+      // the link is actually dead.
+    }
+  }
+
+  /// Reconnect attempt at which we escalate to `cycleAdapter`. The soft
+  /// reconnect ladder is good for clean link drops (lamp reboot,
+  /// transient RF loss); after this many failures we assume the
+  /// Android `gatts_if` slot has zombified and force a soft-cycle
+  /// (explicit disconnect + delay + reconnect) before the next attempt.
+  /// Pre-this-attempt, plain reconnect; on this attempt, cycle then
+  /// reconnect.
+  static const int _cycleAdapterAttempt = 3;
 
   void _scheduleReconnect() {
     final cur = state.value;
@@ -1430,8 +1537,20 @@ class ControlNotifier extends _$ControlNotifier {
   }
 
   Future<void> _tryReconnect() async {
+    if (_reconnectInFlight) {
+      return;
+    }
+    _reconnectInFlight = true;
     final ble = ref.read(bleClientProvider);
     try {
+      final attempt = state.value?.reconnectAttempt ?? 0;
+      // Tier 3: if soft reconnects have failed enough times, soft-cycle
+      // the slot before the next connect. fbp.connect() returning
+      // success on a dead slot is the documented gatts_if-leak
+      // fingerprint that "force-stop fixes it" reports map onto.
+      if (attempt >= _cycleAdapterAttempt) {
+        await ble.cycleAdapter(_deviceId);
+      }
       await ble.connect(_deviceId);
       // Re-auth so subsequent writes get past the firmware's auth gate.
       final inv = await ref.read(inventoryNotifierProvider.future);
@@ -1452,11 +1571,42 @@ class ControlNotifier extends _$ControlNotifier {
             const LampAuthRequiredException(), StackTrace.current);
         return;
       }
-      // The watchConnected stream will fire `true` and _onConnectionChange
-      // handles clearing the banner + pushing local state.
+      // Canary succeeded → the link is fully usable (GATT connected
+      // AND services discovered AND auth restored). NOW it's safe to
+      // flip the UI to connected and push pending local state.
+      //
+      // Bail if disposed during the canary await — touching state would
+      // throw. The notifier dispose path already cancels everything we
+      // care about.
+      if (!ref.mounted) return;
+      _reconnectTimer?.cancel();
+      final cur = state.value;
+      if (cur != null) {
+        state = AsyncData(cur.copyWith(connected: true, reconnectAttempt: 0));
+        _pushLocalState(cur);
+      }
     } catch (_) {
-      // Connect or auth failed — schedule the next attempt.
+      // Bail if the notifier was disposed while we were awaiting — touching
+      // `state` after dispose throws. This happens in tests that
+      // dispose the ProviderContainer while a reconnect is mid-flight,
+      // and could also happen in production if the user navigates
+      // away (lamp picker → other lamp) during a slow reconnect.
+      if (!ref.mounted) {
+        _reconnectInFlight = false;
+        return;
+      }
+      // Clear the flag BEFORE scheduling the next attempt — the timer
+      // is scheduled via _scheduleReconnect and its `_tryReconnect`
+      // call will check `_reconnectInFlight` on entry. If finally
+      // hadn't yet run, that next call would incorrectly skip itself
+      // and the ladder would stall on its current attempt count.
+      _reconnectInFlight = false;
       _scheduleReconnect();
+    } finally {
+      // Defense-in-depth: the catch branches above clear the flag
+      // explicitly; finally covers the success path (and any future
+      // catch branch that forgets to).
+      _reconnectInFlight = false;
     }
   }
 

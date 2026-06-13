@@ -44,7 +44,8 @@ void LampInventory::evictOldestIfFullLocked(uint32_t nowMs) {
 
 void LampInventory::recordHello(const uint8_t mac[6], const std::string& name,
                                 const uint8_t baseRGBW[4], const uint8_t shadeRGBW[4],
-                                uint32_t firmwareVersion, uint32_t nowMs) {
+                                uint32_t firmwareVersion, uint32_t nowMs,
+                                int8_t rssi) {
   // Bounded take — mirrors nearby_lamps's pattern for the same reason: this
   // runs on a WiFi-task callback and shouldn't stall on a loop-task reader.
   if (xSemaphoreTake(asHandle(mutex_), pdMS_TO_TICKS(2)) != pdTRUE) return;
@@ -59,6 +60,7 @@ void LampInventory::recordHello(const uint8_t mac[6], const std::string& name,
     std::memcpy(e.shadeColor, shadeRGBW, 4);
     e.firmwareVersion = firmwareVersion;
     e.lastSeenMs = nowMs;
+    e.rssi = rssi;
     entries_.push_back(e);
   } else {
     entries_[idx].name = name;
@@ -66,6 +68,12 @@ void LampInventory::recordHello(const uint8_t mac[6], const std::string& name,
     std::memcpy(entries_[idx].shadeColor, shadeRGBW, 4);
     entries_[idx].firmwareVersion = firmwareVersion;
     entries_[idx].lastSeenMs = nowMs;
+    // Preserve the "never measured" sentinel: if the caller didn't have
+    // a real RSSI, keep whatever we had stored. Real measurements always
+    // overwrite — RSSI is the latest sample, not a running average.
+    if (rssi != INT8_MIN) {
+      entries_[idx].rssi = rssi;
+    }
   }
   xSemaphoreGive(asHandle(mutex_));
 }

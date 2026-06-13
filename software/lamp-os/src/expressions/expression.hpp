@@ -54,11 +54,6 @@ class Expression : public AnimatedBehavior {
    */
   bool shouldAffectBuffer();
 
-  /**
-   * @brief Check if this expression should pause for an exclusive behavior
-   */
-  bool shouldPause() const;
-
  public:
   using AnimatedBehavior::AnimatedBehavior;
 

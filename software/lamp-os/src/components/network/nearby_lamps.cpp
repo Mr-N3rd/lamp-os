@@ -311,6 +311,40 @@ void NearbyLamps::cacheWispStatus(const uint8_t mac[6],
   xSemaphoreGive(mutex_);
 }
 
+void NearbyLamps::cacheWispMacFromPaint(const uint8_t mac[6]) {
+  // Bounded take: called from the loop-task drain of pendingOverrideColors
+  // on Core 1 (see standard_lamp.cpp's OVERRIDE_COLORS branch). Loop-task
+  // callers normally use portMAX_DELAY, but the BLE on-read of
+  // CHAR_WISP_STATUS runs on Core 0 and takes the same mutex via
+  // getWispStatusReadJson's 2 ms bounded-take. Match that 2 ms here so a
+  // contended BLE read doesn't get starved by the drain's wisp-paint
+  // update. On timeout we drop the update — the next wisp-sourced paint
+  // frame will retry.
+  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(2)) != pdTRUE) {
+    return;
+  }
+  // Same single-slot semantics as cacheWispStatus's mac-mismatch branch:
+  // a different wisp invalidates the stale per-wisp data so the next
+  // BLE read doesn't merge wisp-A's hello/status under wisp-B's MAC.
+  if (wispCache_.present && std::memcmp(wispCache_.mac, mac, 6) != 0) {
+    wispCache_.lastStatusJson.clear();
+    wispCache_.lastStatusMs = 0;
+    wispCache_.lastHelloMs = 0;
+    wispCache_.wispVersion = 0;
+    wispCache_.flags = 0;
+    wispCache_.paletteIdPrefix[0] = '\0';
+    wispCache_.carriedFwChannel[0] = '\0';
+    wispCache_.carriedFwVersion = 0;
+  }
+  std::memcpy(wispCache_.mac, mac, 6);
+  wispCache_.present = true;
+  // Intentionally NOT touching lastHelloMs / wispVersion / flags /
+  // paletteIdPrefix / carriedFw* — those are hello-only fields. The
+  // merge in getWispStatusReadJson skips them when their backing
+  // timestamps are zero, so leaving them at defaults is fine.
+  xSemaphoreGive(mutex_);
+}
+
 std::string NearbyLamps::getWispStatusReadJson() {
   // Bounded take matches getWispCache — a BLE on-read callback runs on
   // Core 0 and can't afford to block behind a long writer. The loop-task
@@ -324,9 +358,27 @@ std::string NearbyLamps::getWispStatusReadJson() {
   snap = wispCache_;
   xSemaphoreGive(mutex_);
 
-  // Nothing at all yet — empty object so the app's JSON decode succeeds
-  // with no fields and renders the "no wisp detected" state.
-  if (!snap.present && snap.lastStatusJson.empty()) {
+  // Take the lamp's local wisp-control state up front. This is the
+  // LOCAL ground truth (driven by ColorOverride.isWispActive) — the
+  // lamp knows whether it's actively being wisp-painted right now,
+  // regardless of whether a hello/status broadcast has populated
+  // wispCache_ yet. Without including it in the empty-cache short-
+  // circuit, a fresh app connection to a wisp-painted lamp shows
+  // "no wisp" for up to 2 s (the wisp's hello interval) before the
+  // indicator pops on. With it, the indicator fires immediately.
+  const bool haveLampState = lampWispStateProvider_ != nullptr;
+  LampWispState ws;
+  if (haveLampState) {
+    ws = lampWispStateProvider_();
+  }
+  const bool locallyControlling =
+      haveLampState && (ws.controllingBase || ws.controllingShade);
+
+  // Truly nothing — no cached hello/status AND the lamp itself isn't
+  // being wisp-painted right now. Empty object so the app's JSON
+  // decode succeeds with no fields and renders the "no wisp detected"
+  // state.
+  if (!snap.present && snap.lastStatusJson.empty() && !locallyControlling) {
     return std::string("{}");
   }
 
@@ -371,6 +423,21 @@ std::string NearbyLamps::getWispStatusReadJson() {
   }
   if (snap.lastStatusMs != 0 && doc["statusLastSeenMs"].isNull()) {
     doc["statusLastSeenMs"] = snap.lastStatusMs;
+  }
+
+  // Lamp-side wisp control snapshot — drives the app's will-o'-wisp
+  // indicator and disabledDuringWispOverride expression gating. Reuses
+  // the `ws` snapshot taken at the top so the early-return check and
+  // this merge see the same value (no second provider call mid-build).
+  if (haveLampState) {
+    doc["controllingBase"]  = ws.controllingBase;
+    doc["controllingShade"] = ws.controllingShade;
+    if (!ws.baseWispColor.empty()) {
+      doc["baseWispColor"] = ws.baseWispColor;
+    }
+    if (!ws.shadeWispColor.empty()) {
+      doc["shadeWispColor"] = ws.shadeWispColor;
+    }
   }
 
   std::string out;

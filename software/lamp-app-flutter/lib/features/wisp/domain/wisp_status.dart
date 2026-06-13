@@ -41,6 +41,10 @@ class WispStatus {
     this.statusLastSeenMs,
     this.source = WispSourceMode.aurora,
     this.offColor = _defaultOffColor,
+    this.controllingBase = false,
+    this.controllingShade = false,
+    this.baseWispColor,
+    this.shadeWispColor,
   });
 
   /// Sentinel for "no wisp has been heard on this lamp yet" (lamp
@@ -97,6 +101,27 @@ class WispStatus {
 
   /// Lamp-side `lastSeenMs` for the status half of the merge.
   final int? statusLastSeenMs;
+
+  /// True iff this lamp is currently following a wisp paint on the Base
+  /// surface — i.e. its baseColorOverride is FadingIn / Holding /
+  /// Restoring AND the most recent apply that took effect was
+  /// Wisp-sourced. Drives the will-o'-wisp indicator in the control
+  /// screen header and the `disabledDuringWispOverride` expression gate.
+  final bool controllingBase;
+
+  /// Same as [controllingBase] but for the Shade surface.
+  final bool controllingShade;
+
+  /// First stop of the most recent wisp paint on Base. `null` until the
+  /// first wisp paint has landed on this lamp's Base. Used to colour one
+  /// half of the indicator.
+  final LampColor? baseWispColor;
+
+  /// Same as [baseWispColor] for the Shade surface.
+  final LampColor? shadeWispColor;
+
+  /// Convenience: are we currently being wisp-painted on either surface?
+  bool get controlling => controllingBase || controllingShade;
 
   /// Phase E source-mode: off / manual / aurora. Drives the top-of-pane
   /// pill picker. Defaults to [WispSourceMode.aurora] when missing so
@@ -184,6 +209,15 @@ class WispStatus {
       return _defaultOffColor;
     }
 
+    LampColor? parseWispHexColor(Object? v) {
+      if (v is! String) return null;
+      try {
+        return LampColor.fromHex(v);
+      } catch (_) {
+        return null;
+      }
+    }
+
     final zoneSrc = asString(json['zoneSource']);
     final sourceRaw = json['source'];
     return WispStatus(
@@ -208,6 +242,10 @@ class WispStatus {
       // is aurora, matching the wisp-side coercion.
       source: parseWispSourceMode(sourceRaw is String ? sourceRaw : null),
       offColor: parseOffColor(json['offColor']),
+      controllingBase: asBool(json['controllingBase']),
+      controllingShade: asBool(json['controllingShade']),
+      baseWispColor: parseWispHexColor(json['baseWispColor']),
+      shadeWispColor: parseWispHexColor(json['shadeWispColor']),
     );
   }
 
@@ -234,6 +272,10 @@ class WispStatus {
       statusLastSeenMs: statusLastSeenMs,
       source: source ?? this.source,
       offColor: offColor ?? this.offColor,
+      controllingBase: controllingBase,
+      controllingShade: controllingShade,
+      baseWispColor: baseWispColor,
+      shadeWispColor: shadeWispColor,
     );
   }
 
@@ -255,7 +297,11 @@ class WispStatus {
           helloLastSeenMs == other.helloLastSeenMs &&
           statusLastSeenMs == other.statusLastSeenMs &&
           source == other.source &&
-          offColor == other.offColor;
+          offColor == other.offColor &&
+          controllingBase == other.controllingBase &&
+          controllingShade == other.controllingShade &&
+          baseWispColor == other.baseWispColor &&
+          shadeWispColor == other.shadeWispColor;
 
   @override
   int get hashCode => Object.hash(
@@ -272,5 +318,7 @@ class WispStatus {
         statusLastSeenMs,
         source,
         offColor,
+        Object.hash(controllingBase, controllingShade, baseWispColor,
+            shadeWispColor),
       );
 }

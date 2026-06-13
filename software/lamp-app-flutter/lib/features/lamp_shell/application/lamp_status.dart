@@ -7,7 +7,9 @@ import '../../nearby/domain/nearby_lamp.dart';
 ///   reading + writing this lamp.
 /// - `bluetooth` — heard via BLE adv within the nearby staleness window but
 ///   not the one we're connected to (or connection is currently dropped).
-/// - `offline` — not heard at all.
+/// - `searching` — not heard YET but the BLE scanner just started; the
+///   caller passes `inScanGrace=true` while the grace window is open.
+/// - `offline` — not heard, scan grace has expired.
 ///
 /// Pure function so both `LampChip` in the AppBar and the rows in
 /// `LampPickerSheet` share the same logic and stay in unit-test reach.
@@ -15,6 +17,7 @@ StatusKind statusFor({
   required String lampId,
   required List<NearbyLamp> nearby,
   required bool connected,
+  bool inScanGrace = false,
 }) {
   if (connected) return StatusKind.mesh;
   NearbyLamp? hit;
@@ -24,7 +27,7 @@ StatusKind statusFor({
       break;
     }
   }
-  return _kindFromHit(hit);
+  return _kindFromHit(hit, inScanGrace);
 }
 
 /// Map-keyed overload — call this when the caller already has an
@@ -35,13 +38,16 @@ StatusKind statusForById({
   required String lampId,
   required Map<String, NearbyLamp> nearbyById,
   required bool connected,
+  bool inScanGrace = false,
 }) {
   if (connected) return StatusKind.mesh;
-  return _kindFromHit(nearbyById[lampId]);
+  return _kindFromHit(nearbyById[lampId], inScanGrace);
 }
 
-StatusKind _kindFromHit(NearbyLamp? hit) {
-  if (hit == null) return StatusKind.offline;
+StatusKind _kindFromHit(NearbyLamp? hit, bool inScanGrace) {
+  if (hit == null) {
+    return inScanGrace ? StatusKind.searching : StatusKind.offline;
+  }
   // `isMesh` = "firmware speaks the app's mesh protocol". Lamps with
   // the current build show as `mesh` whenever in range; legacy v1
   // firmware (BT-only) shows as `bluetooth`.

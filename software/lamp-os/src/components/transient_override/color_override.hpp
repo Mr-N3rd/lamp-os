@@ -23,6 +23,7 @@
 // sourceKind == Any always succeeds (admin / shutdown path).
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "components/network/lamp_protocol.hpp"
@@ -106,6 +107,42 @@ class ColorOverride {
   FadeState state() const { return state_; }
   lamp_protocol::OverrideSource activeSource() const { return activeSource_; }
 
+  // True iff a wisp paint frame is currently shaping this surface — i.e.
+  // the override is animating (FadingIn/Holding/Restoring) AND the most
+  // recent apply that took effect carried sourceKind=Wisp. The Flutter
+  // app reads this through wispStatus to render the will-o'-wisp icon
+  // and to grey out expressions that opt into disabledDuringWispOverride.
+  bool isWispActive() const {
+    return state_ != FadeState::Idle &&
+           activeSource_ == lamp_protocol::OverrideSource::Wisp;
+  }
+
+  // First stop of the most-recent wisp paint. Cached on apply() when
+  // source==Wisp so the app can render it inside the indicator even
+  // during a Restoring fade-out. hasLastWispColor() is false until the
+  // first wisp paint has landed.
+  Color lastWispColor() const { return lastWispColor_; }
+  bool hasLastWispColor() const { return hasLastWispColor_; }
+
+  // Edge-triggered callback fired when isWispActive() changes value.
+  // Wired in standard_lamp.cpp to ble_control::notifyWispStatus so the
+  // app's wispStatus subscription receives a push the moment a surface
+  // becomes wisp-controlled or releases.
+  using OnWispStateChangeCallback = std::function<void()>;
+  void setOnWispStateChangeCallback(OnWispStateChangeCallback cb) {
+    wispStateCb_ = std::move(cb);
+  }
+
+  // Snap-re-install the most recent override target gradient back into
+  // the configurator. Acts on FadingIn + Holding (skips Restoring + Idle).
+  // Used by test_expression_complete after the app's payload overwrites
+  // `configurator.colors` with the lamp's saved colors — without this
+  // call, the wisp paint wouldn't visually return until the wisp's next
+  // backstop paint cycle (~10s gap). Snap-in (0ms fade) because the
+  // surface is already supposed to be at these colors; we're just
+  // restoring what was momentarily stomped.
+  void reassertHold();
+
   // Operator-priority lockout. While set, apply() drops wisp-sourced
   // overrides on the floor (PeerSwap/social cascade still applies — a
   // greeting takes precedence over a quiet edit). Set on by the app
@@ -127,7 +164,6 @@ class ColorOverride {
 
   FadeState state_ = FadeState::Idle;
   lamp_protocol::OverrideSource activeSource_ = lamp_protocol::OverrideSource::None;
-  uint8_t activeMac_[6] = {0};
 
   // Timestamp of the last apply() — drives both the FadingIn→Holding
   // transition (when elapsed >= currentFadeDurationMs_) and the
@@ -143,8 +179,33 @@ class ColorOverride {
   // `colors` at apply() time, and replaced by rebaseline() during Holding.
   std::vector<Color> savedColors_;
 
+  // Most recent override target gradient (per-pixel). Captured in
+  // apply() after expanding stops. Used by reassertHold() to put the
+  // wisp paint back into `configurator.colors` after a test_expression
+  // round-trip overwrote it.
+  std::vector<Color> targetGradient_;
+
   // Operator-editing lock — see setOperatorEditing() above.
   bool operatorEditing_ = false;
+
+  // Wisp paint state — set in apply() when source==Wisp.
+  Color lastWispColor_;
+  bool  hasLastWispColor_ = false;
+
+  // isWispActive() value at the last callback fire. Used for edge-
+  // triggering so we don't spam BLE notifies on every paint.
+  bool wasWispActive_ = false;
+
+  OnWispStateChangeCallback wispStateCb_;
+
+  // Edge-detect helper: call after any mutation to state_ / activeSource_.
+  void maybeNotifyWispStateChange() {
+    const bool nowActive = isWispActive();
+    if (nowActive != wasWispActive_) {
+      wasWispActive_ = nowActive;
+      if (wispStateCb_) wispStateCb_();
+    }
+  }
 };
 
 }  // namespace lamp

@@ -64,6 +64,8 @@ class BrightnessOverride;
 extern lamp::ColorOverride baseColorOverride;
 extern lamp::ColorOverride shadeColorOverride;
 extern lamp::BrightnessOverride brightnessOverride;
+extern lamp::ConfiguratorBehavior baseConfiguratorBehavior;
+extern lamp::ConfiguratorBehavior shadeConfiguratorBehavior;
 static constexpr size_t MAX_PENDING_JSON = 256;
 static constexpr size_t MAX_PENDING_OP_JSON = 512;
 
@@ -397,6 +399,14 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     baseColorOverride.setOperatorEditing(false);
     shadeColorOverride.setOperatorEditing(false);
     brightnessOverride.setOperatorEditing(false);
+    // Defensive sweep #2 (reduced): re-assert wisp paint into the
+    // configurators in case a mid-test BLE write stomped the wisp's
+    // target gradient before disconnecting. Configurator.disabled is
+    // gone since the 2026-06-12 reorder — test_expression no longer
+    // pauses the configurator, so there's no "test mode" state left to
+    // recover from. The reassertHold calls below are belt-and-suspenders.
+    baseColorOverride.reassertHold();
+    shadeColorOverride.reassertHold();
     // Clear adaptive-conn-params state. Next connect re-seeds it; tick()
     // is a no-op when s_currentConnHandle is INVALID.
     s_currentConnHandle = 0xFFFF;

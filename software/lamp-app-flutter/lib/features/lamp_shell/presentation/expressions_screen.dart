@@ -5,10 +5,12 @@ import 'package:go_router/go_router.dart';
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../../core/widgets/app_snackbar.dart';
+import '../../../core/widgets/empty_state_pane.dart';
 import '../../../core/widgets/friendly_error.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/domain/sections.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
+import '../../wisp/application/wisp_notifier.dart';
 import '../domain/expression_meta.dart';
 
 class ExpressionsScreen extends ConsumerWidget {
@@ -39,28 +41,15 @@ class ExpressionsScreen extends ConsumerWidget {
           final notifier =
               ref.read(controlNotifierProvider(lampId).notifier);
           if (exprSection.expressions.isEmpty) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'No expressions yet',
-                      style: TextStyle(
-                        color: BrandColors.lampWhite,
-                        fontSize: 16,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Tap + to add a Glitch, Pulse, Breath or Shift effect.',
-                      style: TextStyle(color: BrandColors.fogGrey, fontSize: 12),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
+            return const EmptyStatePane(
+              icon: Icon(
+                Icons.auto_awesome,
+                size: 56,
+                color: BrandColors.slateGrey,
               ),
+              title: 'No expressions yet',
+              subtitle:
+                  'Tap + to add a Glitch, Pulse, Breath or Shift effect.',
             );
           }
           return ListView.builder(
@@ -145,7 +134,7 @@ Future<bool> _confirmDelete(BuildContext context, String type) async {
   return result ?? false;
 }
 
-class _ExpressionTile extends StatelessWidget {
+class _ExpressionTile extends ConsumerWidget {
   const _ExpressionTile({
     required this.lampId,
     required this.expression,
@@ -169,10 +158,23 @@ class _ExpressionTile extends StatelessWidget {
       };
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final meta = ExpressionTypeMeta.byKey(expression.type);
     final title = meta?.name ??
         (expression.type.isEmpty ? '(unnamed)' : expression.type);
+    // Per-expression wisp-gating. The user marks expressions that should
+    // pause while a wisp is in control by setting
+    // `disabledDuringWispOverride`. We watch a tiny slice of wispStatus
+    // (just `controlling`) so the row greys when a wisp takes over and
+    // un-greys when the wisp releases. No tooltip / explanation — the
+    // mystery is intentional per the spec.
+    final wispControlling = ref.watch(
+      wispNotifierProvider(lampId).select(
+        (async) => async.value?.controlling ?? false,
+      ),
+    );
+    final muted =
+        expression.disabledDuringWispOverride && wispControlling;
     return Dismissible(
       key: ValueKey('${expression.type}-${expression.target}'),
       direction: DismissDirection.endToStart,
@@ -184,65 +186,73 @@ class _ExpressionTile extends StatelessWidget {
       ),
       confirmDismiss: (_) => onConfirmDelete(),
       onDismissed: (_) => onDelete(),
-      child: InkWell(
-        // `push` not `go` — see the FAB callsite for the same reason.
-        onTap: () => GoRouter.maybeOf(context)?.push(
-          AppRoutes.expressionEditor(
-              lampId, expression.type, expression.target),
-        ),
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.04),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: BrandColors.auroraBlue.withValues(alpha: 0.16),
+      child: Opacity(
+        opacity: muted ? 0.35 : 1.0,
+        child: InkWell(
+          // `push` not `go` — see the FAB callsite for the same reason.
+          onTap: muted
+              ? null
+              : () => GoRouter.maybeOf(context)?.push(
+                    AppRoutes.expressionEditor(
+                        lampId, expression.type, expression.target),
+                  ),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: BrandColors.auroraBlue.withValues(alpha: 0.16),
+                  ),
+                  child: Icon(meta?.icon ?? Icons.auto_awesome,
+                      size: 18, color: BrandColors.auroraBlue),
                 ),
-                child: Icon(meta?.icon ?? Icons.auto_awesome,
-                    size: 18, color: BrandColors.auroraBlue),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        color: BrandColors.lampWhite,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: BrandColors.lampWhite,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _targetLabel,
-                      style: const TextStyle(
-                        color: BrandColors.fogGrey,
-                        fontSize: 12,
+                      const SizedBox(height: 4),
+                      Text(
+                        _targetLabel,
+                        style: const TextStyle(
+                          color: BrandColors.fogGrey,
+                          fontSize: 12,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              IconButton(
-                tooltip: 'Trigger now',
-                icon: const Icon(Icons.play_arrow,
-                    color: BrandColors.lumenGreen),
-                onPressed: onTrigger,
-              ),
-              Switch(value: expression.enabled, onChanged: onToggle),
-            ],
+                IconButton(
+                  tooltip: 'Trigger now',
+                  icon: const Icon(Icons.play_arrow,
+                      color: BrandColors.lumenGreen),
+                  onPressed: muted ? null : onTrigger,
+                ),
+                Switch(
+                  value: expression.enabled,
+                  onChanged: muted ? null : onToggle,
+                ),
+              ],
+            ),
           ),
         ),
       ),

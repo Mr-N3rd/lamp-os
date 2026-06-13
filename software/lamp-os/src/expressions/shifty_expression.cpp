@@ -161,10 +161,6 @@ void ShiftyExpression::onComplete() {
 }
 
 void ShiftyExpression::draw() {
-
-  // Pause if an exclusive behavior is running
-  if (shouldPause()) return;
-
   if (!shouldAffectBuffer()) {
     nextFrame();
     return;

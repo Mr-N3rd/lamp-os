@@ -22,7 +22,16 @@ static void recvTrampoline(const esp_now_recv_info_t* info,
   if (len < 0 || len > kMaxRecvFrameLen) return;
   auto& handler = MeshLink::s_instance->handler_;
   if (!handler) return;
-  handler(info->src_addr, data, static_cast<size_t>(len));
+  // ESP-NOW recv-info carries the rx_ctrl pointer when the IDF supports
+  // it (true on arduino-esp32 v3.x / IDF 5.x). rx_ctrl->rssi is a
+  // signed 8-bit bit-field on the C6. Fall back to INT8_MIN ("not
+  // measured") if rx_ctrl is null — the WispRoster claim logic treats
+  // that as "don't consider this lamp closer".
+  int8_t rssi = INT8_MIN;
+  if (info->rx_ctrl) {
+    rssi = static_cast<int8_t>(info->rx_ctrl->rssi);
+  }
+  handler(info->src_addr, data, static_cast<size_t>(len), rssi);
 }
 
 // ESP-NOW send-complete callback. Fires from the WiFi task with the

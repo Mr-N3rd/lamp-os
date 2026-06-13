@@ -13,6 +13,7 @@ import 'package:lamp_app/features/lamp_shell/presentation/lamp_shell.dart';
 import 'package:lamp_app/features/nearby/application/nearby_lamps_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../_support/scan_grace_override.dart';
 import '../../_support/seed.dart';
 
 /// Build a container with both the BLE client and scanner stubbed out so
@@ -28,6 +29,7 @@ ProviderContainer _container() {
     overrides: [
       bleClientProvider.overrideWithValue(InMemoryBleClient()),
       bleScannerProvider.overrideWithValue(FakeBleScanner()),
+      scanGraceTestOverride,
     ],
   );
 }
@@ -47,6 +49,55 @@ void main() {
   testWidgets('renders Control by default, switches to Expressions on tap',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
+    final ble = InMemoryBleClient();
+    await seedControlBle(ble, deviceId: 'lamp-1', name: 'jacko');
+    final c = ProviderContainer(
+      retry: (_, _) => null,
+      overrides: [
+        bleClientProvider.overrideWithValue(ble),
+        bleScannerProvider.overrideWithValue(FakeBleScanner()),
+        scanGraceTestOverride,
+      ],
+    );
+    addTearDown(c.dispose);
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: 'lamp-1', name: 'jacko', controlPassword: 'secret'));
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: const MaterialApp(
+        home: LampShell(lampId: 'lamp-1', initialTab: LampTab.control),
+      ),
+    ));
+    // Seeded BLE + inventory ⇒ ControlNotifier reaches connected=true,
+    // which un-gates the bottom-nav tap handlers (IgnorePointer wraps
+    // the NavigationBar when disconnected). Wait for connected to flip.
+    for (var i = 0; i < 40; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      final state = c.read(controlNotifierProvider('lamp-1')).value;
+      if (state?.connected == true) break;
+    }
+    expect(find.byType(NavigationBar), findsOneWidget);
+
+    // Tap by the nav icon to avoid hit-testing through stacked layers — the
+    // 'Expressions' label is inside a NavigationDestination tile.
+    await tester.tap(find.byIcon(Icons.auto_awesome));
+    await _settle(tester);
+    expect(find.byType(ExpressionsScreen), findsOneWidget);
+
+    // Social tab — Wisp tab is gone from the bottom nav (moved behind
+    // the 5-tap-orbs gesture on the WispIndicator), so Social is now
+    // the third bottom-nav destination. Switching here verifies
+    // tab-switch coverage to a still-present destination.
+    await tester.tap(find.byIcon(Icons.handshake_outlined));
+    await _settle(tester);
+    expect(find.byType(ExpressionsScreen), findsNothing);
+  });
+
+  testWidgets('NavigationBar is ignore-pointered while disconnected',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
     final c = _container();
     addTearDown(c.dispose);
 
@@ -57,24 +108,12 @@ void main() {
       ),
     ));
     await _settle(tester);
-    // Without a seeded BLE/inventory the Control notifier may settle either
-    // loading (no inventory entry → stuck on the future) or error (build
-    // threw). Either way the LampShell scaffold + NavigationBar is rendered,
-    // which is all we need to drive a tab switch below.
-    expect(find.byType(NavigationBar), findsOneWidget);
 
-    // Tap by the nav icon to avoid hit-testing through stacked layers — the
-    // 'Expressions' label is inside a NavigationDestination tile.
-    await tester.tap(find.byIcon(Icons.auto_awesome));
-    await _settle(tester);
-    expect(find.byType(ExpressionsScreen), findsOneWidget);
-
-    // Wisp tab — formerly verified Setup-tab routing, but Setup was
-    // removed from the bottom nav and is now reached via the AppBar
-    // gear (Icons.settings). The gear navigates through GoRouter,
-    // which isn't wired in this MaterialApp-only harness; switching to
-    // a still-present destination keeps the tab-switch coverage here.
-    await tester.tap(find.byIcon(Icons.bubble_chart));
+    // Without seeded BLE / inventory the control notifier never reaches
+    // connected==true, so the tab nav is wrapped in IgnorePointer +
+    // Opacity. Tap attempts should be silently dropped and the tab must
+    // stay on Control.
+    await tester.tap(find.byIcon(Icons.auto_awesome), warnIfMissed: false);
     await _settle(tester);
     expect(find.byType(ExpressionsScreen), findsNothing);
   });
@@ -123,8 +162,20 @@ void main() {
   testWidgets('Save action appears on editing tabs, hidden on Wisp',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
-    final c = _container();
+    final ble = InMemoryBleClient();
+    await seedControlBle(ble, deviceId: 'lamp-1', name: 'jacko');
+    final c = ProviderContainer(
+      retry: (_, _) => null,
+      overrides: [
+        bleClientProvider.overrideWithValue(ble),
+        bleScannerProvider.overrideWithValue(FakeBleScanner()),
+        scanGraceTestOverride,
+      ],
+    );
     addTearDown(c.dispose);
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(const InventoryLamp(
+          id: 'lamp-1', name: 'jacko', controlPassword: 'secret'));
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: c,
@@ -132,24 +183,32 @@ void main() {
         home: LampShell(lampId: 'lamp-1', initialTab: LampTab.control),
       ),
     ));
-    await _settle(tester);
-    // Disconnected fixture renders the "Reconnecting…" outlined chip on
-    // Setup-as-Colors tab — Save action is present.
-    expect(find.text('Reconnecting…'), findsOneWidget);
+    // Wait for connected==true so the bottom nav is tappable. Tab
+    // switching is gated on the connection now (IgnorePointer in the
+    // shell), and the test needs to drive switches.
+    for (var i = 0; i < 40; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      final state = c.read(controlNotifierProvider('lamp-1')).value;
+      if (state?.connected == true) break;
+    }
+    // Connected + clean ⇒ Save action present as outlined "Saved" chip on
+    // Setup tab.
+    expect(find.text('Saved'), findsOneWidget);
 
     // Switch to Expressions — Save action stays (expressions now ride
     // the unified isDirty + settings-blob save path).
     await tester.tap(find.byIcon(Icons.auto_awesome));
     await _settle(tester);
-    expect(find.text('Reconnecting…'), findsOneWidget);
+    expect(find.text('Saved'), findsOneWidget);
 
-    // Switch to Wisp — wisp writes are immediate, no isDirty;
-    // Save action hidden.
-    await tester.tap(find.byIcon(Icons.bubble_chart));
+    // Switch to Info — read-only branding + firmware + version, no
+    // dirty save flow; Save action hidden. (Wisp tab is gone — its
+    // configuration screen has its own AppBar with no Save action.)
+    await tester.tap(find.byIcon(Icons.info_outline));
     await _settle(tester);
-    expect(find.text('Reconnecting…'), findsNothing);
-    expect(find.text('Save changes'), findsNothing);
     expect(find.text('Saved'), findsNothing);
+    expect(find.text('Save changes'), findsNothing);
+    expect(find.text('Reconnecting…'), findsNothing);
   });
 
   testWidgets('Save action shows "Save changes" pill when dirty',
@@ -162,6 +221,7 @@ void main() {
       overrides: [
         bleClientProvider.overrideWithValue(ble),
         bleScannerProvider.overrideWithValue(FakeBleScanner()),
+        scanGraceTestOverride,
       ],
     );
     addTearDown(c.dispose);
@@ -205,6 +265,7 @@ void main() {
       overrides: [
         bleClientProvider.overrideWithValue(ble),
         bleScannerProvider.overrideWithValue(FakeBleScanner()),
+        scanGraceTestOverride,
       ],
     );
     addTearDown(c.dispose);

@@ -238,6 +238,10 @@ class ShowReceiver {
   lamp_protocol::DedupRing overrideBrightnessDedup_;
   lamp_protocol::DedupRing restoreBrightnessDedup_;
   lamp_protocol::DedupRing wispHelloDedup_;
+  // Wisp-to-wisp claim broadcasts. Same dedup pattern as wispHello so
+  // the gossip relay doesn't echo a frame back to its origin. Lamps
+  // don't otherwise act on MSG_WISP_CLAIM — pure pass-through.
+  lamp_protocol::DedupRing wispClaimDedup_;
   lamp_protocol::DedupRing eventDedup_;
   // Single shared dedup for MSG_FW_OFFER/CHUNK/DONE per lamp-side plan §5.
   // One wisp owns all outbound FW seqs; the 6 msgTypes in this family

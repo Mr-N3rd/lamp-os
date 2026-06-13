@@ -64,6 +64,13 @@ enum MsgType : uint8_t {
   MSG_RESTORE_COLORS      = 0x22,
   MSG_OVERRIDE_BRIGHTNESS = 0x23,
   MSG_RESTORE_BRIGHTNESS  = 0x24,
+  // Wisp-to-wisp claim broadcast. Carries `[(lampMac, rssi)]` entries
+  // for every lamp this wisp currently claims, at the RSSI the wisp
+  // hears that lamp. Gossip-relayed by lamps the same way MSG_WISP_HELLO
+  // is, so the shared claim view propagates across the mesh regardless
+  // of whether two wisps can directly hear each other. Lamps don't
+  // otherwise act on this message — it's purely wisp-coordination.
+  MSG_WISP_CLAIM          = 0x25,
   MSG_EVENT               = 0x30,
 };
 
@@ -90,11 +97,16 @@ constexpr size_t kMaxStaggerEntries         = 12;  // ESP-NOW 250-byte cap math
 constexpr uint8_t kBrightnessOverrideMin    = 5;   // anti-defeat floor
 
 // Surface byte values used by the override/restore family. `Any` means the
-// override targets every surface on the lamp (base + shade).
+// override targets every surface on the lamp (base + shade) with the same
+// gradient. `BaseAndShade` means numColors=2 carries a pair: colors[0] for
+// base, colors[1] for shade — one frame, two surfaces, distinct colors. The
+// wisp's paint distributor uses BaseAndShade to halve ESP-NOW frame count
+// per peer per cycle (was Base+Shade as two separate frames).
 enum class OverrideSurface : uint8_t {
-  Base  = 0x01,
-  Shade = 0x02,
-  Any   = 0xFF,
+  Base         = 0x01,
+  Shade        = 0x02,
+  BaseAndShade = 0x03,
+  Any          = 0xFF,
 };
 
 // Discriminator for who originated an override. PeerSwap is reserved for
@@ -146,6 +158,18 @@ constexpr size_t WISP_HELLO_FIXED_SIZE            = HEADER_SIZE + 6 + 4 + 1 +
 constexpr uint8_t WISP_HELLO_FLAG_PAINT_MODE        = 0x01;
 constexpr uint8_t WISP_HELLO_FLAG_WIFI_CONNECTED    = 0x02;
 constexpr uint8_t WISP_HELLO_FLAG_AURORA_CONNECTED  = 0x04;
+
+// MSG_WISP_CLAIM: header(6) + sourceMac(6) + count(1) + entries[count*7].
+// Each entry: lampMac(6) + signed int8 rssi(1) = 7 bytes.
+// ESP-NOW frame cap 250 bytes; (250 - 13) / 7 = 33 entries max. We cap
+// at 32 to align with LampInventory::MAX_LAMPS — a wisp can never have
+// more entries to advertise than its inventory holds anyway.
+constexpr size_t WISP_CLAIM_FIXED_PREFIX = HEADER_SIZE + 6 + 1;  // 13
+constexpr size_t WISP_CLAIM_ENTRY_SIZE   = 6 + 1;                // 7
+constexpr size_t kMaxWispClaimEntries    = 32;
+constexpr size_t WISP_CLAIM_MAX_SIZE     = WISP_CLAIM_FIXED_PREFIX +
+                                            kMaxWispClaimEntries *
+                                            WISP_CLAIM_ENTRY_SIZE;  // 237
 
 // MSG_OVERRIDE_COLORS fixed prefix:
 //   header(6) + sourceMac(6) + targetMac(6) + surface(1) + sourceKind(1)
@@ -247,6 +271,17 @@ struct ParsedWispHello {
   uint32_t carriedFwVersion;
 };
 
+struct ParsedWispClaim {
+  uint16_t seq;
+  uint8_t  sourceMac[6];
+  uint8_t  count;
+  // Pointers into the recv buffer; caller must not retain past this call.
+  // Each entry is (lampMac[6], int8 rssi). The arrays are parallel,
+  // both of length `count`. We surface them as raw byte spans to keep
+  // the parser branchless.
+  const uint8_t* entries;  // count * WISP_CLAIM_ENTRY_SIZE bytes
+};
+
 struct ParsedOverrideColors {
   uint16_t        seq;
   uint8_t         sourceMac[6];
@@ -306,6 +341,7 @@ namespace detail {
 inline bool isValidOverrideSurfaceByte(uint8_t b) {
   return b == static_cast<uint8_t>(OverrideSurface::Base) ||
          b == static_cast<uint8_t>(OverrideSurface::Shade) ||
+         b == static_cast<uint8_t>(OverrideSurface::BaseAndShade) ||
          b == static_cast<uint8_t>(OverrideSurface::Any);
 }
 
@@ -435,6 +471,29 @@ inline size_t buildWispHello(uint8_t* buf, size_t bufLen, uint16_t seq,
   buf[fwOff + 2] = static_cast<uint8_t>((carriedFwVersion >> 16) & 0xFF);
   buf[fwOff + 3] = static_cast<uint8_t>((carriedFwVersion >> 24) & 0xFF);
   return WISP_HELLO_FIXED_SIZE;
+}
+
+// Build a MSG_WISP_CLAIM frame. `entries` is `count` packed records, each
+// 7 bytes: lampMac(6) + signed int8 rssi(1). `count` must be ≤
+// kMaxWispClaimEntries. Returns total bytes written on success, 0 on
+// bad args / insufficient buffer.
+inline size_t buildWispClaim(uint8_t* buf, size_t bufLen, uint16_t seq,
+                             const uint8_t sourceMac[6],
+                             const uint8_t* entries,
+                             size_t count) {
+  if (!buf || !sourceMac) return 0;
+  if (count > kMaxWispClaimEntries) return 0;
+  if (count > 0 && !entries) return 0;
+  const size_t total = WISP_CLAIM_FIXED_PREFIX + count * WISP_CLAIM_ENTRY_SIZE;
+  if (bufLen < total) return 0;
+  detail::writeHeader(buf, MSG_WISP_CLAIM, seq);
+  std::memcpy(&buf[6], sourceMac, 6);
+  buf[12] = static_cast<uint8_t>(count);
+  if (count) {
+    std::memcpy(&buf[WISP_CLAIM_FIXED_PREFIX], entries,
+                count * WISP_CLAIM_ENTRY_SIZE);
+  }
+  return total;
 }
 
 // Build a MSG_OVERRIDE_COLORS frame. `numColors` must be 1..kMaxOverrideColorsPerFrame.
@@ -618,6 +677,21 @@ inline bool parseHello(const uint8_t* data, size_t len, ParsedHello& out) {
 }
 
 // --- Phase C parsers ---
+
+inline bool parseWispClaim(const uint8_t* data, size_t len, ParsedWispClaim& out) {
+  if (inspect(data, len) != MSG_WISP_CLAIM) return false;
+  if (len < WISP_CLAIM_FIXED_PREFIX) return false;
+  const uint8_t count = data[12];
+  if (count > kMaxWispClaimEntries) return false;
+  const size_t expected = WISP_CLAIM_FIXED_PREFIX +
+                          static_cast<size_t>(count) * WISP_CLAIM_ENTRY_SIZE;
+  if (len < expected) return false;
+  out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+  std::memcpy(out.sourceMac, &data[6], 6);
+  out.count = count;
+  out.entries = count ? &data[WISP_CLAIM_FIXED_PREFIX] : nullptr;
+  return true;
+}
 
 inline bool parseWispHello(const uint8_t* data, size_t len, ParsedWispHello& out) {
   if (inspect(data, len) != MSG_WISP_HELLO || len < WISP_HELLO_FIXED_SIZE) return false;

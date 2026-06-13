@@ -69,6 +69,19 @@ void ColorOverride::apply(const uint8_t sourceMac[6],
   std::vector<Color> target =
       lamp::buildGradientWithStops(pixelCount_, stops);
 
+  // Cache the full per-pixel gradient so reassertHold() can re-install
+  // it after test_expression_complete's payload momentarily overwrites
+  // `configurator.colors` with the lamp's saved baseline.
+  targetGradient_ = target;
+
+  // Cache the wisp paint's first stop for the app's indicator. We only
+  // record on wisp-sourced applies so a PeerSwap that overtakes the
+  // override doesn't pollute the "last wisp color" view.
+  if (source == lamp_protocol::OverrideSource::Wisp) {
+    lastWispColor_ = stops[0];
+    hasLastWispColor_ = true;
+  }
+
   configurator_->beginFade(target, fadeDurationMs);
   // Keep the configurator's animation state machine alive. Without this,
   // ConfiguratorBehavior::control() (behaviors/configurator.cpp:77-89)
@@ -84,9 +97,20 @@ void ColorOverride::apply(const uint8_t sourceMac[6],
 
   state_ = FadeState::FadingIn;
   activeSource_ = source;
-  std::memcpy(activeMac_, sourceMac, 6);
+  (void)sourceMac;  // not used post-apply; ownership check is by source kind, not MAC
   lastApplyMs_ = configurator_->fadeStartMs();
   currentFadeDurationMs_ = fadeDurationMs;
+
+  // Debug-session telemetry: every apply is a state-transition into
+  // (or through) FadingIn — track surface, source, and fade window.
+  Serial.printf("[override] apply surface=0x%02X src=%d fade=%ums numColors=%u\n",
+                (unsigned)surface_, (int)source,
+                (unsigned)fadeDurationMs, (unsigned)numColors);
+
+  // Edge-trigger the BLE notify so the app's wispStatus subscriber sees
+  // the indicator turn on / off as the override gains or loses Wisp
+  // sourcing.
+  maybeNotifyWispStateChange();
 }
 
 void ColorOverride::restore(const uint8_t sourceMac[6],
@@ -115,6 +139,12 @@ void ColorOverride::restore(const uint8_t sourceMac[6],
   state_ = FadeState::Restoring;
   restoreStartMs_ = configurator_->fadeStartMs();
   restoreDurationMs_ = fadeDurationMs;
+
+  // Restoring is still isWispActive==true (state != Idle), so the
+  // indicator stays on through the fade-out. The Restoring → Idle
+  // transition in tick() fires the callback when the override fully
+  // releases.
+  maybeNotifyWispStateChange();
 }
 
 void ColorOverride::tick(uint32_t nowMs) {
@@ -138,7 +168,14 @@ void ColorOverride::tick(uint32_t nowMs) {
       // in restore() doesn't bounce us.
       const uint32_t elapsed = nowMs - lastApplyMs_;
       if (elapsed >= kPaintWatchdogMs) {
-        restore(activeMac_, lamp_protocol::OverrideSource::Any,
+        // Debug-session telemetry: this firing IS the base-flicker
+        // we've been chasing — log it loudly with the silent gap.
+        Serial.printf("[override] watchdog FIRE surface=0x%02X age=%ums src=%d\n",
+                      (unsigned)surface_, (unsigned)elapsed,
+                      (int)activeSource_);
+        // restore() does (void)sourceMac internally; pass a zero MAC.
+        static const uint8_t kZeroMac[6] = {0};
+        restore(kZeroMac, lamp_protocol::OverrideSource::Any,
                 /*fadeDurationMs=*/currentFadeDurationMs_);
       }
       return;
@@ -149,11 +186,35 @@ void ColorOverride::tick(uint32_t nowMs) {
       if (elapsed >= restoreDurationMs_) {
         state_ = FadeState::Idle;
         activeSource_ = lamp_protocol::OverrideSource::None;
-        std::memset(activeMac_, 0, 6);
+        // Final transition out of wisp-active state fires the notify.
+        maybeNotifyWispStateChange();
       }
       return;
     }
   }
+}
+
+void ColorOverride::reassertHold() {
+  // Snap the wisp's target gradient back into the configurator after
+  // something else (test_expression_complete's saved-colors payload)
+  // overwrote it. Acts on FadingIn AND Holding — both states are
+  // "wisp paint is currently in effect or arriving" and need the
+  // configurator's colors restored to the wisp target. Skipped during
+  // Restoring (wisp is intentionally fading out — re-asserting would
+  // fight the restore) and Idle (no wisp paint to restore).
+  if (!configurator_) return;
+  if (state_ != FadeState::FadingIn && state_ != FadeState::Holding) {
+    return;
+  }
+  if (targetGradient_.empty()) return;
+  // Snap-in (0 ms fade): the surface is already supposed to be at these
+  // colors. We're just restoring what was momentarily stomped.
+  configurator_->beginFade(targetGradient_, /*fadeDurationMs=*/0);
+  // Keep the configurator's animation state machine alive — same reason
+  // as apply()'s bump. Without this, a STOPPED configurator would skip
+  // its draw() and the wisp paint we just re-installed wouldn't reach
+  // the LED buffer until the next ColorOverride apply() bump.
+  configurator_->lastWebSocketUpdateTimeMs = millis();
 }
 
 void ColorOverride::rebaseline(const std::vector<Color>& currentSavedColors) {

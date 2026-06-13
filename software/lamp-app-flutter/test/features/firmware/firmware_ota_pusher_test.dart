@@ -85,6 +85,9 @@ class NotifyableBle implements BleClient {
   @override
   Stream<bool> watchConnected(String deviceId) =>
       throw UnimplementedError();
+
+  @override
+  Future<void> cycleAdapter(String deviceId) async {}
 }
 
 // Hand-build a synthetic ACCEPT frame.

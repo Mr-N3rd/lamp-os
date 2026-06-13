@@ -8,6 +8,14 @@ import '../../application/control_notifier.dart';
 import '../../domain/lamp_color.dart';
 import 'color_picker_sheet.dart';
 
+/// Hard cap on base gradient stops. Bumped from 5 → 6 (commit-equivalent
+/// of "give the user one more notch of expressive room"). Firmware
+/// interp handles arbitrary N via even-spacing so no firmware change
+/// is needed for this bump; the only reason to keep a finite cap is
+/// UX (a row list with 6 stops still fits the modal comfortably; 10+
+/// would crowd the picker).
+const int _kMaxBaseStops = 6;
+
 /// Modal sheet for editing the base gradient stops. Acts as an atomic edit
 /// session: every in-sheet change live-previews via the controlNotifier
 /// (so the lamp tracks the gradient as the user picks), but the sheet
@@ -97,7 +105,7 @@ class _BaseEditorSheetState extends ConsumerState<BaseEditorSheet> {
     }
 
     void addStop() {
-      if (colors.length >= 5) return;
+      if (colors.length >= _kMaxBaseStops) return;
       notifier.setBaseColors([
         ...colors,
         const LampColor(r: 0xFF, g: 0xFF, b: 0xFF, w: 0),
@@ -134,7 +142,7 @@ class _BaseEditorSheetState extends ConsumerState<BaseEditorSheet> {
             const Row(
               children: [
                 Text(
-                  'Base gradient',
+                  'Base colors',
                   style: TextStyle(
                     color: BrandColors.lampWhite,
                     fontSize: 16,
@@ -205,7 +213,7 @@ class _BaseEditorSheetState extends ConsumerState<BaseEditorSheet> {
                 },
               ),
             ),
-            if (colors.length < 5)
+            if (colors.length < _kMaxBaseStops)
               TextButton(
                 onPressed: addStop,
                 child: const Text('+ Add stop'),

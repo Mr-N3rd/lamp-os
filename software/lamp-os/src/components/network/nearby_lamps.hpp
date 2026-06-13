@@ -160,12 +160,54 @@ class NearbyLamps {
   void cacheWispStatus(const uint8_t mac[6],
                        const char* json, size_t jsonLen);
 
+  // Light-touch presence ping: assert that we received a wisp-sourced
+  // paint frame from [mac]. Same single-slot semantics as cacheWispHello
+  // (different mac → clear stale per-wisp data), but does NOT set
+  // lastHelloMs or any hello-derived fields — we never received a hello
+  // in this code path. The merge in getWispStatusReadJson() guards on
+  // those fields' specific timestamps before publishing them.
+  //
+  // Why this exists: without it, a lamp that hears a wisp's
+  // MSG_OVERRIDE_COLORS (unicast paint, no relay) but not its
+  // MSG_WISP_HELLO (gossip-broadcast, ≤30s heartbeat) returns "{}" for
+  // wispStatus until the next hello lands — the app shows "No wisp
+  // detected" even though the lamp is being actively wisp-painted.
+  // Observed on hardware as the "bytes=0 puzzle".
+  //
+  // Called from the loop-task drain of pendingOverrideColors on Core 1,
+  // but uses bounded-take (2 ms) because the BLE on-read of
+  // CHAR_WISP_STATUS runs on Core 0 and takes the same mutex — without
+  // the bounded-take, a contended read could be starved by a
+  // back-to-back paint-frame update. On timeout we drop the update;
+  // the next paint frame retries.
+  void cacheWispMacFromPaint(const uint8_t mac[6]);
+
   // Build and return the JSON to serve on CHAR_WISP_STATUS reads.
   // Merges the cached wispStatus payload with the last MSG_WISP_HELLO
   // data. Returns "{}" if nothing has been cached for either path.
   std::string getWispStatusReadJson();
 
+  // Snapshot of "is this lamp currently following a wisp on each
+  // surface, and what's the most recently painted wisp color." The Flutter
+  // app reads these through wispStatus to render the will-o'-wisp
+  // indicator widget in the control screen header and to grey out
+  // expressions that opt into `disabledDuringWispOverride`. RGB+W hex
+  // color string; empty when the surface has never received a wisp
+  // paint. Set via setLampWispStateProvider() so the depencency on the
+  // ColorOverride globals stays in standard_lamp.cpp.
+  struct LampWispState {
+    bool        controllingBase = false;
+    bool        controllingShade = false;
+    std::string baseWispColor;   // 8-char hex like "AB12FF40", or empty
+    std::string shadeWispColor;  // same
+  };
+  using LampWispStateProvider = LampWispState (*)();
+  void setLampWispStateProvider(LampWispStateProvider provider) {
+    lampWispStateProvider_ = provider;
+  }
+
  private:
+  LampWispStateProvider lampWispStateProvider_ = nullptr;
   std::vector<NearbyLamp> store_;
   SemaphoreHandle_t mutex_ = nullptr;
   WispCache wispCache_;

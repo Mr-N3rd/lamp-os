@@ -40,14 +40,17 @@ class LampPreview extends ConsumerStatefulWidget {
 /// values are equal iff the rendered SVG would be identical — drives the
 /// `.select`'s equality check so unchanged surfaces don't rebuild.
 class _PreviewSlice {
-  const _PreviewSlice(this.shade, this.baseColors);
-  final LampColor shade;
+  const _PreviewSlice(this.shadeColors, this.baseColors);
+  final List<LampColor> shadeColors;
   final List<LampColor> baseColors;
 
   @override
   bool operator ==(Object other) {
     if (other is! _PreviewSlice) return false;
-    if (shade != other.shade) return false;
+    if (shadeColors.length != other.shadeColors.length) return false;
+    for (var i = 0; i < shadeColors.length; i++) {
+      if (shadeColors[i] != other.shadeColors[i]) return false;
+    }
     if (baseColors.length != other.baseColors.length) return false;
     for (var i = 0; i < baseColors.length; i++) {
       if (baseColors[i] != other.baseColors[i]) return false;
@@ -56,18 +59,16 @@ class _PreviewSlice {
   }
 
   @override
-  int get hashCode => Object.hash(shade, Object.hashAll(baseColors));
+  int get hashCode =>
+      Object.hash(Object.hashAll(shadeColors), Object.hashAll(baseColors));
 }
 
 _PreviewSlice _previewSliceFrom(AsyncValue<ControlState> async) {
   final state = async.value;
   if (state == null) {
-    return const _PreviewSlice(LampColor.black, []);
+    return const _PreviewSlice([], []);
   }
-  final shade = state.shade.colors.isEmpty
-      ? LampColor.black
-      : state.shade.colors.single;
-  return _PreviewSlice(shade, state.base.colors);
+  return _PreviewSlice(state.shade.colors, state.base.colors);
 }
 
 class _LampPreviewState extends ConsumerState<LampPreview> {
@@ -156,10 +157,9 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
   }
 
   /// Substitute the gradient blocks in [template] with the live colors.
-  String _renderSvg(String template, LampColor shade,
+  String _renderSvg(String template, List<LampColor> shadeColors,
       List<LampColor> baseColors) {
-    final shadeHex = shade.toRgbHex();
-    final shadeStops = _stopTag(0, shadeHex) + _stopTag(100, shadeHex);
+    final shadeStops = _buildStops(shadeColors);
     final bodyStops = _buildStops(baseColors);
 
     String rewrite(String tag, String stops) {
@@ -212,7 +212,7 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
       return SizedBox(width: widget.size, height: widget.size);
     }
     final cacheKey =
-        '${slice.shade.toHex()}|${slice.baseColors.map((c) => c.toHex()).join(",")}';
+        '${slice.shadeColors.map((c) => c.toHex()).join(",")}|${slice.baseColors.map((c) => c.toHex()).join(",")}';
     // Reuse an already-built SvgPicture widget for this cacheKey (audit
     // perf-H5). Pre-fix every shade/base hex change rebuilt SvgPicture
     // with a fresh ValueKey, which forced flutter_svg to re-decode the
@@ -228,7 +228,7 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
           _memoRendered != null) {
         rendered = _memoRendered!;
       } else {
-        rendered = _renderSvg(template, slice.shade, slice.baseColors);
+        rendered = _renderSvg(template, slice.shadeColors, slice.baseColors);
         _memoFor = template;
         _memoKey = cacheKey;
         _memoRendered = rendered;

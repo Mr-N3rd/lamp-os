@@ -24,7 +24,6 @@ public:
   // Constructor
   SkeletonExpression(FrameBuffer* inBuffer, uint32_t inFrames = 30)
       : Expression(inBuffer, inFrames) {
-    isExclusive = false;         // Can blend with other expressions
     allowedInHomeMode = true;     // Works in home mode
   }
 
@@ -81,9 +80,6 @@ void SkeletonExpression::onComplete() {
 }
 
 void SkeletonExpression::draw() {
-  // Pause if an exclusive behavior is running
-  if (shouldPause()) return;
-
   // Only draw to appropriate buffer
   if (!shouldAffectBuffer()) {
     nextFrame();
@@ -147,10 +143,12 @@ Add to your expression config:
 
 ## Key Points
 
-1. **Always check `shouldPause()`** - Respects exclusive expressions
-2. **Always check `shouldAffectBuffer()`** - Respects target configuration
-3. **Call `nextFrame()`** - Advances animation and handles completion
-4. **Use `getRandomColor()`** - Picks from configured palette
-5. **Handle re-triggers** - Expression can be triggered anytime
+1. **Always check `shouldAffectBuffer()`** - Respects target configuration
+2. **Call `nextFrame()`** - Advances animation and handles completion
+3. **Use `getRandomColor()`** - Picks from configured palette
+4. **Handle re-triggers** - Expression can be triggered anytime
+5. **Compose, don't take over** - Expressions draw AFTER the configurator
+   in the behavior list; whatever you write to `fb->buffer` will be the
+   final visible state (until your `animationState` returns to STOPPED).
 
 That's it! This skeleton provides a complete, working expression that you can customize for any effect.

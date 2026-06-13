@@ -10,6 +10,7 @@
 #include "MeshLink.h"
 #include "PaintDistributor.h"
 #include "WispConfig.h"
+#include "WispRoster.h"
 #include "WispZoneSelector.h"
 #include "aurora/AuroraPaletteClient.h"
 #include "lamp_protocol.hpp"
@@ -73,13 +74,15 @@ constexpr size_t kPaletteIdPrefixLen = lamp_protocol::WISP_HELLO_PALETTE_ID_PREF
 void StatusBeacon::begin(MeshLink* mesh, PaintDistributor* paint,
                          CurrentPalette* palette, ZoneSelector* zone,
                          AuroraPaletteClient* aurora,
-                         WispConfig* config) {
+                         WispConfig* config,
+                         WispRoster* roster) {
   mesh_ = mesh;
   paint_ = paint;
   palette_ = palette;
   zone_ = zone;
   aurora_ = aurora;
   config_ = config;
+  roster_ = roster;
 }
 
 void StatusBeacon::startTimer() {
@@ -188,6 +191,28 @@ void StatusBeacon::emit() {
   // broadcast() ends in esp_now_send which is itself queued — safe to call
   // outside the mux. The seq is already committed.
   mesh_->broadcast(buf, n);
+
+  // MSG_WISP_CLAIM — broadcast our current claim set so peers can build
+  // the shared view. Same 2 s cadence as MSG_WISP_HELLO; lamps gossip-
+  // relay it the same way. Roster is optional during init (legacy
+  // construction paths may pass nullptr).
+  if (roster_) {
+    uint8_t claimEntries[lamp_protocol::kMaxWispClaimEntries *
+                         lamp_protocol::WISP_CLAIM_ENTRY_SIZE] = {0};
+    const size_t entryCount = roster_->snapshotClaimsForBroadcast(
+        claimEntries, sizeof(claimEntries));
+    uint8_t claimBuf[lamp_protocol::WISP_CLAIM_MAX_SIZE];
+    uint16_t claimSeq = 0;
+    STATUS_BEACON_PORTMUX_ENTER(&emitMux_);
+    claimSeq = seqCounter_++;
+    STATUS_BEACON_PORTMUX_EXIT(&emitMux_);
+    const size_t claimLen = lamp_protocol::buildWispClaim(
+        claimBuf, sizeof(claimBuf), claimSeq, srcMac,
+        entryCount > 0 ? claimEntries : nullptr, entryCount);
+    if (claimLen) {
+      mesh_->broadcast(claimBuf, claimLen);
+    }
+  }
 
   // On-change trigger for passive WiFi/Aurora flips. The 2s HELLO timer is
   // the only path that observes radio state on a fast cadence; without this

@@ -22,6 +22,7 @@
 #include "MeshLink.h"
 #include "PaintDistributor.h"
 #include "StatusBeacon.h"
+#include "WispRoster.h"
 #include "StatusRing.h"
 #include "WispConfig.h"
 #include "WispOpDispatcher.h"
@@ -43,6 +44,7 @@ wisp::LampInventory inventory;
 wisp::CurrentPalette currentPalette;
 wisp::PaintDistributor paintDistributor;
 wisp::StatusBeacon statusBeacon;
+wisp::WispRoster wispRoster;
 AuroraPaletteClient auroraClient;
 wisp::WifiLink wifi;
 wisp::StageBeacon stageBeacon;
@@ -325,7 +327,8 @@ void drainPendingWispOp() {
 // HELLO + CONTROL_OP recv handler. Fires on the WiFi task — keep
 // it tight; only protocol parse + bounded memcpy. No logging, no Preferences,
 // no ArduinoJson.
-void onMeshPacket(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len) {
+void onMeshPacket(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len,
+                  int8_t rssi) {
   const uint8_t msgType = lamp_protocol::inspect(data, len);
   if (msgType == lamp_protocol::MSG_HELLO) {
     lamp_protocol::ParsedHello h;
@@ -333,7 +336,16 @@ void onMeshPacket(const uint8_t* /*srcMac*/, const uint8_t* data, size_t len) {
     const std::string peerName =
         h.nameLen ? std::string(h.name, h.nameLen) : std::string();
     inventory.recordHello(h.sourceMac, peerName, h.base, h.shade,
-                          h.firmwareVersion, millis());
+                          h.firmwareVersion, millis(), rssi);
+    return;
+  }
+  if (msgType == lamp_protocol::MSG_WISP_CLAIM) {
+    // Peer wisp's claim broadcast (also gossip-relayed by lamps from
+    // wisps we can't directly hear). Stash it into the WispRoster's
+    // shared view; the claim computation runs on the loop task.
+    lamp_protocol::ParsedWispClaim wc;
+    if (!lamp_protocol::parseWispClaim(data, len, wc)) return;
+    wispRoster.recordPeerClaim(wc.sourceMac, wc.entries, wc.count, millis());
     return;
   }
   if (msgType == lamp_protocol::MSG_CONTROL_OP) {
@@ -591,16 +603,24 @@ void setup() {
   Serial.printf("[wisp] aurora client started as %s\n",
                 buildInstanceId().c_str());
 
+  // Multi-wisp coordination wiring. WispRoster owns the peer-claim
+  // shared view + claim-decision logic; PaintDistributor filters its
+  // walk by it; StatusBeacon broadcasts our claims every 2 s alongside
+  // MSG_WISP_HELLO. Self-MAC is needed for the lower-MAC tiebreaker.
+  uint8_t selfMac[6] = {0};
+  mesh.getMac(selfMac);
+  wispRoster.setSelfMac(selfMac);
+
   // Phase C.4 wiring. Paint distributor needs the inventory + mesh + palette
   // to walk peers and unicast tuples. Status beacon broadcasts MSG_WISP_HELLO
   // every 2s on a FreeRTOS timer so cadence survives Aurora loop() stalls.
-  paintDistributor.begin(&inventory, &mesh, &currentPalette);
+  paintDistributor.begin(&inventory, &mesh, &currentPalette, &wispRoster);
 
   // Wisp no longer participates in OTA — lamps gossip firmware to each
   // other peer-to-peer. MSG_WISP_HELLO's carriedFw* fields zero-fill
   // (wire layout unchanged for back-compat with older lamps).
   statusBeacon.begin(&mesh, &paintDistributor, &currentPalette,
-                     &zoneSelector, &auroraClient, &wispConfig);
+                     &zoneSelector, &auroraClient, &wispConfig, &wispRoster);
   statusBeacon.startTimer();
 
   // Apply the persisted source mode now that everything it touches
@@ -624,6 +644,21 @@ void loop() {
   // Drain any pending MSG_CONTROL_OP payload posted by the recv task. Cheap
   // when empty (one portMUX read + bool check), so safe to call every loop.
   drainPendingWispOp();
+  // Multi-wisp coordination: recompute our claim set from the current
+  // peer-RSSI view + lamp inventory snapshot before the paint walk so
+  // PaintDistributor's filter sees the latest decisions.
+  {
+    auto inv = inventory.snapshot();
+    wisp::WispRoster::LampObservation obs[wisp::WISP_ROSTER_MAX_LAMPS];
+    size_t n = 0;
+    for (const auto& e : inv) {
+      if (n >= wisp::WISP_ROSTER_MAX_LAMPS) break;
+      std::memcpy(obs[n].mac, e.mac, 6);
+      obs[n].rssi = e.rssi;
+      n++;
+    }
+    wispRoster.recomputeClaims(obs, n, now);
+  }
   paintDistributor.tick(now);
   artnetEmitter.tick(now);
 

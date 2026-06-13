@@ -16,6 +16,7 @@ import '../../inventory/domain/lamp_colors.dart';
 import '../../lamp_shell/application/lamp_status.dart';
 import '../../nearby/application/lamp_route_resolver.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
+import '../../nearby/application/scan_grace_provider.dart';
 import '../../nearby/domain/nearby_lamp.dart';
 import '../domain/last_seen.dart';
 
@@ -128,10 +129,12 @@ class _MyLampTile extends ConsumerWidget {
         ref.watch(controlNotifierProvider(lamp.id).select(
           (async) => async.value?.connected ?? false,
         ));
+    final inScanGrace = ref.watch(scanGraceActiveProvider);
     final status = statusForById(
       lampId: lamp.id,
       nearbyById: nearbyById,
       connected: connected,
+      inScanGrace: inScanGrace,
     );
     return InkWell(
       borderRadius: BorderRadius.circular(12),
@@ -187,6 +190,8 @@ class _MyLampTile extends ConsumerWidget {
         return 'In range';
       case StatusKind.bluetooth:
         return 'Bluetooth only';
+      case StatusKind.searching:
+        return 'Searching…';
       case StatusKind.offline:
         if (lamp.lastSeenEpochMs == null) return 'Not seen yet';
         return formatLastSeen(lamp.lastSeenEpochMs!, DateTime.now());

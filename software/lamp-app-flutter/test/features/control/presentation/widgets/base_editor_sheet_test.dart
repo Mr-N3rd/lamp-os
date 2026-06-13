@@ -73,10 +73,10 @@ void main() {
     ));
     // Provider stays in loading — widget renders SizedBox.shrink().
     expect(find.text('+ Add stop'), findsNothing);
-    expect(find.text('Base gradient'), findsNothing);
+    expect(find.text('Base colors'), findsNothing);
   });
 
-  testWidgets('renders one row per stop and add-stop CTA when < 5 stops',
+  testWidgets('renders one row per stop and add-stop CTA when < 6 stops',
       (tester) async {
     final ble = InMemoryBleClient();
     final c = await _buildContainer(ble, stopCount: 2);
@@ -90,7 +90,7 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('Base gradient'), findsOneWidget);
+    expect(find.text('Base colors'), findsOneWidget);
     expect(find.text('+ Add stop'), findsOneWidget);
     expect(find.byIcon(Icons.drag_indicator), findsNWidgets(2));
   });
@@ -115,19 +115,19 @@ void main() {
     ));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.text('Base gradient'), findsOneWidget);
+    expect(find.text('Base colors'), findsOneWidget);
 
     // Update button closes the sheet without reverting (the X-close was
     // replaced by an explicit Cancel/Update row when the unified save
     // model added per-screen atomic undo).
     await tester.tap(find.widgetWithText(FilledButton, 'Update'));
     await tester.pumpAndSettle();
-    expect(find.text('Base gradient'), findsNothing);
+    expect(find.text('Base colors'), findsNothing);
   });
 
-  testWidgets('hides add-stop CTA at 5 stops', (tester) async {
+  testWidgets('hides add-stop CTA at 6 stops (cap)', (tester) async {
     final ble = InMemoryBleClient();
-    final c = await _buildContainer(ble, stopCount: 5);
+    final c = await _buildContainer(ble, stopCount: 6);
     addTearDown(c.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
@@ -139,6 +139,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('+ Add stop'), findsNothing);
-    expect(find.byIcon(Icons.drag_indicator), findsNWidgets(5));
+    expect(find.byIcon(Icons.drag_indicator), findsNWidgets(6));
   });
 }

@@ -84,35 +84,28 @@ class FbpBleClient implements BleClient {
     // short backoff swallows that flake without bubbling it to the UI; if
     // the second attempt also throws, let it propagate so we don't mask a
     // real failure (lamp powered off, out of range, etc.).
+    // No `mtu:` arg — the lamp's NimBLE firmware advertises MTU 512 and
+    // initiates the MTU exchange peripheral-side on connect
+    // (ble_control.cpp: TARGET_MTU = 512). Passing `mtu: 247` here forced
+    // FBP to queue a redundant client-initiated requestMtu after every
+    // connect — including the "already connected" path — burning 2-3 s
+    // per cold tap behind the LL queue + connection-priority post-amble.
+    // Peripheral-initiated MTU lands within the
+    // first connection interval in NimBLE's path, so the effective MTU
+    // is the same; worst case (request races first I/O) the first
+    // section read fragments into more chunks, still cheaper than the
+    // round-trip we used to pay.
     try {
       await device.connect(
         license: fbp.License.nonprofit,
         autoConnect: false,
-        mtu: 247,
       );
     } on fbp.FlutterBluePlusException {
       await Future<void>.delayed(const Duration(milliseconds: 600));
       await device.connect(
         license: fbp.License.nonprofit,
         autoConnect: false,
-        mtu: 247,
       );
-    }
-    // Android caches the lamp's GATT service definitions per-device for
-    // unbonded peers. After a firmware re-flash (which re-registers
-    // services with new handles), discoverServices() will silently
-    // return the STALE cached set, and every subsequent read/write
-    // misses → the phone gives up and tears the link down with reason
-    // 531 (BLE_ERR_REM_USER_CONN_TERM). clearGattCache wraps the
-    // hidden BluetoothGatt.refresh() call and invalidates that cache
-    // so the next discoverServices() does a real GATT exchange.
-    // Android-only (iOS no-op via thrown FbpErrorCode.androidOnly).
-    try {
-      await device.clearGattCache();
-    } catch (_) {
-      // best-effort — iOS throws androidOnly, some Android versions
-      // reject without a connected GATT; neither case should fail the
-      // whole connect.
     }
     // Ask Android for a tighter connection interval (11.25-15ms vs the
     // default ~49ms) — wraps BluetoothGatt.requestConnectionPriority(
@@ -129,11 +122,9 @@ class FbpBleClient implements BleClient {
     } catch (_) {
       // best-effort — not all platforms honor this
     }
-    // Reset our in-app cache too — service handles can change after a
-    // reconnect, especially after a firmware reboot that re-registers
-    // the GATT database. clearGattCache above invalidates Android's
-    // system cache; this clears ours so the next _resolve() does a
-    // fresh discoverServices().
+    // Drop our Dart-side service cache — handles may have changed since
+    // last connect (e.g. firmware re-registered the GATT database), so
+    // the next _resolve() does a fresh discoverServices().
     _serviceCache.remove(deviceId);
   }
 
@@ -286,5 +277,25 @@ class FbpBleClient implements BleClient {
     );
     return device.connectionState
         .map((s) => s == fbp.BluetoothConnectionState.connected);
+  }
+
+  @override
+  Future<void> cycleAdapter(String deviceId) async {
+    final device = fbp.BluetoothDevice(
+      remoteId: fbp.DeviceIdentifier(deviceId),
+    );
+    // Force-release any handles fbp holds on this device. Clearing our
+    // own service cache too — we'll re-discover on the next connect.
+    _serviceCache.remove(deviceId);
+    try {
+      await device.disconnect();
+    } catch (_) {
+      // already disconnected, or fbp didn't have a handle — both fine.
+    }
+    // Give the Android BT stack a beat to actually release the
+    // gatts_if slot before the next connect. Empirically, < 500ms
+    // tends to hit the same dead slot; 1.5s is the smallest delay
+    // that reliably clears in the field.
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
   }
 }

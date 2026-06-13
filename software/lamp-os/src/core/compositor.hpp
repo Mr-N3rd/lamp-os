@@ -38,7 +38,6 @@ class Compositor {
   bool behaviorsComputed = false;
   unsigned long lastDrawTimeMs = 0;
   bool homeMode = false;
-  AnimatedBehavior* activeExclusive = nullptr;  // Currently running exclusive behavior
 
   Compositor();
 
@@ -64,15 +63,9 @@ class Compositor {
   void setHomeMode(bool homeMode);
 
   /**
-   * @brief check if an exclusive behavior is currently active
-   * @return true if an exclusive behavior is running
-   */
-  bool hasActiveExclusive() const;
-
-  /**
-   * @brief mark the boundary between initial expression behaviors and
-   *        higher-priority behaviors. Runtime expression adds insert before
-   *        this index.
+   * @brief mark the position where runtime-added expression behaviors
+   *        should be inserted, keeping the expression band contiguous
+   *        within the larger behavior list.
    */
   void setExpressionBandEnd(size_t end);
 

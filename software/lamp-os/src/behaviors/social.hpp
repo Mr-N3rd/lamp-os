@@ -40,11 +40,6 @@ class SocialBehavior : public AnimatedBehavior {
   using AnimatedBehavior::AnimatedBehavior;
 
  public:
-  // Legacy single-knob ease length. Kept for back-compat when control()
-  // can't consult the PersonalityEngine (engine not begun, or no nearby
-  // peer matched). When the engine returns a real GreetingTuning the
-  // ease/hold/fadeOut/pulseBack fields below take precedence.
-  uint32_t easeFrames = 120;
   uint32_t nextAcknowledgeTimeMs = 0;
   Color foundLampColor;
 

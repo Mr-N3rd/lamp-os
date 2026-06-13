@@ -39,4 +39,100 @@ There's a handy [build guide with images here](hardware/build/README.md)
 
 ## Lamp OS
 
-More details about Lamp OS and other supporting tools can be found in the [software](software/) folder
+Three components live under [`software/`](software/):
+
+- [`software/lamp-os/`](software/lamp-os/) — lamp firmware (ESP32-WROOM, build env `upesy_wroom`)
+- [`software/wisp/`](software/wisp/) — wisp infrastructure node firmware (Seeed XIAO ESP32-C6, build env `seeed_xiao_esp32_c6`)
+- [`software/lamp-app-flutter/`](software/lamp-app-flutter/) — iOS/Android control app
+
+See [`CLAUDE.md`](CLAUDE.md) for the project orientation, the v0x03 protocol lock-in, and pointers to [`docs/mesh-api.md`](docs/mesh-api.md) and [`docs/mesh-deployment.md`](docs/mesh-deployment.md).
+
+## Development
+
+### Flutter app — macOS
+
+```sh
+# 1. Install Flutter (Homebrew is easiest)
+brew install --cask flutter
+
+# 2. Install Android Studio (for Android build + Android SDK + adb)
+brew install --cask android-studio
+# Open Android Studio once → Settings → Languages & Frameworks → Android SDK
+# Install SDK Platform 34+, SDK Build-Tools, Platform-Tools.
+
+# 3. (Optional, iOS only) Install Xcode from the App Store, then:
+sudo xcode-select --switch /Applications/Xcode.app
+sudo xcodebuild -runFirstLaunch
+sudo gem install cocoapods
+
+# 4. Verify
+flutter doctor
+
+# 5. Run the app
+cd software/lamp-app-flutter
+flutter pub get
+flutter run                            # picks any connected Android/iOS device
+```
+
+### Flutter app — Windows
+
+```powershell
+# 1. Install Flutter
+#    Download https://docs.flutter.dev/get-started/install/windows
+#    Unzip to C:\src\flutter and add C:\src\flutter\bin to PATH.
+
+# 2. Install Android Studio
+#    https://developer.android.com/studio
+#    On first launch: SDK Manager → install Platform 34+, Build-Tools,
+#    Platform-Tools, and Google USB Driver.
+
+# 3. Install USB drivers for your phone (manufacturer-specific) and
+#    enable USB Debugging on the phone (Settings → Developer options).
+
+# 4. Verify
+flutter doctor
+
+# 5. Run the app
+cd software\lamp-app-flutter
+flutter pub get
+flutter run                            # picks any connected Android device
+```
+
+### Common Flutter commands
+
+```sh
+flutter pub get                                  # install deps after editing pubspec.yaml
+flutter test                                     # unit + widget tests
+flutter analyze                                  # static analysis
+flutter run                                      # debug build, hot-reload via 'r', hot-restart via 'R'
+flutter build apk --debug                        # produces build/app/outputs/flutter-apk/app-debug.apk
+adb install -r build/app/outputs/flutter-apk/app-debug.apk   # install WITHOUT wiping app data
+```
+
+Note: prefer `adb install -r` over `flutter install` — the latter does an `adb uninstall` first, which wipes the lamp inventory.
+
+### Firmware (lamp + wisp)
+
+Both firmwares build with [PlatformIO](https://platformio.org/). Either install the VS Code extension or the CLI:
+
+```sh
+pip install platformio                           # CLI only; VS Code extension bundles its own
+```
+
+Common commands:
+
+```sh
+# Lamp (ESP32-WROOM)
+cd software/lamp-os
+pio test -e native                               # native unit tests (144 cases)
+pio run -e upesy_wroom                           # build
+pio run -e upesy_wroom -t upload                 # flash a connected lamp
+
+# Wisp (Seeed XIAO ESP32-C6)
+cd software/wisp
+pio test -e native                               # native unit tests (40 cases)
+pio run -e seeed_xiao_esp32_c6                   # build
+pio run -e seeed_xiao_esp32_c6 -t upload         # flash a connected wisp
+```
+
+If you have multiple boards connected, target one with `--upload-port`, e.g. `pio run -e upesy_wroom -t upload --upload-port /dev/cu.SLAB_USBtoUART` on macOS or `--upload-port COM5` on Windows.

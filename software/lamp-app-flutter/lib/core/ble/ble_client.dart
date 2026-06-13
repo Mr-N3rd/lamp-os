@@ -154,6 +154,27 @@ abstract class BleClient {
   /// every change. Used by callers to react to unsolicited link drops
   /// (e.g. LINK_SUPERVISION_TIMEOUT on Android).
   Stream<bool> watchConnected(String deviceId);
+
+  /// Tier-3 recovery: force-drop and re-establish the link to [deviceId].
+  /// Soft cycle (explicit disconnect + delay + connect), NOT a literal
+  /// BT adapter toggle — Android 12+ requires user dialogs for
+  /// programmatic `BluetoothAdapter.disable()`, which is unacceptable
+  /// in a recovery path that runs after the link has silently zombified.
+  ///
+  /// Intended for the "force-stop fixes it" pattern: after N soft
+  /// reconnects have failed, the Android `gatts_if` slot may be held by
+  /// fbp internally on a dead connection. An explicit disconnect +
+  /// short delay gives the OS a chance to release the slot before the
+  /// next connect attempt.
+  ///
+  /// Best-effort: implementations should catch their own inner errors so
+  /// the caller doesn't have to. Returns when the cycle attempt completes
+  /// (success or quiet failure).
+  ///
+  /// Abstract — a default no-op would let a future test fake silently
+  /// swallow Tier-3 escalation, hiding a regression where the ladder
+  /// never actually cycles the slot. Implementations must override.
+  Future<void> cycleAdapter(String deviceId);
 }
 
 /// Per-chunk payload size on the BLE page protocol. Pinned to ATT_MTU
@@ -294,6 +315,18 @@ class InMemoryBleClient implements BleClient {
       () => StreamController<Uint8List>.broadcast(),
     );
     return ctrl.stream;
+  }
+
+  @override
+  Future<void> cycleAdapter(String deviceId) async {
+    // Test/dev fake: model the soft-cycle's observable effect (the
+    // connection state goes false then back true if we were connected)
+    // so reconnect-ladder tests can assert that a Tier-3 escalation
+    // emits a fresh disconnect/connect edge pair.
+    if (_connected.contains(deviceId)) {
+      _ensureConnStream(deviceId).add(false);
+      _connected.remove(deviceId);
+    }
   }
 
   @override

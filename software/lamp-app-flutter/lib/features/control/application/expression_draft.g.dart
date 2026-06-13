@@ -82,7 +82,7 @@ final class ExpressionDraftProvider
   }
 }
 
-String _$expressionDraftHash() => r'2c04a96ea89450be0bebdd194131a25cf28d7147';
+String _$expressionDraftHash() => r'6ae3ad76a8fa64fe29bc2a709350cd46b3aa5fd0';
 
 /// Working copy of an expression while the user is editing it. Held in a
 /// keep-alive provider so navigating away from the editor and back doesn't

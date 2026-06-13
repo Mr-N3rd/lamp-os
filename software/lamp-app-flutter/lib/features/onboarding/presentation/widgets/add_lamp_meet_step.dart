@@ -56,9 +56,9 @@ class AddLampMeetStep extends ConsumerWidget {
                 child: Text(
                   "You can pick the colors $name wears, layer little "
                   'expressions so they shimmer on their own, and even tune '
-                  'their personality — how they greet your other lamps and '
-                  "how calm they get around home. Nothing to set up now; "
-                  "it's all a tap away in $name's tabs, whenever you're "
+                  'their personality — how they greet the other lamps they '
+                  "meet and how calm they get around home. Nothing to set up "
+                  "now; it's all a tap away in $name's tabs, whenever you're "
                   'ready.',
                   textAlign: TextAlign.center,
                   style: const TextStyle(

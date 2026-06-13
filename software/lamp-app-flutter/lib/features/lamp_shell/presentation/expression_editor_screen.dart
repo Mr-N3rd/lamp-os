@@ -325,36 +325,15 @@ class _ExpressionEditorScreenState
                     ref.watch(advancedSessionProvider(widget.lampId)),
                 onChanged: (p) => _updateDraft((d) => _withParameters(d, p)),
               ),
-              const SizedBox(height: 20),
-              // Wisp-override gate. When the wisp is actively painting,
-              // expressions that paint continuously fight the show. The
-              // operator can opt this expression out of auto-trigger
-              // during wisp control on a per-expression basis. Defaults
-              // come from ExpressionTypeMeta.defaultDisabledDuringWispOverride
-              // (breathing + shifty → on; glitchy + pulse → off). The
-              // expression-test button at the top of the editor is NOT
-              // gated — operator tests fire regardless of wisp state.
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                title: const Text(
-                  'Pause when wisp is in control',
-                  style: TextStyle(
-                    color: BrandColors.lampWhite,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                subtitle: const Text(
-                  'Skip this expression’s auto-trigger while a '
-                  'wisp is overriding the lamp’s colours.',
-                  style: TextStyle(
-                    color: BrandColors.fogGrey,
-                    fontSize: 12,
-                  ),
-                ),
-                value: draft.disabledDuringWispOverride,
-                onChanged: (v) => _updateDraft(
-                    (d) => d.copyWith(disabledDuringWispOverride: v)),
-              ),
+              // Wisp-override gate (`disabledDuringWispOverride`) is no
+              // longer a user-facing toggle — the per-type default in
+              // ExpressionTypeMeta.defaultDisabledDuringWispOverride is
+              // authoritative (breathing + shifty pause during wisp
+              // control; glitchy + pulse don't). The field is still
+              // wired through the data model so a future custom-lamps
+              // power-user surface can re-expose it; expressions_screen
+              // continues to grey expressions whose default says they
+              // pause during a wisp-active session.
               if (meta != null) ...[
                 const SizedBox(height: 20),
                 Text(

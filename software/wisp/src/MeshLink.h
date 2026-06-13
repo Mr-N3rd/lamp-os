@@ -24,8 +24,11 @@ namespace wisp {
 
 // Handler signature for inbound frames. Fires from the WiFi recv task —
 // no heap, no blocking, no logging. Copy bytes out and process on loop.
+// `rssi` is the signed ESP-NOW RX RSSI for this frame, or INT8_MIN if
+// the platform/test rig couldn't surface a measurement.
 using MeshRecvFn = std::function<void(const uint8_t srcMac[6],
-                                      const uint8_t* data, size_t len)>;
+                                      const uint8_t* data, size_t len,
+                                      int8_t rssi)>;
 
 /**
  * @brief Thin ESP-NOW wrapper for wisp.

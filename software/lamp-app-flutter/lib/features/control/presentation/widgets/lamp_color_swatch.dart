@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 
-import '../../../../core/theme/brand_colors.dart';
 import '../../domain/lamp_color.dart';
 
-/// A circular swatch that visualizes a [LampColor] — including the
-/// separate warm-white LED's contribution. Ported from
-/// `software/lamp-app/src/components/ColorPreview.vue:40-78`.
+/// A swatch that visualizes a [LampColor] — including the separate
+/// warm-white LED's contribution. Composites the W tint via SCREEN
+/// blend (matching the old Vue ColorPreview's CSS
+/// `mix-blend-mode: screen`) so bright colors retain their brightness
+/// and gain warm glow, instead of being muddied toward the tint as
+/// they would be under default alpha blend.
 ///
-/// The W channel drives a `#FABB3E` (warm orange) overlay whose opacity is
-/// proportional to W AND to how much "room" RGB still has. With RGB fully
-/// saturated to white the overlay is invisible (no room left); with RGB
-/// near black the overlay can take over the swatch.
+/// The actual screen-blend math lives in [LampColor.blendedRgb]; this
+/// widget is just a colored box that uses it via [LampColor.toSwatch].
 
 /// Two-shape variants of [LampColorSwatch]. The default is [circle] so
 /// existing call-sites stay unchanged; the [roundedSquare] variant is
@@ -33,8 +33,6 @@ class LampColorSwatch extends StatelessWidget {
   final LampSwatchShape shape;
   final double borderRadius;
 
-  static const _warmWhiteHex = BrandColors.warmWhite;
-
   /// `(W / 255) * (availableRoom / 765)`, clamped to [0, 1].
   /// Exposed for unit tests.
   static double warmWhiteOpacity(LampColor c) {
@@ -47,26 +45,24 @@ class LampColorSwatch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final overlayOpacity = warmWhiteOpacity(color);
     final isCircle = shape == LampSwatchShape.circle;
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
+        // Use the screen-blended composite from LampColor — matches the
+        // old Vue ColorPreview component visually (which used CSS
+        // mix-blend-mode: screen to overlay the W tint). The previous
+        // two-Container Stack used the default srcOver alpha blend,
+        // which muddied bright colors toward the warm tint instead of
+        // additively brightening them.
+        color: color.toSwatch(),
         shape: isCircle ? BoxShape.circle : BoxShape.rectangle,
         borderRadius:
             isCircle ? null : BorderRadius.circular(borderRadius),
         border: Border.all(
           color: borderColor ?? Colors.white.withValues(alpha: 0.12),
         ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Container(color: Color.fromARGB(0xFF, color.r, color.g, color.b)),
-          Container(color: _warmWhiteHex.withValues(alpha: overlayOpacity)),
-        ],
       ),
     );
   }

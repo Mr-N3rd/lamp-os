@@ -30,22 +30,26 @@ void main() {
     });
   });
 
-  testWidgets('renders a Stack with two layers', (tester) async {
+  testWidgets('renders the screen-blended composite as a single fill',
+      (tester) async {
+    // Post-2026-06-12: swatch was a two-Container Stack composing the W
+    // overlay via default alpha blend. The blend was wrong (muddied
+    // bright colors). Now it uses LampColor.blendedRgb's screen blend
+    // and paints a single Container, matching the old Vue UI.
+    const c = LampColor(r: 0x30, g: 0x07, b: 0x83, w: 0x80);
     await tester.pumpWidget(const MaterialApp(
-      home: Scaffold(
-        body: LampColorSwatch(
-          color: LampColor(r: 0x30, g: 0x07, b: 0x83, w: 0x80),
-        ),
-      ),
+      home: Scaffold(body: LampColorSwatch(color: c)),
     ));
     expect(find.byType(LampColorSwatch), findsOneWidget);
-    expect(
+    final container = tester.widget<Container>(
       find.descendant(
         of: find.byType(LampColorSwatch),
-        matching: find.byType(Stack),
+        matching: find.byType(Container),
       ),
-      findsOneWidget,
     );
+    final deco = container.decoration as BoxDecoration;
+    final expected = c.toSwatch();
+    expect(deco.color, expected);
   });
 
   testWidgets('roundedSquare shape uses BoxShape.rectangle', (tester) async {

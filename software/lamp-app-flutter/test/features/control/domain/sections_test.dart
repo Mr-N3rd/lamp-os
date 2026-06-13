@@ -123,34 +123,47 @@ void main() {
     expect(s.expressions[1].target, 3);
   });
 
-  group('ExpressionConfig.disabledDuringWispOverride type-aware default', () {
-    // Pins the contract that mirrors firmware-side
-    // `software/lamp-os/src/config/config.cpp`: when the JSON key is
-    // missing (old pre-feature NVS), `breathing` and `shifty` default
-    // to true; everything else defaults to false. Without this, a
-    // round-trip through fromJson would silently drop the gate flag.
-    test('breathing defaults to true when key is missing', () {
+  group('ExpressionConfig.disabledDuringWispOverride normalises to type default',
+      () {
+    // Contract: the type default ALWAYS wins, even when the JSON
+    // explicitly stores a different value. The user-facing toggle was
+    // removed in commit 3575f43; behavior is uniform per type
+    // (breathing + shifty pause during wisp control; everything else
+    // doesn't). Without this normalisation, an expression saved back
+    // when the toggle was user-toggleable would keep its stale value
+    // and silently diverge from the rest of the fleet.
+    test('breathing → true (type default)', () {
       final e = ExpressionConfig.fromJson(<String, dynamic>{
         'type': 'breathing',
       });
       expect(e.disabledDuringWispOverride, isTrue);
     });
-    test('shifty defaults to true when key is missing', () {
+    test('shifty → true (type default)', () {
       final e = ExpressionConfig.fromJson(<String, dynamic>{
         'type': 'shifty',
       });
       expect(e.disabledDuringWispOverride, isTrue);
     });
-    test('glitchy defaults to false when key is missing', () {
+    test('glitchy → false (type default)', () {
       final e = ExpressionConfig.fromJson(<String, dynamic>{
         'type': 'glitchy',
       });
       expect(e.disabledDuringWispOverride, isFalse);
     });
-    test('explicit key wins over type-aware default', () {
+    test('type default overrides explicit false on breathing', () {
+      // Old NVS payload from when the toggle was user-toggleable;
+      // load coerces back to the type default so display + firmware
+      // converge on next Save.
       final e = ExpressionConfig.fromJson(<String, dynamic>{
         'type': 'breathing',
         'disabledDuringWispOverride': false,
+      });
+      expect(e.disabledDuringWispOverride, isTrue);
+    });
+    test('type default overrides explicit true on glitchy', () {
+      final e = ExpressionConfig.fromJson(<String, dynamic>{
+        'type': 'glitchy',
+        'disabledDuringWispOverride': true,
       });
       expect(e.disabledDuringWispOverride, isFalse);
     });

@@ -14,8 +14,7 @@ static constexpr uint32_t PULSE_MAX_FRAMES = 10000;
 
 PulseExpression::PulseExpression(FrameBuffer* inBuffer, uint32_t inFrames)
     : Expression(inBuffer, inFrames) {
-  isExclusive = false;  // This can run and blend with other things
-  allowedInHomeMode = true; 
+  allowedInHomeMode = true;
 }
 
 void PulseExpression::configureFromParameters(const std::map<std::string, uint32_t>& parameters) {
@@ -119,10 +118,6 @@ void PulseExpression::onUpdate() {
 }
 
 void PulseExpression::draw() {
-
-  // Pause if an exclusive behavior is running
-  if (shouldPause()) return;
-
   // For pulse, we need to continue drawing even when "stopped" to allow fade-out
   // Only skip if we shouldn't affect this buffer based on target
   if (!shouldAffectBuffer() && animationState != STOPPED) {

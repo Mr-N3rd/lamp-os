@@ -31,6 +31,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
@@ -62,6 +63,7 @@ class CurrentPalette;
 class MeshLink;
 class PaintDistributor;
 class WispConfig;
+class WispRoster;
 class ZoneSelector;
 
 class StatusBeacon {
@@ -80,7 +82,8 @@ class StatusBeacon {
   void begin(MeshLink* mesh, PaintDistributor* paint,
              CurrentPalette* palette, ZoneSelector* zone,
              AuroraPaletteClient* aurora,
-             WispConfig* config = nullptr);
+             WispConfig* config = nullptr,
+             WispRoster* roster = nullptr);
 
   // One-shot wiring of the two FreeRTOS software timers. Call once after
   // begin().
@@ -93,7 +96,7 @@ class StatusBeacon {
 
   // Public so the C-style timer trampolines can reach them. Not part of the
   // sanctioned API — call begin()+startTimer() from main.cpp and forget.
-  void emit();         // MSG_WISP_HELLO path (2s cadence)
+  void emit();         // MSG_WISP_HELLO + MSG_WISP_CLAIM (2s cadence)
   void emitStatus();   // MSG_CONTROL_OP wispStatus path (30s heartbeat)
 
  private:
@@ -103,6 +106,7 @@ class StatusBeacon {
   ZoneSelector* zone_ = nullptr;
   AuroraPaletteClient* aurora_ = nullptr;
   WispConfig* config_ = nullptr;
+  WispRoster* roster_ = nullptr;
   uint16_t seqCounter_ = 0;          // shared across both emission paths
   StatusBeaconTimerHandle timer_       = nullptr;  // 2s HELLO
   StatusBeaconTimerHandle statusTimer_ = nullptr;  // 30s wispStatus heartbeat

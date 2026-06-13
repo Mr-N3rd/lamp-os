@@ -31,6 +31,15 @@ lives in `docs/mesh-deployment.md` under "Production lock-in". Mixed-fleet
 across protocol versions does not interoperate (loud, diagnosable
 failure: peers don't show up).
 
+Note: the firmware-side `ble_svc_gatt_changed()` Service Changed indication
++ bonded SMP path shipped in commit `49e19c9` was fully reverted in
+`a5fa8cb`. The current lamp firmware does NOT fire Service Changed on
+boot — Android relies on its own per-session cache invalidation. App-side
+`clearGattCache()` was also removed (hidden-API blocklisted on Android
+14+). Re-flashing a lamp with a changed GATT layout will surface as
+"silent wrong-handle reads" until the user force-stops + reopens the app.
+Acceptable trade-off in dev workflow; needs a fix before OTA cycles.
+
 ## Build + test
 
 ```sh

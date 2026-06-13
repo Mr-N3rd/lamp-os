@@ -35,10 +35,6 @@ void Compositor::begin(std::vector<AnimatedBehavior*> inBehaviors, std::vector<F
   }
 };
 
-bool Compositor::hasActiveExclusive() const {
-  return activeExclusive && activeExclusive->animationState != STOPPED;
-}
-
 void Compositor::tick() {
   if (!behaviorsComputed) {
     for (size_t i = 0; i < underlayBehaviors.size(); i++) {
@@ -47,25 +43,11 @@ void Compositor::tick() {
     }
 
     if (startupComplete) {
-      // Update active exclusive tracker
-      if (activeExclusive && activeExclusive->animationState == STOPPED) {
-        activeExclusive = nullptr;
-      }
-
       for (size_t i = 0; i < behaviors.size(); i++) {
         if (!homeMode || behaviors[i]->allowedInHomeMode) {
-          // Check if this behavior should run
-          bool canRun = !activeExclusive || behaviors[i]->isExclusive || behaviors[i] == activeExclusive;
-
-          if (canRun) {
-            behaviors[i]->control();
-            if (behaviors[i]->animationState != STOPPED) {
-              // Track if this is a new exclusive starting
-              if (behaviors[i]->isExclusive && behaviors[i] != activeExclusive) {
-                activeExclusive = behaviors[i];
-              }
-              behaviors[i]->draw();
-            }
+          behaviors[i]->control();
+          if (behaviors[i]->animationState != STOPPED) {
+            behaviors[i]->draw();
           }
         }
       }
@@ -125,7 +107,6 @@ void Compositor::removeBehavior(AnimatedBehavior* b) {
     if (behaviors[idx] == b) {
       behaviors.erase(behaviors.begin() + idx);
       if (idx < expressionBandEnd) expressionBandEnd--;
-      if (activeExclusive == b) activeExclusive = nullptr;
       return;
     }
   }

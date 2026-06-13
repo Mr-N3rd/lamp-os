@@ -11,7 +11,7 @@ import 'package:lamp_app/core/ble/ble_client_provider.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
 import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
-import 'package:lamp_app/features/wisp/presentation/wisp_pane.dart';
+import 'package:lamp_app/features/wisp/presentation/wisp_config_screen.dart';
 
 import '../../_support/seed.dart';
 
@@ -65,7 +65,7 @@ Future<void> _pumpToWifiRow(WidgetTester tester) async {
 Widget _wrap(ProviderContainer c) => UncontrolledProviderScope(
       container: c,
       child: const MaterialApp(
-        home: Scaffold(body: WispPane(lampId: _devId)),
+        home: Scaffold(body: WispConfigScreen(lampId: _devId)),
       ),
     );
 

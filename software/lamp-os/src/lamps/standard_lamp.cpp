@@ -23,7 +23,6 @@
 #include "components/transient_override/brightness_override.hpp"
 #include "components/transient_override/color_override.hpp"
 #include "expressions/expression_manager.hpp"
-#include "util/color.hpp"
 #include "behaviors/configurator.hpp"
 #include "behaviors/fade_out.hpp"
 #include "behaviors/knockout.hpp"
@@ -702,30 +701,51 @@ void initBehaviors() {
 
   std::vector<lamp::AnimatedBehavior*> allBehaviors = {};
 
-  // Expression behaviors (lowest priority — automated effects)
-  auto exprBehaviors = expressionManager.getBehaviors();
-  allBehaviors.insert(allBehaviors.end(), exprBehaviors.begin(), exprBehaviors.end());
+  // Behavior draw order = registration order, last-writer-wins on the
+  // surface buffer.
+  //
+  // Configurator (wisp paint + saved colors) goes FIRST — it's the base
+  // scene. Personality bleeds on top so Fond peer colors read against
+  // the painted baseline. Social greetings overlay next. Expressions
+  // come LAST so brief transient effects (glitchy / pulse / breathing /
+  // shifty) compose on top of everything else and naturally yield when
+  // their animation completes (animationState=STOPPED → Compositor
+  // skips them → configurator's writes are the final state).
+  //
+  // Pre-2026-06-12 expressions were registered FIRST, which meant the
+  // configurator overwrote their per-pixel writes every frame. Non-
+  // exclusive expressions were effectively invisible during wisp paint.
+  // The test_expression handler had a `disabled` flag on the configurator
+  // to work around this for preview UX. Both went away with this
+  // reorder — expressions now compose correctly without any "disable
+  // the base layer" hack.
 
-  // Social greeting behaviors (high priority)
-  allBehaviors.push_back(&shadeSocialBehavior);
-
-  // Configurator behaviors (highest priority — UI preview)
+  // Configurator (base scene — saved colors + wisp paint via beginFade)
   allBehaviors.push_back(&baseConfiguratorBehavior);
   allBehaviors.push_back(&shadeConfiguratorBehavior);
 
-  // Personality bleed overlays on top of the configurator scene so the
-  // Fond color-bleed reads against the painted baseline rather than
-  // getting wiped. Registered AFTER configurator and BEFORE fade-out.
+  // Personality bleed — alpha-blend of Fond peer colors on top of base.
   allBehaviors.push_back(&shadePersonalityBehavior);
+
+  // Social greeting behaviors
+  allBehaviors.push_back(&shadeSocialBehavior);
+
+  // Expression behaviors LAST — transient effects compose on top of
+  // everything below. When their animationState transitions to STOPPED
+  // the compositor skips them and the configurator's base scene shows
+  // through (no recovery needed).
+  auto exprBehaviors = expressionManager.getBehaviors();
+  allBehaviors.insert(allBehaviors.end(), exprBehaviors.begin(), exprBehaviors.end());
 
   // Fade-out behaviors run last so reboot animation is on top of everything
   allBehaviors.push_back(&baseFadeOutBehavior);
   allBehaviors.push_back(&shadeFadeOutBehavior);
 
   compositor.begin(allBehaviors, {&shade, &base}, calculateEffectiveHomeMode());
-  // Record where the initial expression behaviors end so runtime adds insert
-  // before higher-priority behaviors (social, configurator, fade-out).
-  compositor.setExpressionBandEnd(exprBehaviors.size());
+  // Mark where the initial expression band ends so runtime-added transient
+  // invocations are inserted into the expression block (preserves "all
+  // expressions draw together, late in the list" ordering).
+  compositor.setExpressionBandEnd(allBehaviors.size() - 2);  // before fade-out behaviors
   compositor.overlayBehaviors.push_back(&baseKnockoutBehavior);
 
   // Finish wiring the shared BehaviorContext. The Compositor self-publishes
@@ -747,6 +767,32 @@ void initBehaviors() {
   // drive the right configurator's beginFade.
   baseColorOverride.bind(behaviorCtx, lamp_protocol::OverrideSurface::Base);
   shadeColorOverride.bind(behaviorCtx, lamp_protocol::OverrideSurface::Shade);
+  // Wisp-state change callbacks. Each surface's ColorOverride fires
+  // when wisp goes from un-controlling → controlling or vice versa
+  // (edge-triggered inside maybeNotifyWispStateChange). The Flutter
+  // app subscribes to CHAR_WISP_STATUS so a notify lands the moment
+  // a surface transitions; the indicator widget pops on / off without
+  // having to poll.
+  baseColorOverride.setOnWispStateChangeCallback(
+      []() { ble_control::notifyWispStatus(); });
+  shadeColorOverride.setOnWispStateChangeCallback(
+      []() { ble_control::notifyWispStatus(); });
+  // Provider that the CHAR_WISP_STATUS read merges into the JSON. Lives
+  // here so the ColorOverride globals stay out of the network layer.
+  lamp::nearbyLamps.setLampWispStateProvider([]() {
+    lamp::NearbyLamps::LampWispState ws;
+    ws.controllingBase  = baseColorOverride.isWispActive();
+    ws.controllingShade = shadeColorOverride.isWispActive();
+    if (baseColorOverride.hasLastWispColor()) {
+      ws.baseWispColor = lamp::colorToHexString(
+          baseColorOverride.lastWispColor());
+    }
+    if (shadeColorOverride.hasLastWispColor()) {
+      ws.shadeWispColor = lamp::colorToHexString(
+          shadeColorOverride.lastWispColor());
+    }
+    return ws;
+  });
   // BrightnessOverride routes its change-driven callback into the
   // existing applyEffectiveBrightness path so master-brightness fades
   // share the same NeoPixel setBrightness entry point.
@@ -821,13 +867,20 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
       Serial.printf("Testing expression: %s target=%d [%s]\n",
                     type.c_str(), static_cast<int>(target), colorList.c_str());
 #endif
-      shadeConfiguratorBehavior.disabled = true;
-      baseConfiguratorBehavior.disabled = true;
+      // Just trigger the expression. No configurator gating needed:
+      // expressions draw AFTER the configurator in the behavior list, so
+      // they compose on top of wisp paint naturally and yield (via
+      // animationState=STOPPED) when their one-shot animation completes.
+      // The pre-2026-06-12 `configurator.disabled` workaround is gone.
       expressionManager.triggerExpression(type.c_str(), target);
     }
   } else if (action == "test_expression_complete") {
-    shadeConfiguratorBehavior.disabled = false;
-    baseConfiguratorBehavior.disabled = false;
+    // Configurator was never disabled by test_expression (post-2026-06-12
+    // reorder makes expressions overlay the configurator instead of
+    // racing it). This handler still serves a purpose: the app may have
+    // edited the saved colors during the test and wants the configurator
+    // to snap to the new values + the lamp to re-assert any active wisp
+    // paint so the new baseline doesn't briefly stomp it.
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
 
@@ -851,6 +904,14 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
         baseConfiguratorBehavior.colors = lamp::buildGradientWithStops(base.pixelCount, updatedColors);
       }
     }
+    // If the wisp was painting either surface before the expression
+    // test, the configurator-color writes just above stomped the wisp's
+    // target gradient with the lamp's saved colors. Re-assert the wisp
+    // paint immediately so the surface returns to what it was showing
+    // pre-test, rather than waiting up to ~10s for the wisp's next
+    // backstop paint cycle. No-op when the override isn't in Holding.
+    shadeColorOverride.reassertHold();
+    baseColorOverride.reassertHold();
   }
 #ifdef LAMP_DEBUG
   // Personality dev-injection hook: replaces nearbyLamps view inside
@@ -1492,18 +1553,52 @@ void loop() {
                     (unsigned)cmd.surface, (unsigned)cmd.numColors,
                     (unsigned)cmd.fadeDurationMs);
 #endif
-      // Surface routing. Any → apply to both base + shade. Else single.
-      if (cmd.surface == lamp_protocol::OverrideSurface::Base ||
-          cmd.surface == lamp_protocol::OverrideSurface::Any) {
-        baseColorOverride.apply(cmd.sourceMac, cmd.sourceKind,
-                                cmd.colors, cmd.numColors,
-                                cmd.fadeDurationMs);
+      // Pin the wisp identity BEFORE the apply() calls. apply() can
+      // edge-trigger the wisp-active transition callback, which calls
+      // notifyWispStatus → reads getWispStatusReadJson. If the cache is
+      // still "{}" at that moment, the notify carries an empty payload
+      // and the app shows "No wisp detected" until the next wisp hello
+      // (≤30s) populates the cache. Setting mac/present here first
+      // makes the very first paint-triggered notify carry the truth.
+      //
+      // Without this fix: on a freshly-joined lamp that hears
+      // OVERRIDE_COLORS (unicast paint, no relay) but hasn't yet heard
+      // a WISP_HELLO (gossip-broadcast, 30s heartbeat), the app sees
+      // "No wisp detected" even though the lamp is actively wisp-
+      // painted — the "bytes=0 puzzle" observed in the field.
+      if (cmd.sourceKind == lamp_protocol::OverrideSource::Wisp) {
+        lamp::nearbyLamps.cacheWispMacFromPaint(cmd.sourceMac);
       }
-      if (cmd.surface == lamp_protocol::OverrideSurface::Shade ||
-          cmd.surface == lamp_protocol::OverrideSurface::Any) {
-        shadeColorOverride.apply(cmd.sourceMac, cmd.sourceKind,
-                                 cmd.colors, cmd.numColors,
-                                 cmd.fadeDurationMs);
+      // Surface routing.
+      // - Base: colors → base only.
+      // - Shade: colors → shade only.
+      // - Any: same colors → both base + shade (legacy whole-lamp recolor).
+      // - BaseAndShade: colors[0] → base, colors[1] → shade (paired wisp
+      //   paint, halves ESP-NOW traffic vs the prior two-frame design).
+      //   Must have numColors >= 2; if only 1 color arrived, treat it as
+      //   the base colour and skip shade (defensive, shouldn't happen).
+      if (cmd.surface == lamp_protocol::OverrideSurface::BaseAndShade) {
+        baseColorOverride.apply(cmd.sourceMac, cmd.sourceKind,
+                                &cmd.colors[0], /*numColors=*/1,
+                                cmd.fadeDurationMs);
+        if (cmd.numColors >= 2) {
+          shadeColorOverride.apply(cmd.sourceMac, cmd.sourceKind,
+                                   &cmd.colors[1], /*numColors=*/1,
+                                   cmd.fadeDurationMs);
+        }
+      } else {
+        if (cmd.surface == lamp_protocol::OverrideSurface::Base ||
+            cmd.surface == lamp_protocol::OverrideSurface::Any) {
+          baseColorOverride.apply(cmd.sourceMac, cmd.sourceKind,
+                                  cmd.colors, cmd.numColors,
+                                  cmd.fadeDurationMs);
+        }
+        if (cmd.surface == lamp_protocol::OverrideSurface::Shade ||
+            cmd.surface == lamp_protocol::OverrideSurface::Any) {
+          shadeColorOverride.apply(cmd.sourceMac, cmd.sourceKind,
+                                   cmd.colors, cmd.numColors,
+                                   cmd.fadeDurationMs);
+        }
       }
       // Wisp paint ships Base + Shade 10 ms apart per peer but both land
       // in a single-slot mailbox — newest-writer-wins. When Core 1 lags
@@ -1516,6 +1611,12 @@ void loop() {
         const uint32_t now = millis();
         baseColorOverride.touchApply(now);
         shadeColorOverride.touchApply(now);
+        // Defensive notify: covers the case where apply()'s edge
+        // detector didn't fire (e.g. we were already wisp-active on
+        // both surfaces, but the wisp's mac changed). Idempotent on
+        // the wire — fbp passes the bytes through and the app's
+        // wispStatus subscription re-reads them.
+        ble_control::notifyWispStatus();
       }
     }
   }
@@ -1526,13 +1627,16 @@ void loop() {
       Serial.printf("[loop] drain restoreColors surface=0x%02X fadeMs=%u\n",
                     (unsigned)cmd.surface, (unsigned)cmd.fadeDurationMs);
 #endif
+      // BaseAndShade restores both surfaces in one frame (mirrors paint).
       if (cmd.surface == lamp_protocol::OverrideSurface::Base ||
-          cmd.surface == lamp_protocol::OverrideSurface::Any) {
+          cmd.surface == lamp_protocol::OverrideSurface::Any ||
+          cmd.surface == lamp_protocol::OverrideSurface::BaseAndShade) {
         baseColorOverride.restore(cmd.sourceMac, cmd.sourceKind,
                                   cmd.fadeDurationMs);
       }
       if (cmd.surface == lamp_protocol::OverrideSurface::Shade ||
-          cmd.surface == lamp_protocol::OverrideSurface::Any) {
+          cmd.surface == lamp_protocol::OverrideSurface::Any ||
+          cmd.surface == lamp_protocol::OverrideSurface::BaseAndShade) {
         shadeColorOverride.restore(cmd.sourceMac, cmd.sourceKind,
                                    cmd.fadeDurationMs);
       }

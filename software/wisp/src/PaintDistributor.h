@@ -6,7 +6,16 @@
 //   - On paint:on toggle (serial cmd, later: BLE MSG_WISP_OP) → same.
 //   - Every kBackstopRefreshMs while paintMode is on → refresh, in case
 //     a lamp missed a frame or just joined.
-//   - On paint:off → broadcast MSG_RESTORE_COLORS, surface=Base, source=Wisp.
+//   - On paint:off → walk roster sending MSG_RESTORE_COLORS,
+//     surface=BaseAndShade, source=Wisp.
+//
+// Wire format (since 2026-06-11): each peer gets ONE combined
+// MSG_OVERRIDE_COLORS frame per cycle with `surface=BaseAndShade` and
+// `numColors=2` (colors[0]=base, colors[1]=shade). Halves ESP-NOW
+// unicast traffic per peer compared to the prior split-into-two-frames
+// design (Base then Shade with 10 ms delay between). Atomic delivery
+// for both surfaces — eliminates the asymmetric loss pattern measured
+// at ~31% Base / ~15% Shade under BLE coex pressure.
 //
 // Pacing: kPerPeerPaceMs (5 ms) between unicasts so ESP-NOW's send queue
 // doesn't back up with a single-shot fan-out of 12+ frames. The pacing
@@ -24,14 +33,16 @@ class CurrentPalette;
 class LampInventory;
 struct InventoryEntry;
 class MeshLink;
+class WispRoster;
 
 class PaintDistributor {
  public:
   void begin(LampInventory* inventory, MeshLink* mesh,
-             CurrentPalette* palette);
+             CurrentPalette* palette, WispRoster* roster = nullptr);
 
-  // Toggle paint mode. paint:off broadcasts MSG_RESTORE_COLORS to every
-  // currently-known peer. paint:on kicks off a fresh fan-out walk.
+  // Toggle paint mode. paint:off walks the roster sending a single
+  // MSG_RESTORE_COLORS per peer (`surface=BaseAndShade`) so both
+  // surfaces release together. paint:on kicks off a fresh fan-out walk.
   void setPaintMode(bool on);
   bool paintMode() const { return paintMode_; }
 
@@ -60,6 +71,10 @@ class PaintDistributor {
   LampInventory* inventory_ = nullptr;
   MeshLink* mesh_ = nullptr;
   CurrentPalette* palette_ = nullptr;
+  // Roster is nullable for back-compat with code paths that haven't been
+  // wired through (mainly tests). When null, every in-range lamp gets
+  // painted (legacy behavior).
+  WispRoster* roster_ = nullptr;
   bool paintMode_ = false;
   uint32_t lastBackstopMs_ = 0;
   uint32_t lastSendMs_ = 0;

@@ -57,15 +57,19 @@ class LampColor {
   }
 
   /// Blend the warm-white channel into RGB for on-screen rendering.
-  /// Mirrors the Vue ColorPreview algorithm — same math as the
-  /// existing `LampColorSwatch` two-layer overlay, just collapsed
-  /// to one Color so callers that paint a single fill (BaseCard
-  /// stop dots, LampPreview SVG fills, etc.) don't have to layer.
+  /// Mirrors the old Vue ColorPreview algorithm exactly: a `#FABB3E`
+  /// warm-white overlay composited onto the RGB layer using SCREEN
+  /// blend (`1 - (1-a)(1-b)`), not alpha blend. Screen brightens
+  /// additively — matching how the physical W LED adds light on top
+  /// of the RGB LEDs. Alpha blend muddies bright colors toward the
+  /// orange tint instead of brightening them.
   ///
-  /// Algorithm:
-  ///   - tint = #FABB3E (matches BrandColors.warmWhite)
+  /// Algorithm (ported from software/lamp-app/src/lib/colorUtils.ts):
+  ///   - tint = #FABB3E
   ///   - opacity = (W / 255) × (headroom / 765)
   ///       where headroom = 765 − (R+G+B)
+  ///   - per channel: result = 255 × (1 − (1 − c/255) × (1 − (tintC/255) × opacity))
+  ///
   /// High RGB → no headroom, no warm overlay (LED clips anyway).
   /// Low RGB + high W → strong warm glow.
   /// Pure warm-white (W=255, RGB=0) → fully tinted swatch.
@@ -78,11 +82,16 @@ class LampColor {
     final headroom = 765 - (r + g + b);
     if (headroom <= 0 || w == 0) return (r: r, g: g, b: b);
     final opacity = (w / 255) * (headroom / 765);
-    final inv = 1 - opacity;
+    // Screen blend: result = 1 - (1 - base) * (1 - overlay·α)
+    int screen(int base, int tint) {
+      final a = base / 255.0;
+      final b = (tint / 255.0) * opacity;
+      return (255 * (1 - (1 - a) * (1 - b))).round().clamp(0, 255);
+    }
     return (
-      r: (r * inv + tintR * opacity).round().clamp(0, 255),
-      g: (g * inv + tintG * opacity).round().clamp(0, 255),
-      b: (b * inv + tintB * opacity).round().clamp(0, 255),
+      r: screen(r, tintR),
+      g: screen(g, tintG),
+      b: screen(b, tintB),
     );
   }
 

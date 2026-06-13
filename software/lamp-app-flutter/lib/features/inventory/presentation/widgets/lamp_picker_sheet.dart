@@ -17,6 +17,7 @@ import '../../../inventory/domain/inventory_lamp.dart';
 import '../../../inventory/domain/lamp_colors.dart';
 import '../../../lamp_shell/application/lamp_status.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
+import '../../../nearby/application/scan_grace_provider.dart';
 import '../../../nearby/domain/nearby_lamp.dart';
 import '../../domain/last_seen.dart';
 
@@ -78,15 +79,10 @@ class LampPickerSheet extends ConsumerWidget {
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: ListView(
-                children: [
-                  for (final l in inventory)
-                    _InventoryLampTile(
-                      lamp: l,
-                      isCurrent: l.id == currentLampId,
-                      nearby: nearby,
-                    ),
-                ],
+              child: _InventoryList(
+                inventory: inventory,
+                nearby: nearby,
+                currentLampId: currentLampId,
               ),
             ),
             const Divider(color: BrandColors.slateGrey, height: 1),
@@ -103,6 +99,92 @@ class LampPickerSheet extends ConsumerWidget {
               },
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Splits the inventory into ONLINE (lamp is currently in the nearby
+/// roster — adverting or connected) and OFFLINE (paired but not in
+/// range) buckets with section headers. Offline tiles also wear a
+/// reduced opacity so the section reads as "these aren't here right
+/// now" at a glance; offline tile onTap is already gated to null by
+/// `_InventoryLampTile`, so the tile is non-tappable AND visually muted.
+///
+/// The current lamp stays tappable even if it's technically offline (to
+/// let the user re-enter its screen and watch the reconnect attempt) —
+/// the per-tile gate spells that out.
+class _InventoryList extends StatelessWidget {
+  const _InventoryList({
+    required this.inventory,
+    required this.nearby,
+    required this.currentLampId,
+  });
+
+  final List<InventoryLamp> inventory;
+  final List<NearbyLamp> nearby;
+  final String currentLampId;
+
+  @override
+  Widget build(BuildContext context) {
+    final onlineIds = {for (final n in nearby) n.id};
+    final online = <InventoryLamp>[];
+    final offline = <InventoryLamp>[];
+    for (final l in inventory) {
+      if (onlineIds.contains(l.id)) {
+        online.add(l);
+      } else {
+        offline.add(l);
+      }
+    }
+    return ListView(
+      children: [
+        if (online.isNotEmpty) ...[
+          const _SectionHeading('ONLINE'),
+          for (final l in online)
+            _InventoryLampTile(
+              lamp: l,
+              isCurrent: l.id == currentLampId,
+              nearby: nearby,
+            ),
+        ],
+        if (offline.isNotEmpty) ...[
+          const _SectionHeading('OFFLINE'),
+          Opacity(
+            opacity: 0.55,
+            child: Column(
+              children: [
+                for (final l in offline)
+                  _InventoryLampTile(
+                    lamp: l,
+                    isCurrent: l.id == currentLampId,
+                    nearby: nearby,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _SectionHeading extends StatelessWidget {
+  const _SectionHeading(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: BrandColors.headerYellow,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.2,
         ),
       ),
     );
@@ -189,12 +271,15 @@ class _InventoryLampTile extends ConsumerWidget {
     final connected = isCurrent &&
         (ref.watch(controlNotifierProvider(lamp.id)).value?.connected ??
             false);
+    final inScanGrace = ref.watch(scanGraceActiveProvider);
     final status = statusFor(
       lampId: lamp.id,
       nearby: nearby,
       connected: connected,
+      inScanGrace: inScanGrace,
     );
     final isOffline = status == StatusKind.offline;
+    final isSearching = status == StatusKind.searching;
     final colors = resolveLampColors(
       inv: lamp,
       near: nearby.firstWhereOrNull((n) => n.id == lamp.id),
@@ -276,6 +361,11 @@ class _InventoryLampTile extends ConsumerWidget {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
+              )
+            else if (isSearching)
+              const Text(
+                'Searching…',
+                style: TextStyle(color: BrandColors.slateGrey, fontSize: 12),
               )
             else if (isOffline)
               Text(

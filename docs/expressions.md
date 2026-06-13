@@ -79,6 +79,7 @@ Semantics:
 - Skipped triggers don't queue. The gate pushes `nextTriggerMs` forward by `intervalMinMs` so a long-running wisp hold doesn't accumulate a backlog of triggers that all fire the instant the wisp lets go.
 - Manual trigger paths (the test button in the editor, mesh cascade arrivals via `triggerInvocation`) are **not gated** — deliberate operator/social actions outrank the gate.
 - Defaults: `breathing` and `shifty` → true (they paint continuously and fight the wisp's hold). `glitchy` and `pulse` → false (brief flashes / waves coexist with a held wisp colour). Type-aware parse default lives in **both** `config.cpp` and `sections.dart` — keep them in sync.
+- **Not user-editable.** The `disabledDuringWispOverride` toggle was removed from the expression editor UX (commits 3575f43 + 0c3c5b3). The per-type default above is now authoritative — operators can't override it. The field persists in `ExpressionConfig` for serialization compatibility, but the editor UI no longer surfaces it. Custom-lamp / power-user reintroduction is a future possibility but not currently planned.
 
 ## Mesh cascade integration
 

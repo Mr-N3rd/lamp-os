@@ -74,6 +74,16 @@ the iOS app's expression-test characteristic on jacko and counting
 Recv rate is per direct link. Mesh coverage scales with the gossip
 redundancy across all N lamps (next section).
 
+**Stale relative to wisp paint:** these rates were measured before the
+combined-frame paint optimization (2026-06-11). Pre-fix the wisp sent
+TWO unicasts per peer per cycle (Base then Shade); measured loss was
+~31% on Base, ~15% on Shade (asymmetric — the first-of-paired send
+loses ACK more often). Post-fix the wisp sends ONE combined frame
+(`surface=BaseAndShade`) per peer per cycle, halving traffic and making
+delivery atomic. Re-measure cascade recv rates at the next deployment
+to capture the new floor. The numbers above for `MSG_EVENT` cascades
+remain valid — only paint unicast traffic changed.
+
 ### Gossip-relay math at fleet scale
 
 A receiver doesn't have to hear the originator directly — it just has to

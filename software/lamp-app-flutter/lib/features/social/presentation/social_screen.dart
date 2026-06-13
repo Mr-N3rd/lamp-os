@@ -109,9 +109,9 @@ class SocialScreen extends ConsumerWidget {
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 4),
           child: Text(
-            'Lamps notice the company they keep. How they greet, glow, '
-            'and settle in shifts a little with the crowd around them — '
-            'and how you feel about that crowd.',
+            'Lamps notice the company they keep. How this one greets, '
+            'glows, and settles shifts a little with the lamps it meets — '
+            'and with how it feels about each of them.',
             style: TextStyle(
               color: BrandColors.fogGrey,
               fontSize: 12,
@@ -300,9 +300,10 @@ class _PersonalityButton extends StatelessWidget {
   }
 }
 
-/// Cute/playful escalation from "lamp I dislike" (1) to "lamp I have a
-/// crush on" (5). Used as the single active-position label on the
-/// disposition slider. Values outside 1..5 fall back to neutral.
+/// Cute/playful escalation describing how the lamp feels about the named
+/// peer — from "salty" (1) to "smitten" (5). Used as the single active-
+/// position label on the disposition slider. Values outside 1..5 fall
+/// back to neutral.
 String _dispositionLabel(int value) {
   switch (value) {
     case 1:

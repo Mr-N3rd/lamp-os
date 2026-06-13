@@ -60,9 +60,6 @@ bool Expression::shouldAffectBuffer() {
 bool isWispCurrentlyOverriding();
 
 void Expression::control() {
-  // Pause if an exclusive behavior is running (unless we are exclusive)
-  if (shouldPause()) return;
-
   // Wisp-override gate: skip auto-trigger when the operator has marked
   // this expression "pause when wisp is in control" AND a wisp paint
   // is currently held on either surface. Pushes nextTriggerMs forward
@@ -89,16 +86,6 @@ void Expression::control() {
     onComplete();
     lastCompletedLoop = currentLoop;
   }
-}
-
-bool Expression::shouldPause() const {
-  // Don't pause if this expression is exclusive
-  if (isExclusive) return false;
-
-  // Check if compositor has an active exclusive. Context is null until the
-  // Compositor registers us via addBehavior — pre-registration we can't be
-  // running anyway, so treat as "no exclusive".
-  return context_ && context_->compositor && context_->compositor->hasActiveExclusive();
 }
 
 Color Expression::getRandomColor() {
