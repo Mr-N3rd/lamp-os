@@ -11,6 +11,8 @@ import '../../inventory/presentation/widgets/lamp_picker_sheet.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
 import '../application/lamp_status.dart';
 import '../../social/presentation/social_screen.dart';
+import '../../wisp/application/wisp_notifier.dart';
+import '../../wisp/presentation/wisp_pane.dart';
 import 'expressions_screen.dart';
 import 'info_screen.dart';
 import 'setup_screen.dart';
@@ -24,7 +26,7 @@ const _brandGradient = LinearGradient(
   colors: [BrandColors.auroraBlue, BrandColors.glowPink],
 );
 
-enum LampTab { control, expressions, setup, social, info }
+enum LampTab { control, expressions, setup, wisp, social, info }
 
 class LampShell extends ConsumerStatefulWidget {
   const LampShell({
@@ -53,10 +55,20 @@ class _LampShellState extends ConsumerState<LampShell> {
     // is released with the shell.
     ref.watch(controlNotifierProvider(widget.lampId));
 
+    // Same lifecycle treatment for the wisp notifier: it holds the saved /
+    // draft manual-palette state and the current `WispSourceMode`, neither
+    // of which can be reconstructed from CHAR_WISP_STATUS alone (the
+    // palette colors don't fit in the 230-byte payload budget — only the
+    // 8-char ID prefix is shipped). Without this watch, switching away
+    // from the Wisp tab unmounts WispPane, the provider auto-disposes,
+    // and on return the editor opens empty with source reverted to Off.
+    ref.watch(wispNotifierProvider(widget.lampId));
+
     final body = switch (_tab) {
       LampTab.control => ControlScreen(lampId: widget.lampId),
       LampTab.expressions => ExpressionsScreen(lampId: widget.lampId),
       LampTab.setup => SetupScreen(lampId: widget.lampId),
+      LampTab.wisp => WispPane(lampId: widget.lampId),
       LampTab.social => SocialScreen(lampId: widget.lampId),
       LampTab.info => InfoScreen(lampId: widget.lampId),
     };
@@ -100,8 +112,10 @@ class _LampShellState extends ConsumerState<LampShell> {
           // save flow — Expressions edits live-preview via
           // CHAR_EXPRESSION_OP for instant feedback but only persist to
           // NVS when the global Save Changes pill is tapped. Info is
-          // read-only, so the action is hidden there.
-          if (_tab != LampTab.info)
+          // read-only, so the action is hidden there. Wisp writes are
+          // immediate (CHAR_WISP_OP) with no dirty state — the "Saved"
+          // pill belongs to the settings-blob flow, not wisp ops.
+          if (_tab != LampTab.info && _tab != LampTab.wisp)
             _SaveAction(lampId: widget.lampId),
         ],
       ),
@@ -145,6 +159,8 @@ class _LampShellState extends ConsumerState<LampShell> {
                 Icons.auto_awesome, 'Expressions', _tab == LampTab.expressions),
             _gradientDestination(
                 Icons.settings, 'Setup', _tab == LampTab.setup),
+            _gradientDestination(
+                Icons.bubble_chart, 'Wisp', _tab == LampTab.wisp),
             _gradientDestination(Icons.handshake_outlined, 'Social',
                 _tab == LampTab.social),
             _gradientDestination(

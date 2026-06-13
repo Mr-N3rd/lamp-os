@@ -38,6 +38,11 @@ void postPendingTestActionJson(const char* data, size_t len);
 void postPendingRemoteOpJson(const char* data, size_t len);
 void postPendingSettingsBlobJson(const char* data, size_t len);
 void postPendingSocialDispositionsJson(const char* data, size_t len);
+// CHAR_WISP_OP — plaintext JSON, app-originated, dedicated slot whose
+// drain broadcasts as MSG_CONTROL_OP. Bypasses applyRemoteOpLocal so a
+// gossip-relayed wispOp does NOT get re-applied on every lamp; only the
+// wisp(s) on the mesh consume it.
+void postPendingWispOpJson(const char* data, size_t len);
 void postPendingApplyEffectiveBrightness();
 // Audit fix #5: NVS commits cannot run on Core 0 (NimBLE host task).
 // onDisconnect posts this flag; the loop drain on Core 1 force-flushes
@@ -62,6 +67,7 @@ static NimBLECharacteristic* s_shadeSectionChar = nullptr;
 static NimBLECharacteristic* s_exprSectionChar  = nullptr;
 static NimBLECharacteristic* s_homeSectionChar  = nullptr;
 static NimBLECharacteristic* s_nearbyLampsChar  = nullptr;
+static NimBLECharacteristic* s_wispStatusChar   = nullptr;
 static lamp::Config*         s_config      = nullptr;
 static Preferences*          s_prefs       = nullptr;
 static bool                  s_running     = false;
@@ -567,6 +573,33 @@ void notifyNearbyLamps() {
   s_nearbyLampsChar->notify();
 }
 
+// ── Wisp status: read+notify the cached wispStatus JSON merged with the
+// last MSG_WISP_HELLO payload. Auth-gated — a wisp's runtime state
+// (current zone, palette progress, etc.) shouldn't be readable to an
+// unauthenticated scanner that happens to know the service UUID.
+//
+// Build path lives entirely inside NearbyLamps::getWispStatusReadJson so
+// both the on-read callback and the notify helper hand back the same
+// bytes. Returns "{}" when nothing has been cached yet (no wispHello,
+// no wispStatus) — the app treats empty/object-only payloads as
+// "no wisp on this mesh yet".
+class WispStatusCallback : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    if (!isAuthed(connInfo.getConnHandle())) {
+      c->setValue("");
+      return;
+    }
+    c->setValue(lamp::nearbyLamps.getWispStatusReadJson());
+  }
+};
+
+void notifyWispStatus() {
+  if (!s_wispStatusChar) return;
+  auto json = lamp::nearbyLamps.getWispStatusReadJson();
+  s_wispStatusChar->setValue(json);
+  s_wispStatusChar->notify();
+}
+
 static const char* wifiStateName(wifi::State s) {
   switch (s) {
     case wifi::IDLE:       return "idle";
@@ -732,6 +765,14 @@ class LampSectionCallback : public NimBLECharacteristicCallbacks {
       return;
     }
     c->setValue(s_config->lampSectionJsonCached());
+#ifdef LAMP_DEBUG
+    // Diagnostic for "save+reload didn't actually persist" reports — log
+    // the byte length + a snippet so we can correlate what the app sees
+    // post-reboot with what settingsBlob persisted pre-reboot.
+    const auto& json = s_config->lampSectionJsonCached();
+    Serial.printf("[ble_control] READ lampSection len=%u json=%.180s\n",
+                  (unsigned)json.size(), json.c_str());
+#endif
   }
 };
 
@@ -1000,6 +1041,25 @@ void start(lamp::Config* config, Preferences* prefs) {
           decodeIncomingOp, kRemoteOpSalt.data(), "remoteOp"))
               ->setDebugTag("remoteOp"));
 
+  // Wisp op — plaintext JSON. Per the Phase D design the wispOp wire
+  // format is open-set ({"char":"wispOp","op":"setZone","zoneId":N}) and
+  // the wisp owns the vocabulary; encrypting it would force a firmware
+  // bump on the lamp every time the wisp gains a new op. App-layer auth
+  // still gates writes via the standard isAuthed() check.
+  s_service->createCharacteristic(CHAR_WISP_OP, NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks((new WriteRouter(
+          MAX_PENDING_OP_JSON, postPendingWispOpJson, isAuthed))
+              ->setDebugTag("wispOp"));
+
+  // Wisp status — read + notify. Same shape as nearby_lamps: build JSON
+  // from the cached wispStatus payload merged with the last
+  // MSG_WISP_HELLO data. Notify fires whenever the loop drain caches a
+  // new wispStatus (see standard_lamp.cpp::loop).
+  s_wispStatusChar = s_service->createCharacteristic(
+      CHAR_WISP_STATUS, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  s_wispStatusChar->setCallbacks(new WispStatusCallback());
+  s_wispStatusChar->setValue(lamp::nearbyLamps.getWispStatusReadJson());
+
   // Settings blob — write-only. Reads now go through the per-section
   // characteristics (CHAR_LAMP_SECTION etc.), each well under MTU. The
   // single-blob read path was dropped because the full config grew past 512
@@ -1046,6 +1106,7 @@ void stop() {
     s_exprSectionChar = nullptr;
     s_homeSectionChar = nullptr;
     s_nearbyLampsChar = nullptr;
+    s_wispStatusChar  = nullptr;
   }
 
   s_server  = nullptr;

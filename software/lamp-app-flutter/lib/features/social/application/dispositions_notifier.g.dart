@@ -15,8 +15,8 @@ part of 'dispositions_notifier.dart';
 /// ms after the last edit). The full map is sent on every write — the
 /// firmware-side characteristic replaces the entire state on each write.
 ///
-/// Disposition values are 1..5 (salty..neutral..smitten). Missing keys
-/// default to 3 (neutral) at the call site via `get`.
+/// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
+/// Missing keys default to 3 (neutral) at the call site via `get`.
 
 @ProviderFor(Dispositions)
 final dispositionsProvider = DispositionsFamily._();
@@ -28,8 +28,8 @@ final dispositionsProvider = DispositionsFamily._();
 /// ms after the last edit). The full map is sent on every write — the
 /// firmware-side characteristic replaces the entire state on each write.
 ///
-/// Disposition values are 1..5 (salty..neutral..smitten). Missing keys
-/// default to 3 (neutral) at the call site via `get`.
+/// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
+/// Missing keys default to 3 (neutral) at the call site via `get`.
 final class DispositionsProvider
     extends $AsyncNotifierProvider<Dispositions, Map<String, int>> {
   /// Per-peer social disposition for a given lamp.
@@ -39,8 +39,8 @@ final class DispositionsProvider
   /// ms after the last edit). The full map is sent on every write — the
   /// firmware-side characteristic replaces the entire state on each write.
   ///
-  /// Disposition values are 1..5 (salty..neutral..smitten). Missing keys
-  /// default to 3 (neutral) at the call site via `get`.
+  /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
+  /// Missing keys default to 3 (neutral) at the call site via `get`.
   DispositionsProvider._({
     required DispositionsFamily super.from,
     required String super.argument,
@@ -77,7 +77,7 @@ final class DispositionsProvider
   }
 }
 
-String _$dispositionsHash() => r'65e54dca7b386ea3dd5044127955e062007509f8';
+String _$dispositionsHash() => r'399c037f04416cf54efe76fac029b1f1a53c6b59';
 
 /// Per-peer social disposition for a given lamp.
 ///
@@ -86,8 +86,8 @@ String _$dispositionsHash() => r'65e54dca7b386ea3dd5044127955e062007509f8';
 /// ms after the last edit). The full map is sent on every write — the
 /// firmware-side characteristic replaces the entire state on each write.
 ///
-/// Disposition values are 1..5 (salty..neutral..smitten). Missing keys
-/// default to 3 (neutral) at the call site via `get`.
+/// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
+/// Missing keys default to 3 (neutral) at the call site via `get`.
 
 final class DispositionsFamily extends $Family
     with
@@ -114,8 +114,8 @@ final class DispositionsFamily extends $Family
   /// ms after the last edit). The full map is sent on every write — the
   /// firmware-side characteristic replaces the entire state on each write.
   ///
-  /// Disposition values are 1..5 (salty..neutral..smitten). Missing keys
-  /// default to 3 (neutral) at the call site via `get`.
+  /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
+  /// Missing keys default to 3 (neutral) at the call site via `get`.
 
   DispositionsProvider call(String lampId) =>
       DispositionsProvider._(argument: lampId, from: this);
@@ -131,8 +131,8 @@ final class DispositionsFamily extends $Family
 /// ms after the last edit). The full map is sent on every write — the
 /// firmware-side characteristic replaces the entire state on each write.
 ///
-/// Disposition values are 1..5 (salty..neutral..smitten). Missing keys
-/// default to 3 (neutral) at the call site via `get`.
+/// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
+/// Missing keys default to 3 (neutral) at the call site via `get`.
 
 abstract class _$Dispositions extends $AsyncNotifier<Map<String, int>> {
   late final _$args = ref.$arg as String;

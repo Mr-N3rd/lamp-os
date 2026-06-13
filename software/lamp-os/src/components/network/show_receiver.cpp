@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "../firmware/firmware_receiver.hpp"
 #include "../../version.hpp"
 
 namespace lamp {
@@ -343,7 +344,62 @@ void ShowReceiver::handleRecv(const uint8_t* /*srcMac*/, const uint8_t* data,
       std::memcpy(slot.payload, ev.payload, ev.payloadLen);
     }
     postPendingEvent(slot);
+  } else if (msgType == lamp_protocol::MSG_FW_OFFER) {
+    // Single-hop unicast; no gossip relay. The shared firmwareDedup_
+    // ring guards against the wisp re-sending the OFFER while we drain.
+    lamp_protocol::ParsedFwOffer p;
+    if (!lamp_protocol::parseFwOffer(data, len, p)) return;
+    if (!firmwareDedup_.record(p.sourceMac, lamp_protocol::MSG_FW_OFFER, p.seq)) return;
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    PendingFirmwareControl slot{};
+    slot.msgType = lamp_protocol::MSG_FW_OFFER;
+    slot.seq = p.seq;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    std::memcpy(slot.targetMac, p.targetMac, 6);
+    slot.offer.version       = p.version;
+    slot.offer.totalLen      = p.totalLen;
+    slot.offer.chunkSize     = p.chunkSize;
+    std::memcpy(slot.offer.channel, p.channel, lamp_protocol::FW_CHANNEL_LEN);
+    std::memcpy(slot.offer.sha256Prefix, p.sha256Prefix,
+                lamp_protocol::FW_SHA256_PREFIX_LEN);
+    slot.offer.footerLen   = p.footerLen;
+    slot.offer.totalChunks = p.totalChunks;
+    postPendingFirmwareControl(slot);
+  } else if (msgType == lamp_protocol::MSG_FW_CHUNK) {
+    // High-frequency payload-carrying frame. Per lamp-side plan §5
+    // (Option 1, confirmed by spike at 16.6% WiFi-task-busy / 0% drops):
+    // direct handoff to FirmwareReceiver::handleChunkOnRecvTask on this
+    // recv task. No pending slot — the single-slot pattern can't keep
+    // up with 250 chunks/s and the slot's "newest writer wins" semantics
+    // would silently drop most of the stream.
+    //
+    // The receiver's chunk handler is bounded: ~0.5 ms for the
+    // esp_ota_write_with_offset call + a bitmap set under portMUX. No
+    // heap, no JSON, no FreeRTOS blocking.
+    lamp_protocol::ParsedFwChunk p;
+    if (!lamp_protocol::parseFwChunk(data, len, p)) return;
+    if (!firmwareDedup_.record(p.sourceMac, lamp_protocol::MSG_FW_CHUNK, p.seq)) return;
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    if (firmwareReceiver_) firmwareReceiver_->handleChunkOnRecvTask(p);
+  } else if (msgType == lamp_protocol::MSG_FW_DONE) {
+    lamp_protocol::ParsedFwDone p;
+    if (!lamp_protocol::parseFwDone(data, len, p)) return;
+    if (!firmwareDedup_.record(p.sourceMac, lamp_protocol::MSG_FW_DONE, p.seq)) return;
+    if (!addressedToUs(p.targetMac, myMac_)) return;
+    PendingFirmwareControl slot{};
+    slot.msgType = lamp_protocol::MSG_FW_DONE;
+    slot.seq = p.seq;
+    std::memcpy(slot.sourceMac, p.sourceMac, 6);
+    std::memcpy(slot.targetMac, p.targetMac, 6);
+    slot.done.version  = p.version;
+    slot.done.totalLen = p.totalLen;
+    std::memcpy(slot.done.sha256Prefix, p.sha256Prefix,
+                lamp_protocol::FW_SHA256_PREFIX_LEN);
+    slot.done.footerLen = p.footerLen;
+    postPendingFirmwareControl(slot);
   }
+  // NOTE: MSG_FW_ACCEPT, MSG_FW_REQ, MSG_FW_RESULT are lamp→wisp; the
+  // lamp does not receive them. No branches needed here.
 }
 
 void ShowReceiver::emitHello() {

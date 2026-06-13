@@ -4,6 +4,10 @@
 #include <cstdint>
 #include <functional>
 
+#if defined(ARDUINO) || defined(ESP_PLATFORM)
+#include <freertos/FreeRTOS.h>
+#endif
+
 namespace wisp {
 
 // ESP-NOW channel the lamp grid sits on. Matches LAMP_ESPNOW_CHANNEL in
@@ -51,6 +55,20 @@ class MeshLink {
   // Wisp's STA MAC. Useful for log lines + future addressed frames.
   void getMac(uint8_t out[6]) const;
 
+  // Bookkeeping invoked from the ESP-NOW send-complete trampoline.
+  // `ok` reflects MAC-layer ACK (true = peer ACKed, false = no ACK after
+  // hardware retries). Maintained for diagnostics; future retry logic
+  // can consume sendFailCount_() to back off failing peers immediately
+  // instead of waiting for the OFFER/finalize timer.
+  void noteSendResult(const uint8_t* mac, bool ok);
+  uint32_t sendFailCount() const { return sendFailCount_; }
+  uint32_t sendOkCount() const { return sendOkCount_; }
+  // Number of times the peer table evicted an LRU slot to make room
+  // for a new MAC. Exposed for diagnostics + future health logging;
+  // an unbounded climb on a 22-lamp fleet means we're rotating
+  // through more peers than slots — expected at steady state.
+  uint32_t peerEvictCount() const { return evictCount_; }
+
   // ESP-NOW C callback can't capture; we store the std::function here and
   // dispatch through a static trampoline that reaches in via s_instance.
   // These two are public so the trampoline in the .cpp doesn't need a
@@ -61,12 +79,57 @@ class MeshLink {
  private:
 
   // Track whether we've already added a unicast peer so add_peer doesn't
-  // return DUP. The peer list is small (<= a dozen lamps); a tiny array
-  // of MAC suffixes is enough.
-  static constexpr size_t MAX_TRACKED_PEERS = 16;
-  uint8_t peers_[MAX_TRACKED_PEERS][6];
-  size_t peerCount_ = 0;
-  bool peerAlreadyAdded(const uint8_t mac[6]) const;
+  // return DUP, and so the table can evict the LRU peer when full.
+  //
+  // ESP-NOW caps the total peer table at ESP_NOW_MAX_TOTAL_PEER_NUM (20
+  // on arduino-esp32 v3.x / IDF 5.x for the C6). MeshLink::begin()
+  // registers the FF:FF:FF:FF:FF:FF broadcast peer in that table, so 19
+  // unicast slots remain. With 22 lamps in the production fleet (and
+  // headroom for growth), the table WILL fill — we evict the
+  // least-recently-used unicast peer on overflow so newly seen MACs
+  // continue to work.
+  //
+  // Before this fix the table was 16 slots with no eviction; once full,
+  // a 17th MAC silently fell through with no esp_now_add_peer call and
+  // every subsequent esp_now_send to that MAC returned
+  // ESP_ERR_ESPNOW_NOT_FOUND. The send-callback counter (sendFailCount_)
+  // saw the failures but had no path to inform callers which peer
+  // failed.
+  static constexpr size_t MAX_TRACKED_PEERS = 19;
+  struct PeerSlot {
+    uint8_t  mac[6];
+    uint32_t lastUsedMs;  // millis() of most recent send to this peer.
+    bool     used;
+  };
+  PeerSlot peers_[MAX_TRACKED_PEERS] = {};
+  size_t   peerCount_ = 0;
+  uint32_t evictCount_ = 0;  // Diagnostic only.
+
+  // Locate a tracked peer by MAC. Returns the slot index or -1.
+  // Caller must hold peerMux_.
+  int findPeerSlot(const uint8_t mac[6]) const;
+  // Pick the slot with the smallest lastUsedMs. Used on overflow.
+  // Caller must hold peerMux_.
+  size_t pickLruSlot() const;
+
+#if defined(ARDUINO) || defined(ESP_PLATFORM)
+  // Mutex around the peer table. send() is called from the loop task
+  // (PaintDistributor / OFFER from tick()) AND from the FirmwareDistributor
+  // streaming task; without a mutex two concurrent first-touches of the
+  // same NEW MAC could both pass the "not present" check, both call
+  // esp_now_add_peer (the second returns ESP_ERR_ESPNOW_EXIST, benign),
+  // and both write into peers_ at peerCount_++ (NOT benign — torn
+  // increment, duplicate slot, eventual eviction picking the wrong
+  // entry). A portMUX critical section is the right primitive here —
+  // mutations are tiny and we never block while holding it.
+  mutable portMUX_TYPE peerMux_ = portMUX_INITIALIZER_UNLOCKED;
+#endif
+
+  // ESP-NOW send-complete counters. Plain uint32_t — the trampoline is
+  // single-callee from the WiFi task, no concurrent writer, so no atomic
+  // is needed. Readers (loop-side diagnostics) can tolerate torn reads.
+  uint32_t sendOkCount_   = 0;
+  uint32_t sendFailCount_ = 0;
 };
 
 }  // namespace wisp

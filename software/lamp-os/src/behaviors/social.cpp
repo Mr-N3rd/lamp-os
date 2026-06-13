@@ -3,21 +3,74 @@
 #include <Arduino.h>
 
 #include "components/network/nearby_lamps.hpp"
+#include "components/personality/personality_engine.hpp"
 #include "config/config.hpp"
 #include "util/color.hpp"
 #include "util/fade.hpp"
 
 namespace lamp {
 
+namespace {
+
+// Darken `c` toward zero by `strength`/255. strength=0 returns c;
+// strength=255 returns black. Used by the Extrovert greeting's
+// "subtle pulse-back" phase — gives the held color a brief dip before
+// resettling. Per-channel; preserves the hue.
+Color darken(const Color& c, uint8_t strength) {
+  const uint16_t keep = static_cast<uint16_t>(255 - strength);
+  return Color(static_cast<uint8_t>(c.r * keep / 255),
+               static_cast<uint8_t>(c.g * keep / 255),
+               static_cast<uint8_t>(c.b * keep / 255),
+               static_cast<uint8_t>(c.w * keep / 255));
+}
+
+}  // namespace
+
 void SocialBehavior::draw() {
+  // Piecewise waveform: ease-in (to foundLampColor) → hold (optionally
+  // with a subtle "pulse-back" dip during the first two-thirds) → ease-out
+  // (back to whatever the underlying expression has drawn this frame).
+  // pulseBackStrength == 0 reduces this to a plain ease-in / hold / ease-out
+  // and matches the pre-Phase-D shape SocialBehavior used.
+  const uint32_t easeIn  = easeInFrames;
+  const uint32_t hold    = holdFrames;
+  const uint32_t fadeOut = fadeOutFrames;
+
   for (int i = 0; i < fb->pixelCount; i++) {
-    if (frame < easeFrames) {
-      fb->buffer[i] = fade(fb->buffer[i], foundLampColor, easeFrames - 1, frame);
-    } else if (frame > (frames - easeFrames)) {
-      fb->buffer[i] = fade(foundLampColor, fb->buffer[i], easeFrames - 1, frame % easeFrames);
+    const Color buf = fb->buffer[i];
+    Color out;
+    if (easeIn > 0 && frame < easeIn) {
+      // Phase 1 — ease in toward foundLampColor.
+      out = fade(buf, foundLampColor, easeIn - 1, frame);
+    } else if (frame < easeIn + hold) {
+      const uint32_t holdFrame = frame - easeIn;
+      const uint32_t pulseSpan = (pulseBackStrength > 0) ? (hold * 2 / 3) : 0;
+      if (pulseSpan > 0 && holdFrame < pulseSpan) {
+        const Color dimmed = darken(foundLampColor, pulseBackStrength);
+        const uint32_t halfPulse = (pulseSpan > 0) ? (pulseSpan / 2) : 0;
+        if (halfPulse > 0 && holdFrame < halfPulse) {
+          // Pulse down: foundLampColor → dimmed.
+          out = fade(foundLampColor, dimmed, halfPulse - 1, holdFrame);
+        } else if (halfPulse > 0) {
+          // Pulse up: dimmed → foundLampColor.
+          out = fade(dimmed, foundLampColor, halfPulse - 1, holdFrame - halfPulse);
+        } else {
+          out = foundLampColor;
+        }
+      } else {
+        // Plain hold.
+        out = foundLampColor;
+      }
+    } else if (fadeOut > 0 && frame < easeIn + hold + fadeOut) {
+      // Phase 3 — ease out back to the underlying expression's pixel.
+      const uint32_t fadeFrame = frame - (easeIn + hold);
+      out = fade(foundLampColor, buf, fadeOut - 1, fadeFrame);
     } else {
-      fb->buffer[i] = foundLampColor;
+      // Past the explicit window — leave buffer alone (playOnce will stop
+      // us at `frames` regardless).
+      out = buf;
     }
+    fb->buffer[i] = out;
   }
 
   nextFrame();
@@ -63,12 +116,38 @@ void SocialBehavior::control() {
     // don't greet the same peer twice in a single sighting.
     if (it->acknowledged) continue;
 
+    // PersonalityEngine gates per-peer greeting via the (SocialMode ×
+    // Disposition) matrix. Salty in every mode returns skip — the lamp's
+    // only on-meet signal for a Salty peer is the arrival side-eye dim
+    // (fired separately from PersonalityEngine, not here). We still mark
+    // the peer acknowledged + record lastGreetedAtMs so we don't keep
+    // re-evaluating them every loop iteration.
+    const GreetingTuning tuning = personalityEngine.greetingFor(it->name);
+    if (tuning.skip) {
 #ifdef LAMP_DEBUG
-    Serial.printf("[social] greet %s (mode=%u)\n", it->name.c_str(),
-                  (unsigned)mode);
+      Serial.printf("[social] skip %s (Salty)\n", it->name.c_str());
+#endif
+      nearbyLamps.acknowledge(it->name);
+      lastGreetedAtMs_[it->name] = now;
+      continue;  // keep scanning for a non-Salty peer below
+    }
+
+#ifdef LAMP_DEBUG
+    Serial.printf("[social] greet %s (mode=%u disp=%u frames=%u pulse=%u)\n",
+                  it->name.c_str(), (unsigned)mode,
+                  (unsigned)tuning.totalFrames,
+                  (unsigned)tuning.pulseBackStrength);
 #endif
     nearbyLamps.acknowledge(it->name);
     foundLampColor = it->baseColor;
+
+    // Copy the engine's waveform into our draw-side fields. AnimatedBehavior's
+    // `frames` drives playOnce / nextFrame — keep it in lockstep with totalFrames.
+    easeInFrames      = tuning.easeInFrames;
+    holdFrames        = tuning.holdFrames;
+    fadeOutFrames     = tuning.fadeOutFrames;
+    pulseBackStrength = tuning.pulseBackStrength;
+    frames            = tuning.totalFrames;
 
     // Record into our persistent (in-memory) greeting log.
     lastGreetedAtMs_[it->name] = now;

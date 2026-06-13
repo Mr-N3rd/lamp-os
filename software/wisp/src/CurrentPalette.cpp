@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace wisp {
 
@@ -21,7 +22,13 @@ uint8_t floatToByte(float v) {
 }  // namespace
 
 void CurrentPalette::update(const Palette& p, uint32_t nowMs) {
+  // Take the mux around the paletteId_ assignment so a concurrent
+  // copyPaletteIdPrefix() on the timer-service task can't read a torn .data()
+  // mid-reallocation. The rest of the update (colors_, lastChangeMs_) is
+  // loop-task-only, so we keep the critical section minimal.
+  CURRENT_PALETTE_PORTMUX_ENTER(&mux_);
   paletteId_ = p.id;
+  CURRENT_PALETTE_PORTMUX_EXIT(&mux_);
   lastChangeMs_ = nowMs;
   colors_.clear();
 
@@ -52,6 +59,17 @@ void CurrentPalette::update(const Palette& p, uint32_t nowMs) {
     c.w = floatToByte(src.w);
     colors_.push_back(c);
   }
+}
+
+size_t CurrentPalette::copyPaletteIdPrefix(char* out, size_t outCap) const {
+  if (!out || outCap == 0) return 0;
+  size_t n = 0;
+  CURRENT_PALETTE_PORTMUX_ENTER(&mux_);
+  n = paletteId_.size();
+  if (n > outCap) n = outCap;
+  if (n) std::memcpy(out, paletteId_.data(), n);
+  CURRENT_PALETTE_PORTMUX_EXIT(&mux_);
+  return n;
 }
 
 }  // namespace wisp

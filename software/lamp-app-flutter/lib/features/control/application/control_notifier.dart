@@ -114,6 +114,79 @@ class ControlNotifier extends _$ControlNotifier {
   /// of W for offline / between-edit rendering.
   List<int> _rgbwList(LampColor c) => [c.r, c.g, c.b, c.w];
 
+  /// Wait for the lamp to reboot and reconnect after a settingsBlob /
+  /// password write, then reauthenticate, re-read every section, and
+  /// update [_original] + [state]. Calls [postReload] after the new
+  /// state has landed.
+  ///
+  /// Replaces the prior fixed `Future.delayed(5s)` pattern. That was a
+  /// timing race: the lamp's boot+BLE-up cycle takes ~3-10s and varies
+  /// per save, so a fixed 5s timer often fires before the BLE link is
+  /// re-established and `discoverServices` throws
+  /// "Device is disconnected". The previous catch block surfaced
+  /// `AsyncError` and left `_original` stale — the dirty-pill-stuck bug
+  /// observed 2026-06-04.
+  ///
+  /// We now poll with 1s spacing, up to [maxAttempts] (~12s total wait).
+  /// Each attempt: `ble.connect` → `authenticate(password)` →
+  /// `_readSections`. Transient disconnect-like errors retry. Non-
+  /// transient errors and final-attempt failures surface as `AsyncError`.
+  Future<void> _awaitReconnectAndReload({
+    required BleClient ble,
+    required String password,
+    required Future<void> Function(ControlState fresh) postReload,
+    int maxAttempts = 12,
+  }) async {
+    // Initial grace: give the lamp a head start on the reboot so the
+    // first attempt isn't guaranteed to race the disconnect. ~2s lets
+    // the firmware fade-out complete and the actual reboot kick in.
+    await Future<void>.delayed(const Duration(seconds: 2));
+
+    ControlState? fresh;
+    Object? lastError;
+    StackTrace? lastStack;
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      if (!ref.mounted) return;
+      try {
+        await ble.connect(_deviceId);
+        await AuthClient(ble: ble).authenticate(
+            deviceId: _deviceId, password: password);
+        fresh = await _readSections(ble);
+        break;
+      } catch (e, st) {
+        lastError = e;
+        lastStack = st;
+        final msg = e.toString().toLowerCase();
+        final isTransient = msg.contains('disconnect') ||
+            msg.contains('not connected') ||
+            msg.contains('discoverservices') ||
+            msg.contains('timeout');
+        if (!isTransient) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    }
+
+    if (!ref.mounted) return;
+    if (fresh == null) {
+      state = AsyncError(
+          lastError ?? Exception('lamp did not reconnect after save'),
+          lastStack ?? StackTrace.current);
+      ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
+      return;
+    }
+
+    _original = fresh;
+    state = AsyncData(fresh);
+    try {
+      await postReload(fresh);
+    } catch (e, st) {
+      // Don't roll back _original on postReload failure — the section
+      // data is valid; postReload is best-effort housekeeping.
+      if (ref.mounted) state = AsyncError(e, st);
+    }
+    ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
+  }
+
   Future<void> _updateSeen({
     LampColor? shade,
     LampColor? base,
@@ -267,6 +340,14 @@ class ControlNotifier extends _$ControlNotifier {
           : fresh.shade.colors.first,
       base: fresh.base.colors[fresh.base.ac],
     );
+
+    // Mirror the lamp's current display name into the inventory cache so
+    // the lamp picker stays in sync with renames that happened on another
+    // phone, or that survived a factory-reset + re-adopt. The control
+    // screen's "Hello my name is:" header reads live state and is always
+    // correct; the picker reads InventoryLamp.name and would otherwise
+    // stay frozen at adopt-time.
+    await _inv.updateName(deviceId, fresh.lamp.name);
 
     // Self-heal: if a previous session left the firmware's configurator
     // behaviors stuck in disabled=true (the test_expression / complete
@@ -536,39 +617,33 @@ class ControlNotifier extends _$ControlNotifier {
     //    generic "Connecting…" message.
     ref.read(lampSaveStatusProvider(_deviceId).notifier).start();
     state = const AsyncLoading<ControlState>();
-    Future<void>.delayed(const Duration(seconds: 5), () async {
-      if (!ref.mounted) {
-        // Best-effort cleanup if the notifier got disposed mid-reconnect.
-        return;
-      }
-      try {
-        final inv = await ref.read(inventoryNotifierProvider.future);
-        final lamp = inv.firstWhere(
-          (l) => l.id == _deviceId,
-          orElse: () =>
-              throw StateError('lamp $_deviceId not in inventory'),
-        );
-        // ble.connect is idempotent — if the reconnect loop already brought
-        // the link back up this is a no-op.
-        await ble.connect(_deviceId);
-        await AuthClient(ble: ble).authenticate(
-            deviceId: _deviceId, password: lamp.controlPassword);
-        final fresh = await _readSections(ble);
-        if (!ref.mounted) return;
-        _original = fresh;
-        state = AsyncData(fresh);
+
+    final invForSave = await ref.read(inventoryNotifierProvider.future);
+    final lampForSave = invForSave.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () => throw StateError('lamp $_deviceId not in inventory'),
+    );
+
+    // Don't await — the helper drives the AsyncLoading → AsyncData /
+    // AsyncError transition + stops the save-status spinner internally,
+    // matching the prior unawaited Future.delayed structure so the
+    // caller returns promptly without blocking the UI.
+    unawaited(_awaitReconnectAndReload(
+      ble: ble,
+      password: lampForSave.controlPassword ?? '',
+      postReload: (fresh) async {
         await _updateSeen(
           shade: fresh.shade.colors.isEmpty
-          ? _blackShade
-          : fresh.shade.colors.first,
+              ? _blackShade
+              : fresh.shade.colors.first,
           base: fresh.base.colors[fresh.base.ac],
         );
-        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
-      } catch (e, st) {
-        if (ref.mounted) state = AsyncError(e, st);
-        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
-      }
-    });
+        // Sync the inventory's cached display name with whatever the firmware
+        // actually persisted — handles renames via this app and is defensive
+        // against any rename-rejection the firmware might add later.
+        await _inv.updateName(_deviceId, fresh.lamp.name);
+      },
+    ));
   }
 
   Future<void> setBrightness(int value) async {
@@ -964,26 +1039,20 @@ class ControlNotifier extends _$ControlNotifier {
     }
 
     // Reuse the save()-style reconnect cadence: flip the saving banner,
-    // drop state into AsyncLoading, wait for the lamp to come back, reauth
-    // with the new password (already in inventory).
+    // drop state into AsyncLoading, then defer to _awaitReconnectAndReload
+    // which polls connect+auth+read with backoff (replaces the brittle
+    // fixed 5s delay — see the helper's docstring).
     ref.read(lampSaveStatusProvider(_deviceId).notifier).start();
     state = const AsyncLoading<ControlState>();
-    Future<void>.delayed(const Duration(seconds: 5), () async {
-      if (!ref.mounted) return;
-      try {
-        await ble.connect(_deviceId);
-        await AuthClient(ble: ble).authenticate(
-            deviceId: _deviceId, password: newPassword);
-        final fresh = await _readSections(ble);
-        if (!ref.mounted) return;
-        _original = fresh;
-        state = AsyncData(fresh);
-        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
-      } catch (e, st) {
-        if (ref.mounted) state = AsyncError(e, st);
-        ref.read(lampSaveStatusProvider(_deviceId).notifier).stop();
-      }
-    });
+    unawaited(_awaitReconnectAndReload(
+      ble: ble,
+      password: newPassword,
+      postReload: (fresh) async {
+        // Same inventory-name sync as save(): user may have renamed in the
+        // same edit batch that bundled the password change.
+        await _inv.updateName(_deviceId, fresh.lamp.name);
+      },
+    ));
   }
 
   Future<void> setHomeSsid(String ssid) async {

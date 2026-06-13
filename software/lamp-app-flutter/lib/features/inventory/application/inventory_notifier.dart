@@ -70,4 +70,19 @@ class InventoryNotifier extends _$InventoryNotifier {
     }).toList();
     await _persist(updated);
   }
+
+  /// Update the cached display name for a lamp. Called by ControlNotifier
+  /// after a successful settings_blob save (and on cold-load) so the
+  /// `LampPickerSheet` rows reflect the lamp's current name — otherwise the
+  /// picker keeps showing the name captured at adopt-time even though the
+  /// control screen's "Hello my name is:" header (which reads live state)
+  /// shows the updated one. No-op when the id isn't in the inventory.
+  Future<void> updateName(String id, String name) async {
+    final current = state.value ?? const [];
+    final updated = current.map((l) {
+      if (l.id != id) return l;
+      return l.copyWith(name: name);
+    }).toList();
+    await _persist(updated);
+  }
 }

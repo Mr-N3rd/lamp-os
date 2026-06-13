@@ -24,6 +24,18 @@ Everything else is flexible: new `EventKind` values (`0x02..0xFF` open),
 additive JSON fields in MSG_EVENT (old lamps ignore), per-lamp reaction
 logic, the `pendingEvent` slot's internal shape.
 
+**Phase D additions (no protocol bump):**
+
+- Wisp now runs its own 64-slot `controlOpDedup_` ring keyed on
+  `(sourceMac, msgType, seq)` so gossip-relayed copies of an op (or its
+  own emitted `wispStatus`) don't re-apply. Previously the wisp dropped
+  duplicates implicitly because it only received `MSG_HELLO`.
+- Wisp emits `MSG_CONTROL_OP` broadcasts carrying `{"char":"wispStatus",...}`
+  on-change + every ≤30 s as a heartbeat. Lamps gossip-relay these per
+  the v0x03 `MSG_CONTROL_OP` rule and cache the latest per wisp MAC for
+  the app to read via `CHAR_WISP_STATUS`. See `mesh-api.md` for the
+  payload shape, cadence triggers, and the 230-byte payload cap.
+
 **Mixed-fleet warning**: `inspect()` rejects on version mismatch
 (`lamp_protocol.hpp::inspect`), so an old-firmware lamp in a v0x03 mesh
 stops receiving everyone's frames. All lamps + wisp must be flashed to
@@ -134,6 +146,42 @@ Before flashing a venue fleet:
    math to work — see table above.)
 4. **Don't flash and immediately leave.** Stick around 60 s after flash
    so any new BLE-active recv issues surface in `dual_tap.log`.
+
+## ArtNet bridge (pre-mesh lamp backwards compat)
+
+The wisp can broadcast ArtNet DMX universe 1 in parallel with the v0x03
+mesh, so pre-mesh lamps still running the `software/lamp-os` ArtNet
+firmware (the snapshot on `main` that still ships `artnet.cpp` +
+`BLE_STAGE_MAGIC` scanner) can be painted by the same Aurora palette.
+
+**Wire-up at the venue:**
+
+1. Set the wisp's WiFi creds via serial: `wifi:set <ssid> <pass>`. These
+   persist in NVS, so reboot picks them back up.
+2. `stage:on` to start advertising the BLE manufacturer-data beacon
+   (magic ID `42007`, payload `<ssid>\0<password>\0`). Pre-mesh lamps
+   scan for this and auto-join the same WiFi — no per-lamp provisioning.
+3. `artnet:on` to start broadcasting ArtNet to `255.255.255.255:6454`.
+   One frame per Aurora palette change plus a 1 s backstop.
+
+**Coex caveat:** ESP-NOW remains pinned to channel 1 at boot, but
+associating to the venue AP re-tunes the radio to whatever channel the
+AP advertises. Mesh reliability degrades the further the AP sits from
+channel 1. This is the same constraint Aurora already imposes; the
+ArtNet path piggybacks the existing trade-off, it does not introduce a
+new one.
+
+**Wire format produced** — see `software/wisp/src/artnet_frame.h`:
+universe 1, 8 fixtures × 10 channels (shade RGBW, base RGBW, mode byte,
+parameter byte). Pre-mesh lamps self-assign their fixture index
+randomly at boot (`software/lamp-os/src/components/network/artnet.cpp`
+on `main`, around the `lampNumber = random(0, 7)` line); we broadcast
+all 8 slots and let them draw straws.
+
+**No effect on v0x03 mesh lamps.** Current lamp firmware on
+`flutter-rewrite` has neither the ArtNet listener nor the stage-beacon
+scanner compiled in — mesh lamps will ignore both the BLE advert and
+the UDP broadcast.
 
 ## Troubleshooting
 

@@ -16,8 +16,8 @@ part 'dispositions_notifier.g.dart';
 /// ms after the last edit). The full map is sent on every write — the
 /// firmware-side characteristic replaces the entire state on each write.
 ///
-/// Disposition values are 1..5 (salty..neutral..smitten). Missing keys
-/// default to 3 (neutral) at the call site via `get`.
+/// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
+/// Missing keys default to 3 (neutral) at the call site via `get`.
 @Riverpod(keepAlive: false, name: 'dispositionsProvider')
 class Dispositions extends _$Dispositions {
   Timer? _flushTimer;

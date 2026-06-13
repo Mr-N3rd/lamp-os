@@ -19,7 +19,7 @@ import '../domain/social_mode.dart';
 /// Below: every lamp currently nearby (live BLE). Disposition is only
 /// meaningful when the peer is actually here — historical "seen" lamps
 /// are not shown here. Each row carries a 5-position slider with a
-/// single active-position label on the right (salty → grumpy →
+/// single active-position label on the right (salty → wary →
 /// neutral → fond → smitten) wired to the dispositions provider.
 /// Writes are debounced 500ms after the last slider movement and
 /// flushed on tab leave so a drag-then-navigate doesn't drop the edit.
@@ -43,12 +43,18 @@ class SocialScreen extends ConsumerWidget {
 
     // Nearby-only — skip unnamed (disposition is keyed by name, and
     // Config::setDisposition rejects empty-string keys firmware-side).
+    // Skip self via BOTH id-match AND name-match — the BLE scan id format
+    // (raw MAC on Android, UUID on iOS) doesn't always equal the inventory
+    // deviceId we're connected through. Name-match is the reliable fallback.
+    // Trade-off: if a second lamp happens to share this lamp's name, it'll
+    // also be filtered out; the alternative (jacko sees itself) is worse.
     // NOTE: disposition lookup/write uses the lamp's user-set name. A
     // renamed peer's disposition orphans (slice-1 acknowledged
     // limitation; see social-tab spec).
+    final selfName = state.lamp.name;
     final rows = <_SocialLampRow>[
       for (final l in nearby)
-        if (l.name.isNotEmpty)
+        if (l.name.isNotEmpty && l.id != lampId && l.name != selfName)
           _SocialLampRow(
             id: l.id,
             name: l.name,
@@ -90,7 +96,22 @@ class SocialScreen extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 4),
+          child: Text(
+            'Lamps notice the company they keep. How they greet, glow, '
+            'and settle in shifts a little with the crowd around them — '
+            'and how you feel about that crowd.',
+            style: TextStyle(
+              color: BrandColors.fogGrey,
+              fontSize: 12,
+              fontStyle: FontStyle.italic,
+              height: 1.4,
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
         const Text(
           'Nearby lamps',
           style: TextStyle(color: BrandColors.lampWhite, fontSize: 14),
@@ -278,7 +299,7 @@ String _dispositionLabel(int value) {
     case 1:
       return 'salty';
     case 2:
-      return 'grumpy';
+      return 'wary';
     case 4:
       return 'fond';
     case 5:

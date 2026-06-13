@@ -72,6 +72,19 @@ constexpr const char* CHAR_HOME_MODE_FOCUS = "5f64f4e5-d6d9-4a44-9b3f-3a8d6f7e6b
 // Stored separately from the main config blob in NVS namespace "lamp",
 // key "dispositions" — survives reboots, doesn't bloat CHAR_LAMP_SECTION.
 constexpr const char* CHAR_SOCIAL_DISPOSITIONS = "5f64f4e6-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// wisp_op (write-with-response, plaintext JSON): forward a wisp-bound op
+// from the app over ESP-NOW. The lamp does NOT apply this locally — it
+// only broadcasts a MSG_CONTROL_OP carrying the payload, and the wisp(s)
+// on the mesh consume it. Open-set by design: the wire format is
+// {"char":"wispOp","op":"setZone","zoneId":N,...} and the wisp owns the
+// op vocabulary; lamps never interpret. Auth-gated like the rest of the
+// write surface.
+constexpr const char* CHAR_WISP_OP         = "5f64f4e1-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// wisp_status (read + notify): JSON snapshot of the latest wispStatus
+// broadcast the lamp has seen, merged with the last MSG_WISP_HELLO data
+// on file for the same wisp. Auth-gated. Notifies whenever the cache
+// updates (drain of pendingWispStatus).
+constexpr const char* CHAR_WISP_STATUS     = "5f64f4e2-d6d9-4a44-9b3f-3a8d6f7e6b40";
 
 /**
  * @brief Start the BLE GATT control service.
@@ -116,6 +129,14 @@ void notifyLampSection();
  * @brief Notify subscribers that the nearby-lamp list changed.
  */
 void notifyNearbyLamps();
+
+/**
+ * @brief Push a CHAR_WISP_STATUS notification. Called from the loop
+ *        drain on Core 1 after pendingWispStatus updates the cache via
+ *        NearbyLamps::cacheWispStatus. The notify payload is the same
+ *        merged JSON the on-read callback serves.
+ */
+void notifyWispStatus();
 
 /**
  * @brief True while a BT client is currently connected to this lamp.

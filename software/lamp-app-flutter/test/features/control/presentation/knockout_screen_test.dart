@@ -17,7 +17,11 @@ const _devId = 'lamp-x';
 Future<void> _seed(InMemoryBleClient ble) => seedControlBle(
       ble,
       deviceId: _devId,
-      name: 'test',
+      // Match the inventory name below — ControlNotifier now syncs
+      // inventory.name from the live BLE section on every cold-load, so
+      // a divergent fixture would clobber the inventory's 'jacko' with
+      // the BLE 'test' and the title assertion would fail.
+      name: 'jacko',
       basePx: 3,
       // Positional knockout: pixel 1 at 50%, pixels 0 and 2 default (100%).
       baseKnockoutJson: '[100,50,100]',

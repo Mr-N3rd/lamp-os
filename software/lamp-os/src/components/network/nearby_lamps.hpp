@@ -49,10 +49,13 @@ struct NearbyLamp {
   // we've heard at least one HELLO from this peer.
   uint32_t firmwareVersion = 0;
   // Most recent ESP-NOW RSSI (dBm) reported by the radio for any frame
-  // from this peer. The cascade path sorts peers by lastRssi descending
-  // so that the lamp closest to the originator fires first, producing an
-  // outward spatial wave. -127 means "unknown" (no ESP-NOW frame seen
-  // yet, or the rx_ctrl block was unavailable on the recv callback).
+  // from this peer. `getReachableViaBle()` returns its result sorted by
+  // lastRssi descending so consumers (PersonalityEngine's closest-peer
+  // tracking) can do `peers.front()` for the physically nearest lamp.
+  // `getReachableViaEspNow()` does NOT sort — the cascade path in
+  // ExpressionManager does its own sort after filtering self + naming.
+  // -127 means "unknown" (no ESP-NOW frame seen yet, or the rx_ctrl
+  // block was unavailable on the recv callback); sorts to the back.
   int8_t lastRssi = -127;
 };
 
@@ -76,6 +79,11 @@ struct WispCache {
   char paletteIdPrefix[9] = {0};
   char carriedFwChannel[9] = {0};
   uint32_t carriedFwVersion = 0;
+  // Phase D: last wispStatus JSON broadcast for this wisp (verbatim
+  // payload). Served on CHAR_WISP_STATUS reads merged with the hello
+  // fields above. Empty until the first wispStatus has been seen.
+  std::string lastStatusJson;
+  uint32_t lastStatusMs = 0;
 };
 
 /**
@@ -133,6 +141,20 @@ class NearbyLamps {
   // check can compare against `mac` and `lastHelloMs` without holding
   // any lock past the read.
   WispCache getWispCache();
+
+  // Cache the latest wispStatus JSON broadcast for a given wisp MAC.
+  // Loop-task-only writer (drain of pendingWispStatus on Core 1);
+  // portMAX_DELAY take. If [mac] differs from the cached hello mac, the
+  // cache mac is updated and `present` is asserted — a status broadcast
+  // from a previously-unseen wisp is itself proof the wisp is on the
+  // mesh, regardless of whether a hello has arrived yet.
+  void cacheWispStatus(const uint8_t mac[6],
+                       const char* json, size_t jsonLen);
+
+  // Build and return the JSON to serve on CHAR_WISP_STATUS reads.
+  // Merges the cached wispStatus payload with the last MSG_WISP_HELLO
+  // data. Returns "{}" if nothing has been cached for either path.
+  std::string getWispStatusReadJson();
 
  private:
   std::vector<NearbyLamp> store_;

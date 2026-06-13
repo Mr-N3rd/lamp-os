@@ -145,6 +145,12 @@ void postPendingRestoreBrightness(const PendingRestoreBrightness& src);
 void postPendingWispHello(const PendingWispHello& src);
 void postPendingEvent(const PendingEvent& src);
 
+// Forward decl — full type lives in components/firmware/firmware_receiver.hpp.
+// ShowReceiver only needs the pointer + the chunk handler member function
+// (which it calls DIRECTLY on the WiFi task — no slot indirection for the
+// high-frequency chunk path, per the lamp-side plan §5).
+class FirmwareReceiver;
+
 // Receives HELLO + CONTROL_OP frames over ESP-NOW, and announces this
 // lamp's presence (HELLO) so peers can populate their registry with our
 // MAC + name + colors. Maintains the grid peer list (incoming HELLOs)
@@ -196,6 +202,13 @@ class ShowReceiver {
   // peer isn't currently reachable via ESP-NOW (no recent HELLO).
   bool sendExpressionTo(const std::string& peerName, const ExpressionInvocation& inv);
 
+  // Wire a FirmwareReceiver into the dispatch ladder. handleRecv calls
+  // its handleChunkOnRecvTask directly on the WiFi task (Core 0) for
+  // MSG_FW_CHUNK; OFFER and DONE go through the PendingFirmwareControl
+  // slot to be drained on Core 1. Set BEFORE begin() — the recv
+  // callback registers inside begin().
+  void setFirmwareReceiver(FirmwareReceiver* r) { firmwareReceiver_ = r; }
+
   // Static recv glue (the EspNowLink hands us a C function pointer).
   static ShowReceiver* s_instance;
   static void onRecv(const uint8_t* mac, const uint8_t* data, size_t len,
@@ -217,6 +230,11 @@ class ShowReceiver {
   lamp_protocol::DedupRing restoreBrightnessDedup_;
   lamp_protocol::DedupRing wispHelloDedup_;
   lamp_protocol::DedupRing eventDedup_;
+  // Single shared dedup for MSG_FW_OFFER/CHUNK/DONE per lamp-side plan §5.
+  // One wisp owns all outbound FW seqs; the 6 msgTypes in this family
+  // share one seq counter on the sender so seq collisions across msgTypes
+  // can't happen. 64 slots is more than enough for a single in-flight OTA.
+  lamp_protocol::DedupRing firmwareDedup_;
 
   uint32_t lastHelloMs_ = 0;
   uint16_t helloSeq_ = 0;
@@ -224,6 +242,7 @@ class ShowReceiver {
   uint16_t eventSeq_ = 0;
 
   ControlOpHandler controlOpHandler_;
+  FirmwareReceiver* firmwareReceiver_ = nullptr;
 
   void handleRecv(const uint8_t* mac, const uint8_t* data, size_t len, int8_t rssi);
   void emitHello();

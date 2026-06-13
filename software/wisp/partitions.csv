@@ -1,0 +1,13 @@
+# Wisp partition layout for ESP32-C6 4 MB flash.
+#
+# Per the wisp-OTA reconciliation doc (2026-06-04): wisp app (~1.28 MB) +
+# embedded signed lamp firmware blob (~1.40 MB) + 96 B LSIG footer ≈ 2.68 MB,
+# so app0 needs ≥ 3 MB. No app1 because wisp does NOT self-OTA in v1.
+# SPIFFS retained for future asset storage; NVS untouched.
+#
+# Name,    Type, SubType, Offset,   Size,     Flags
+nvs,       data, nvs,     0x9000,   0x5000,
+otadata,   data, ota,     0xE000,   0x2000,
+app0,      app,  ota_0,   0x10000,  0x300000,
+spiffs,    data, spiffs,  0x310000, 0xE0000,
+coredump,  data, coredump,0x3F0000, 0x10000,

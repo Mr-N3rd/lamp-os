@@ -303,7 +303,7 @@ inline bool isValidOverrideSurfaceByte(uint8_t b) {
 }
 
 // 0x00 None, 0x01 Wisp, 0x02 PeerSwap, 0xFF Any, 0x10..0xFE user-defined.
-// Reject 0x03..0x0F (reserved) explicitly. 0xFF maps to Any.
+// Reject 0x03..0x0F (reserved) explicitly.
 inline bool isValidOverrideSourceByte(uint8_t b) {
   if (b == static_cast<uint8_t>(OverrideSource::None)) return true;
   if (b == static_cast<uint8_t>(OverrideSource::Wisp)) return true;
@@ -756,6 +756,480 @@ inline bool parseEvent(const uint8_t* data, size_t len, ParsedEvent& out) {
   out.payload    = payloadLen ? &data[payloadLenOff + 2] : nullptr;
   return true;
 }
+
+// =============================================================================
+// MSG_FW_* — OTA firmware-distribution family (msgType 0x40..0x45)
+// =============================================================================
+//
+// Wire-format contract per /Users/jerrett/.claude/plans/wisp-ota-reconciliation.md.
+// All MSG_FW_* messages carry sourceMac(6) + targetMac(6) right after the
+// 6-byte header — same ordering convention as MSG_OVERRIDE_COLORS
+// (`buildOverrideColors` at line ~449-451). The MSG_FW_* family is
+// SINGLE-HOP unicast (addressedToUs filter on the lamp side; no gossip
+// relay), unlike HELLO/CONTROL_OP/WISP_HELLO/EVENT which gossip-relay.
+//
+// Direction:
+//   OFFER, CHUNK, DONE      — wisp → lamp (sent via wisp's unicast MeshLink::send)
+//   ACCEPT, REQ, RESULT     — lamp → wisp (sent via lamp's EspNowLink::broadcast,
+//                              with wisp filtering via addressedToUs on its MAC)
+//
+// Channel mismatch is a SILENT DROP on the lamp side — no ACCEPT or RESULT
+// is ever emitted with a channel-mismatch reason (per scope decision #2).
+
+constexpr uint8_t  MSG_FW_OFFER  = 0x40;
+constexpr uint8_t  MSG_FW_ACCEPT = 0x41;
+constexpr uint8_t  MSG_FW_CHUNK  = 0x42;
+constexpr uint8_t  MSG_FW_REQ    = 0x43;
+constexpr uint8_t  MSG_FW_DONE   = 0x44;
+constexpr uint8_t  MSG_FW_RESULT = 0x45;
+
+// Channel string is zero-padded ASCII, fixed-width.
+constexpr size_t   FW_CHANNEL_LEN       = 8;
+// First 8 bytes of sha256(signed region) — image fingerprint, NOT signature
+// prefix. The signature itself is 64 bytes inside the LSIG footer.
+constexpr size_t   FW_SHA256_PREFIX_LEN = 8;
+// Hard-locked chunk payload size in v1. Receiver rejects offers that don't
+// carry chunkSize == 200; no negotiation.
+constexpr uint16_t FW_CHUNK_SIZE        = 200;
+
+// Fixed-size frame totals. Bytes-on-wire layouts come from the
+// reconciliation doc's per-msgType sections; see comments on each builder.
+constexpr size_t   FW_OFFER_FIXED_SIZE  = 48;   // hdr(6)+src(6)+tgt(6) + body(30)
+constexpr size_t   FW_ACCEPT_FIXED_SIZE = 28;   // hdr(6)+src(6)+tgt(6) + body(10)
+constexpr size_t   FW_CHUNK_FIXED_SIZE  = 26;   // hdr(6)+src(6)+tgt(6) + body(8) (payload trails)
+constexpr size_t   FW_CHUNK_MAX_SIZE    = FW_CHUNK_FIXED_SIZE + FW_CHUNK_SIZE;  // 226
+constexpr size_t   FW_REQ_FIXED_SIZE    = 24;   // hdr(6)+src(6)+tgt(6) + body(6)
+constexpr size_t   FW_DONE_FIXED_SIZE   = 38;   // hdr(6)+src(6)+tgt(6) + body(20)
+constexpr size_t   FW_RESULT_FIXED_SIZE = 24;   // hdr(6)+src(6)+tgt(6) + body(6)
+
+// Lock-in static asserts. A future refactor that shifts a byte will fail
+// to compile here rather than silently sending mismatched frames.
+static_assert(FW_OFFER_FIXED_SIZE  == 48, "FW OFFER size lock");
+static_assert(FW_ACCEPT_FIXED_SIZE == 28, "FW ACCEPT size lock");
+static_assert(FW_CHUNK_FIXED_SIZE  == 26, "FW CHUNK header lock");
+static_assert(FW_REQ_FIXED_SIZE    == 24, "FW REQ size lock");
+static_assert(FW_DONE_FIXED_SIZE   == 38, "FW DONE size lock");
+static_assert(FW_RESULT_FIXED_SIZE == 24, "FW RESULT size lock");
+static_assert(FW_CHUNK_MAX_SIZE    <= 250, "ESP-NOW frame cap");
+
+// ACCEPT status byte. 0 = accept-and-stream; 1 = busy (mid-flow already);
+// 2 = already-current (offer.version <= mine). Channel mismatch is NEVER
+// emitted as an ACCEPT — it's a silent drop on the lamp side.
+enum class FwAcceptStatus : uint8_t {
+  Accept                = 0,
+  DeclineBusy           = 1,
+  DeclineAlreadyCurrent = 2,
+};
+
+// REQ reason. Diagnostic-only; wisp logs it.
+enum class FwReqReason : uint8_t {
+  Gap           = 0,  // explicit gap fill from receiver-side bitmap scan
+  StallWatchdog = 1,  // 2s without progress; emit one REQ for the lowest gap
+};
+
+// RESULT status enum. uint8_t on the wire; values 9..255 reserved for
+// forward-compat. Wisp side treats unknown codes as "abort + log + back off".
+enum class FwResultStatus : uint8_t {
+  Success            = 0,  // verified + boot partition set + rebooting
+  SignatureFail      = 1,
+  VersionMismatch    = 2,  // DONE.version != OFFER.version (mid-stream swap)
+  PartitionWriteFail = 3,
+  PartitionReadFail  = 4,
+  OtaBeginFail       = 5,
+  OtaEndFail         = 6,
+  SetBootFail        = 7,
+  OfferShaMismatch   = 8,  // sha256Prefix mismatch on verify
+  // 9..255 reserved
+};
+
+// --- Parsed structs -------------------------------------------------------
+
+struct ParsedFwOffer {
+  uint16_t seq;
+  uint8_t  sourceMac[6];
+  uint8_t  targetMac[6];
+  uint32_t version;
+  uint32_t totalLen;
+  uint16_t chunkSize;
+  char     channel[FW_CHANNEL_LEN + 1];        // null-terminated for logging
+  uint8_t  sha256Prefix[FW_SHA256_PREFIX_LEN];
+  uint16_t footerLen;
+  uint16_t totalChunks;
+};
+
+struct ParsedFwAccept {
+  uint16_t       seq;
+  uint8_t        sourceMac[6];
+  uint8_t        targetMac[6];
+  uint16_t       offerSeq;
+  uint32_t       version;
+  FwAcceptStatus status;
+  uint32_t       resumeOffset;
+};
+
+struct ParsedFwChunk {
+  uint16_t       seq;
+  uint8_t        sourceMac[6];
+  uint8_t        targetMac[6];
+  uint16_t       chunkIdx;
+  uint32_t       offset;
+  uint16_t       len;
+  const uint8_t* bytes;  // points into recv buffer; caller must not retain
+};
+
+struct ParsedFwReq {
+  uint16_t    seq;
+  uint8_t     sourceMac[6];
+  uint8_t     targetMac[6];
+  uint16_t    firstChunkIdx;
+  uint16_t    chunkCount;
+  FwReqReason reason;
+};
+
+struct ParsedFwDone {
+  uint16_t seq;
+  uint8_t  sourceMac[6];
+  uint8_t  targetMac[6];
+  uint32_t version;
+  uint32_t totalLen;
+  uint8_t  sha256Prefix[FW_SHA256_PREFIX_LEN];
+  uint16_t footerLen;
+};
+
+struct ParsedFwResult {
+  uint16_t       seq;
+  uint8_t        sourceMac[6];
+  uint8_t        targetMac[6];
+  FwResultStatus status;
+  uint8_t        detail;
+  uint32_t       version;
+};
+
+// --- Builders -------------------------------------------------------------
+//
+// Convention mirrors buildOverrideColors at line ~435:
+//   - Returns total bytes written on success, 0 on bad args / oversize buf.
+//   - Source MAC written to bytes 6..11; target MAC to bytes 12..17.
+//   - All multi-byte integers are little-endian on the wire.
+
+// MSG_FW_OFFER (48 bytes):
+//   hdr(6) + src(6) + tgt(6) +
+//   version(4 LE) + totalLen(4 LE) + chunkSize(2 LE) + channel(8 zero-pad)
+//   + sha256Prefix(8) + footerLen(2 LE) + totalChunks(2 LE)
+inline size_t buildFwOffer(uint8_t* buf, size_t bufLen, uint16_t seq,
+                           const uint8_t sourceMac[6], const uint8_t targetMac[6],
+                           uint32_t version, uint32_t totalLen, uint16_t chunkSize,
+                           const char* channel, size_t channelLen,
+                           const uint8_t sha256Prefix[FW_SHA256_PREFIX_LEN],
+                           uint16_t footerLen, uint16_t totalChunks) {
+  if (!buf || !sourceMac || !targetMac || !sha256Prefix) return 0;
+  if (bufLen < FW_OFFER_FIXED_SIZE) return 0;
+  detail::writeHeader(buf, MSG_FW_OFFER, seq);
+  std::memcpy(&buf[6], sourceMac, 6);
+  std::memcpy(&buf[12], targetMac, 6);
+  buf[18] = static_cast<uint8_t>(version & 0xFF);
+  buf[19] = static_cast<uint8_t>((version >> 8) & 0xFF);
+  buf[20] = static_cast<uint8_t>((version >> 16) & 0xFF);
+  buf[21] = static_cast<uint8_t>((version >> 24) & 0xFF);
+  buf[22] = static_cast<uint8_t>(totalLen & 0xFF);
+  buf[23] = static_cast<uint8_t>((totalLen >> 8) & 0xFF);
+  buf[24] = static_cast<uint8_t>((totalLen >> 16) & 0xFF);
+  buf[25] = static_cast<uint8_t>((totalLen >> 24) & 0xFF);
+  buf[26] = static_cast<uint8_t>(chunkSize & 0xFF);
+  buf[27] = static_cast<uint8_t>((chunkSize >> 8) & 0xFF);
+  // Channel: zero-pad to 8 bytes. Truncate if caller passed >8.
+  std::memset(&buf[28], 0, FW_CHANNEL_LEN);
+  if (channel && channelLen) {
+    const size_t n = channelLen > FW_CHANNEL_LEN ? FW_CHANNEL_LEN : channelLen;
+    std::memcpy(&buf[28], channel, n);
+  }
+  std::memcpy(&buf[36], sha256Prefix, FW_SHA256_PREFIX_LEN);
+  buf[44] = static_cast<uint8_t>(footerLen & 0xFF);
+  buf[45] = static_cast<uint8_t>((footerLen >> 8) & 0xFF);
+  buf[46] = static_cast<uint8_t>(totalChunks & 0xFF);
+  buf[47] = static_cast<uint8_t>((totalChunks >> 8) & 0xFF);
+  return FW_OFFER_FIXED_SIZE;
+}
+
+// MSG_FW_ACCEPT (28 bytes):
+//   hdr(6) + src(6) + tgt(6) + body(10)
+// Body: offerSeq(2 LE) + version(4 LE) + status(1) + reserved(3)
+//
+// IMPLEMENTER NOTE: the reconciliation doc's body layout listed
+// `offerSeq(2) + version(4) + status(1) + resumeOffset(4) + reserved(1)`
+// = 12 bytes, but the fixed-size constant (28) only allows 10 body bytes.
+// The doc's closing note ("If a byte-count cross-check disagrees, the
+// layouts above are authoritative and these constants get re-derived")
+// is in tension with the explicit FW_ACCEPT_FIXED_SIZE = 28 lock-in.
+// Resolution: lock to 28 bytes — drop `resumeOffset` from the wire (it
+// was reserved-zero in v1 anyway per the doc's own "Field-merger notes"),
+// pack 3 reserved bytes after status. Keep `resumeOffset` in
+// ParsedFwAccept as uint32_t for source-compat with callers; it always
+// parses to 0 until a future protocol revision reuses those 3 bytes.
+inline size_t buildFwAccept(uint8_t* buf, size_t bufLen, uint16_t seq,
+                            const uint8_t sourceMac[6], const uint8_t targetMac[6],
+                            uint16_t offerSeq, uint32_t version,
+                            FwAcceptStatus status, uint32_t resumeOffset) {
+  if (!buf || !sourceMac || !targetMac) return 0;
+  if (bufLen < FW_ACCEPT_FIXED_SIZE) return 0;
+  (void)resumeOffset;  // reserved-zero in v1; pinned by the layout note above
+  detail::writeHeader(buf, MSG_FW_ACCEPT, seq);
+  std::memcpy(&buf[6], sourceMac, 6);
+  std::memcpy(&buf[12], targetMac, 6);
+  buf[18] = static_cast<uint8_t>(offerSeq & 0xFF);
+  buf[19] = static_cast<uint8_t>((offerSeq >> 8) & 0xFF);
+  buf[20] = static_cast<uint8_t>(version & 0xFF);
+  buf[21] = static_cast<uint8_t>((version >> 8) & 0xFF);
+  buf[22] = static_cast<uint8_t>((version >> 16) & 0xFF);
+  buf[23] = static_cast<uint8_t>((version >> 24) & 0xFF);
+  buf[24] = static_cast<uint8_t>(status);
+  buf[25] = 0;  // reserved
+  buf[26] = 0;  // reserved
+  buf[27] = 0;  // reserved
+  return FW_ACCEPT_FIXED_SIZE;
+}
+
+// MSG_FW_CHUNK (26 + len bytes):
+//   hdr(6) + src(6) + tgt(6) + chunkIdx(2 LE) + offset(4 LE) + len(2 LE) + payload(len)
+inline size_t buildFwChunk(uint8_t* buf, size_t bufLen, uint16_t seq,
+                           const uint8_t sourceMac[6], const uint8_t targetMac[6],
+                           uint16_t chunkIdx, uint32_t offset,
+                           const uint8_t* bytes, uint16_t len) {
+  if (!buf || !sourceMac || !targetMac) return 0;
+  if (len == 0 || len > FW_CHUNK_SIZE) return 0;
+  if (len > 0 && !bytes) return 0;
+  const size_t total = FW_CHUNK_FIXED_SIZE + static_cast<size_t>(len);
+  if (bufLen < total) return 0;
+  detail::writeHeader(buf, MSG_FW_CHUNK, seq);
+  std::memcpy(&buf[6], sourceMac, 6);
+  std::memcpy(&buf[12], targetMac, 6);
+  buf[18] = static_cast<uint8_t>(chunkIdx & 0xFF);
+  buf[19] = static_cast<uint8_t>((chunkIdx >> 8) & 0xFF);
+  buf[20] = static_cast<uint8_t>(offset & 0xFF);
+  buf[21] = static_cast<uint8_t>((offset >> 8) & 0xFF);
+  buf[22] = static_cast<uint8_t>((offset >> 16) & 0xFF);
+  buf[23] = static_cast<uint8_t>((offset >> 24) & 0xFF);
+  buf[24] = static_cast<uint8_t>(len & 0xFF);
+  buf[25] = static_cast<uint8_t>((len >> 8) & 0xFF);
+  std::memcpy(&buf[FW_CHUNK_FIXED_SIZE], bytes, len);
+  return total;
+}
+
+// MSG_FW_REQ (24 bytes):
+//   hdr(6) + src(6) + tgt(6) + firstChunkIdx(2 LE) + chunkCount(2 LE) + reason(1) + reserved(1)
+inline size_t buildFwReq(uint8_t* buf, size_t bufLen, uint16_t seq,
+                         const uint8_t sourceMac[6], const uint8_t targetMac[6],
+                         uint16_t firstChunkIdx, uint16_t chunkCount,
+                         FwReqReason reason) {
+  if (!buf || !sourceMac || !targetMac) return 0;
+  if (bufLen < FW_REQ_FIXED_SIZE) return 0;
+  // chunkCount cap: 1..32 to prevent re-stream-all abuse per reconciliation doc.
+  if (chunkCount == 0 || chunkCount > 32) return 0;
+  detail::writeHeader(buf, MSG_FW_REQ, seq);
+  std::memcpy(&buf[6], sourceMac, 6);
+  std::memcpy(&buf[12], targetMac, 6);
+  buf[18] = static_cast<uint8_t>(firstChunkIdx & 0xFF);
+  buf[19] = static_cast<uint8_t>((firstChunkIdx >> 8) & 0xFF);
+  buf[20] = static_cast<uint8_t>(chunkCount & 0xFF);
+  buf[21] = static_cast<uint8_t>((chunkCount >> 8) & 0xFF);
+  buf[22] = static_cast<uint8_t>(reason);
+  buf[23] = 0;  // reserved
+  return FW_REQ_FIXED_SIZE;
+}
+
+// MSG_FW_DONE (38 bytes):
+//   hdr(6) + src(6) + tgt(6) + version(4 LE) + totalLen(4 LE)
+//   + sha256Prefix(8) + footerLen(2 LE) + reserved(2)
+inline size_t buildFwDone(uint8_t* buf, size_t bufLen, uint16_t seq,
+                          const uint8_t sourceMac[6], const uint8_t targetMac[6],
+                          uint32_t version, uint32_t totalLen,
+                          const uint8_t sha256Prefix[FW_SHA256_PREFIX_LEN],
+                          uint16_t footerLen) {
+  if (!buf || !sourceMac || !targetMac || !sha256Prefix) return 0;
+  if (bufLen < FW_DONE_FIXED_SIZE) return 0;
+  detail::writeHeader(buf, MSG_FW_DONE, seq);
+  std::memcpy(&buf[6], sourceMac, 6);
+  std::memcpy(&buf[12], targetMac, 6);
+  buf[18] = static_cast<uint8_t>(version & 0xFF);
+  buf[19] = static_cast<uint8_t>((version >> 8) & 0xFF);
+  buf[20] = static_cast<uint8_t>((version >> 16) & 0xFF);
+  buf[21] = static_cast<uint8_t>((version >> 24) & 0xFF);
+  buf[22] = static_cast<uint8_t>(totalLen & 0xFF);
+  buf[23] = static_cast<uint8_t>((totalLen >> 8) & 0xFF);
+  buf[24] = static_cast<uint8_t>((totalLen >> 16) & 0xFF);
+  buf[25] = static_cast<uint8_t>((totalLen >> 24) & 0xFF);
+  std::memcpy(&buf[26], sha256Prefix, FW_SHA256_PREFIX_LEN);
+  buf[34] = static_cast<uint8_t>(footerLen & 0xFF);
+  buf[35] = static_cast<uint8_t>((footerLen >> 8) & 0xFF);
+  buf[36] = 0;  // reserved
+  buf[37] = 0;  // reserved
+  return FW_DONE_FIXED_SIZE;
+}
+
+// MSG_FW_RESULT (24 bytes):
+//   hdr(6) + src(6) + tgt(6) + status(1) + detail(1) + version(4 LE)
+inline size_t buildFwResult(uint8_t* buf, size_t bufLen, uint16_t seq,
+                            const uint8_t sourceMac[6], const uint8_t targetMac[6],
+                            FwResultStatus status, uint8_t detail, uint32_t version) {
+  if (!buf || !sourceMac || !targetMac) return 0;
+  if (bufLen < FW_RESULT_FIXED_SIZE) return 0;
+  detail::writeHeader(buf, MSG_FW_RESULT, seq);
+  std::memcpy(&buf[6], sourceMac, 6);
+  std::memcpy(&buf[12], targetMac, 6);
+  buf[18] = static_cast<uint8_t>(status);
+  buf[19] = detail;
+  buf[20] = static_cast<uint8_t>(version & 0xFF);
+  buf[21] = static_cast<uint8_t>((version >> 8) & 0xFF);
+  buf[22] = static_cast<uint8_t>((version >> 16) & 0xFF);
+  buf[23] = static_cast<uint8_t>((version >> 24) & 0xFF);
+  return FW_RESULT_FIXED_SIZE;
+}
+
+// --- Parsers --------------------------------------------------------------
+
+inline bool parseFwOffer(const uint8_t* data, size_t len, ParsedFwOffer& out) {
+  if (inspect(data, len) != MSG_FW_OFFER) return false;
+  if (len < FW_OFFER_FIXED_SIZE) return false;
+  out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+  std::memcpy(out.sourceMac, &data[6], 6);
+  std::memcpy(out.targetMac, &data[12], 6);
+  out.version =
+       static_cast<uint32_t>(data[18])
+     | (static_cast<uint32_t>(data[19]) << 8)
+     | (static_cast<uint32_t>(data[20]) << 16)
+     | (static_cast<uint32_t>(data[21]) << 24);
+  out.totalLen =
+       static_cast<uint32_t>(data[22])
+     | (static_cast<uint32_t>(data[23]) << 8)
+     | (static_cast<uint32_t>(data[24]) << 16)
+     | (static_cast<uint32_t>(data[25]) << 24);
+  out.chunkSize =
+       static_cast<uint16_t>(data[26])
+     | (static_cast<uint16_t>(data[27]) << 8);
+  std::memcpy(out.channel, &data[28], FW_CHANNEL_LEN);
+  out.channel[FW_CHANNEL_LEN] = '\0';
+  std::memcpy(out.sha256Prefix, &data[36], FW_SHA256_PREFIX_LEN);
+  out.footerLen =
+       static_cast<uint16_t>(data[44])
+     | (static_cast<uint16_t>(data[45]) << 8);
+  out.totalChunks =
+       static_cast<uint16_t>(data[46])
+     | (static_cast<uint16_t>(data[47]) << 8);
+  return true;
+}
+
+inline bool parseFwAccept(const uint8_t* data, size_t len, ParsedFwAccept& out) {
+  if (inspect(data, len) != MSG_FW_ACCEPT) return false;
+  if (len < FW_ACCEPT_FIXED_SIZE) return false;
+  out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+  std::memcpy(out.sourceMac, &data[6], 6);
+  std::memcpy(out.targetMac, &data[12], 6);
+  out.offerSeq =
+       static_cast<uint16_t>(data[18])
+     | (static_cast<uint16_t>(data[19]) << 8);
+  out.version =
+       static_cast<uint32_t>(data[20])
+     | (static_cast<uint32_t>(data[21]) << 8)
+     | (static_cast<uint32_t>(data[22]) << 16)
+     | (static_cast<uint32_t>(data[23]) << 24);
+  out.status = static_cast<FwAcceptStatus>(data[24]);
+  // resumeOffset is reserved-zero in v1 (the 3 trailing body bytes are
+  // reserved placeholders). Forward-compat: bytes 25..27 may carry a future
+  // 24-bit resumeOffset; for now they're zero on emit and ignored on parse.
+  out.resumeOffset = 0;
+  return true;
+}
+
+inline bool parseFwChunk(const uint8_t* data, size_t len, ParsedFwChunk& out) {
+  if (inspect(data, len) != MSG_FW_CHUNK) return false;
+  if (len < FW_CHUNK_FIXED_SIZE) return false;
+  const uint16_t payloadLen =
+       static_cast<uint16_t>(data[24])
+     | (static_cast<uint16_t>(data[25]) << 8);
+  if (payloadLen == 0 || payloadLen > FW_CHUNK_SIZE) return false;
+  if (len != FW_CHUNK_FIXED_SIZE + static_cast<size_t>(payloadLen)) return false;
+  out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+  std::memcpy(out.sourceMac, &data[6], 6);
+  std::memcpy(out.targetMac, &data[12], 6);
+  out.chunkIdx =
+       static_cast<uint16_t>(data[18])
+     | (static_cast<uint16_t>(data[19]) << 8);
+  out.offset =
+       static_cast<uint32_t>(data[20])
+     | (static_cast<uint32_t>(data[21]) << 8)
+     | (static_cast<uint32_t>(data[22]) << 16)
+     | (static_cast<uint32_t>(data[23]) << 24);
+  out.len = payloadLen;
+  // Invariant: offset == chunkIdx * FW_CHUNK_SIZE on every chunk (catches
+  // malformed senders that disagree with themselves). Last chunk may be
+  // shorter than FW_CHUNK_SIZE but its offset still aligns to the grid.
+  if (out.offset !=
+      static_cast<uint32_t>(out.chunkIdx) * static_cast<uint32_t>(FW_CHUNK_SIZE)) {
+    return false;
+  }
+  out.bytes = &data[FW_CHUNK_FIXED_SIZE];
+  return true;
+}
+
+inline bool parseFwReq(const uint8_t* data, size_t len, ParsedFwReq& out) {
+  if (inspect(data, len) != MSG_FW_REQ) return false;
+  if (len < FW_REQ_FIXED_SIZE) return false;
+  out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+  std::memcpy(out.sourceMac, &data[6], 6);
+  std::memcpy(out.targetMac, &data[12], 6);
+  out.firstChunkIdx =
+       static_cast<uint16_t>(data[18])
+     | (static_cast<uint16_t>(data[19]) << 8);
+  out.chunkCount =
+       static_cast<uint16_t>(data[20])
+     | (static_cast<uint16_t>(data[21]) << 8);
+  if (out.chunkCount == 0 || out.chunkCount > 32) return false;
+  out.reason = static_cast<FwReqReason>(data[22]);
+  return true;
+}
+
+inline bool parseFwDone(const uint8_t* data, size_t len, ParsedFwDone& out) {
+  if (inspect(data, len) != MSG_FW_DONE) return false;
+  if (len < FW_DONE_FIXED_SIZE) return false;
+  out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+  std::memcpy(out.sourceMac, &data[6], 6);
+  std::memcpy(out.targetMac, &data[12], 6);
+  out.version =
+       static_cast<uint32_t>(data[18])
+     | (static_cast<uint32_t>(data[19]) << 8)
+     | (static_cast<uint32_t>(data[20]) << 16)
+     | (static_cast<uint32_t>(data[21]) << 24);
+  out.totalLen =
+       static_cast<uint32_t>(data[22])
+     | (static_cast<uint32_t>(data[23]) << 8)
+     | (static_cast<uint32_t>(data[24]) << 16)
+     | (static_cast<uint32_t>(data[25]) << 24);
+  std::memcpy(out.sha256Prefix, &data[26], FW_SHA256_PREFIX_LEN);
+  out.footerLen =
+       static_cast<uint16_t>(data[34])
+     | (static_cast<uint16_t>(data[35]) << 8);
+  return true;
+}
+
+inline bool parseFwResult(const uint8_t* data, size_t len, ParsedFwResult& out) {
+  if (inspect(data, len) != MSG_FW_RESULT) return false;
+  if (len < FW_RESULT_FIXED_SIZE) return false;
+  out.seq = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+  std::memcpy(out.sourceMac, &data[6], 6);
+  std::memcpy(out.targetMac, &data[12], 6);
+  out.status = static_cast<FwResultStatus>(data[18]);
+  out.detail = data[19];
+  out.version =
+       static_cast<uint32_t>(data[20])
+     | (static_cast<uint32_t>(data[21]) << 8)
+     | (static_cast<uint32_t>(data[22]) << 16)
+     | (static_cast<uint32_t>(data[23]) << 24);
+  return true;
+}
+
+// =============================================================================
+// End MSG_FW_* family
+// =============================================================================
 
 // Gossip dedup: small fixed-size ring tracking (sourceMac, msgType, seq) tuples
 // seen recently. Drops duplicates so re-broadcasts terminate.

@@ -40,11 +40,25 @@ class SocialBehavior : public AnimatedBehavior {
   using AnimatedBehavior::AnimatedBehavior;
 
  public:
-  // how many frames to ease when greeting and returning to the lamp's
-  // personality- the total frame count must be a multiple of the ease frames
+  // Legacy single-knob ease length. Kept for back-compat when control()
+  // can't consult the PersonalityEngine (engine not begun, or no nearby
+  // peer matched). When the engine returns a real GreetingTuning the
+  // ease/hold/fadeOut/pulseBack fields below take precedence.
   uint32_t easeFrames = 120;
   uint32_t nextAcknowledgeTimeMs = 0;
   Color foundLampColor;
+
+  // Waveform parameters, copied from PersonalityEngine::greetingFor()
+  // at greeting time. easeInFrames + holdFrames + fadeOutFrames should
+  // equal the AnimatedBehavior `frames`; draw() guards anyway.
+  // pulseBackStrength is the depth of the optional "fade-in → subtle
+  // pulse-back → pulse-into-hold" shape — 0 disables it; values up to
+  // 255 darken foundLampColor proportionally during the dip. The pulse
+  // occupies the first two-thirds of the hold window.
+  uint32_t easeInFrames = 30;
+  uint32_t holdFrames = 60;
+  uint32_t fadeOutFrames = 30;
+  uint8_t  pulseBackStrength = 0;
 
   void draw() override;
   void control() override;

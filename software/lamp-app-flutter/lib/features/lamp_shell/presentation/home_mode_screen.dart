@@ -13,8 +13,7 @@ import '../../../core/widgets/friendly_error.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
-import '../application/wifi_notifier.dart';
-import '../domain/wifi_state.dart';
+import 'widgets/wifi_network_picker.dart';
 
 /// Home Mode pane — presence-only detection of a home WiFi network.
 ///
@@ -39,8 +38,6 @@ class HomeModeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
-  bool _didKickoffScan = false;
-
   // Captured in initState so dispose can fire the focus-off write WITHOUT
   // touching `ref` after super.dispose() — the previous pattern of
   // ref.read(...) in dispose was tripping
@@ -102,9 +99,6 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
   @override
   Widget build(BuildContext context) {
     final controlAsync = ref.watch(controlNotifierProvider(widget.lampId));
-    final wifiAsync = ref.watch(wifiNotifierProvider(widget.lampId));
-    final wifiNotifier =
-        ref.read(wifiNotifierProvider(widget.lampId).notifier);
 
     return Scaffold(
       appBar: AppBar(
@@ -126,21 +120,8 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
         data: (state) {
           final notifier =
               ref.read(controlNotifierProvider(widget.lampId).notifier);
-          final wifi = wifiAsync.value ?? const WifiState();
 
           final hasSaved = state.home.ssid.isNotEmpty;
-          final isScanning = wifi.state == 'scanning';
-
-          // Kick off a scan on first paint when no SSID is saved (we need
-          // a network list for the user to pick from). When a network IS
-          // saved we don't show the picker, so no scan needed.
-          if (!_didKickoffScan && !hasSaved && wifi.scanResults.isEmpty &&
-              wifi.state != 'scanning') {
-            _didKickoffScan = true;
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              wifiNotifier.scan();
-            });
-          }
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -163,59 +144,10 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                 ),
                 const SizedBox(height: 12),
               ] else ...[
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Pick your home network',
-                        style: TextStyle(
-                          color: BrandColors.fogGrey,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 36,
-                      height: 36,
-                      child: isScanning
-                          ? const Padding(
-                              padding: EdgeInsets.all(8),
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : IconButton(
-                              icon: const Icon(Icons.refresh, size: 20),
-                              tooltip: 'Scan for networks',
-                              onPressed:
-                                  isScanning ? null : wifiNotifier.scan,
-                              padding: EdgeInsets.zero,
-                            ),
-                    ),
-                  ],
+                WifiNetworkPicker(
+                  lampId: widget.lampId,
+                  onPick: (r) => _selectSsid(r.ssid),
                 ),
-                const SizedBox(height: 4),
-                if (wifi.scanResults.isEmpty && !isScanning)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'Tap refresh to scan for networks.',
-                      style: TextStyle(color: BrandColors.fogGrey),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ...wifi.scanResults.map((r) => ListTile(
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 0),
-                      leading: _RssiBars(rssi: r.rssi),
-                      title: Text(r.ssid),
-                      trailing: r.encrypted
-                          ? const Icon(Icons.lock_outline,
-                              size: 16, color: BrandColors.slateGrey)
-                          : null,
-                      onTap: () => _selectSsid(r.ssid),
-                    )),
               ],
 
               // Home brightness — slider always available; the firmware
@@ -296,41 +228,3 @@ class _ConnectionStatusRow extends StatelessWidget {
   }
 }
 
-class _RssiBars extends StatelessWidget {
-  const _RssiBars({required this.rssi});
-  final int rssi;
-
-  int get _bars => rssi >= -55
-      ? 4
-      : rssi >= -65
-          ? 3
-          : rssi >= -75
-              ? 2
-              : 1;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 22,
-      height: 22,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(4, (i) {
-          final filled = i < _bars;
-          return Container(
-            width: 3,
-            height: 6.0 + i * 4,
-            margin: const EdgeInsets.symmetric(horizontal: 1),
-            decoration: BoxDecoration(
-              color: filled
-                  ? BrandColors.lumenGreen
-                  : BrandColors.slateGrey.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(1),
-            ),
-          );
-        }),
-      ),
-    );
-  }
-}

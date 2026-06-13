@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -27,6 +28,28 @@ class AddLampNotifier extends _$AddLampNotifier {
   /// Tests can override this to `Duration.zero`.
   @visibleForTesting
   static Duration verifyDelay = const Duration(seconds: 8);
+
+  /// Shorter post-reboot wait for the empty-password ("Skip") path. There's
+  /// no auth to verify — the lamp's `isAuthed()` early-returns true when
+  /// `lamp.password.empty()`, so the probe is purely "did the lamp come
+  /// back up?". 2s is enough for the BLE link to settle without the user
+  /// staring at a "Settling in…" spinner for 8 seconds when they explicitly
+  /// asked to skip security.
+  @visibleForTesting
+  static Duration verifySkipDelay = const Duration(seconds: 2);
+
+  /// Hard ceiling on the reconnect-after-reboot attempt. Without this,
+  /// flutter_blue_plus' connect() can hang forever against a stale handle
+  /// when Android hasn't yet noticed the link drop — and the UI shows
+  /// "Settling in…" indefinitely (the reported "stuck on Skip" bug).
+  @visibleForTesting
+  static Duration verifyConnectTimeout = const Duration(seconds: 15);
+
+  /// Ceiling on each post-reconnect characteristic op (auth write, lampSection
+  /// read). A successful op is sub-second; the timeout exists so a half-open
+  /// link surfaces as a recoverable error instead of hanging the wizard.
+  @visibleForTesting
+  static Duration verifyOpTimeout = const Duration(seconds: 10);
 
   @override
   AddLampState build() => const AddLampState();
@@ -154,12 +177,26 @@ class AddLampNotifier extends _$AddLampNotifier {
     // + probe a section read to confirm the password stuck. The lampSection
     // characteristic is gated by auth; an unauthenticated read returns
     // empty bytes (or fails to decode) which we treat as a password mismatch.
+    //
+    // Every await below has an explicit timeout. Without them, a half-open
+    // BLE link (Android hasn't yet noticed the reboot-driven disconnect,
+    // flutter_blue_plus connect() no-ops against a stale handle) would
+    // leave the wizard "Settling in…" forever — the reported "Skip hangs"
+    // bug. Timeouts bounce the user back to the password step with a
+    // recoverable error instead of trapping them.
+    //
+    // Skip path (empty password) takes a shortcut: there's no auth to
+    // verify, so we use a shorter reboot wait and skip the auth+read probe
+    // entirely. The lamp's `isAuthed()` early-returns true for empty
+    // passwords, so a probe would always succeed if reachable — adding 8s
+    // of dead air for no diagnostic value.
     state = state.copyWith(
       step: AddLampStep.verifying,
       status: AddLampStatus.working,
     );
+    final isSkipPath = state.password.isEmpty;
     try {
-      await Future<void>.delayed(verifyDelay);
+      await Future<void>.delayed(isSkipPath ? verifySkipDelay : verifyDelay);
       // Force a fresh BLE link. After setupApply the firmware fades + reboots,
       // but flutter_blue_plus typically still believes it's connected (it only
       // notices via LINK_SUPERVISION_TIMEOUT, which can take >1s). Calling
@@ -173,22 +210,33 @@ class AddLampNotifier extends _$AddLampNotifier {
         // already-disconnected is fine
       }
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      await ble.connect(state.deviceId);
-      await AuthClient(ble: ble).authenticate(
-        deviceId: state.deviceId,
-        password: state.password,
-      );
-      final bytes = await ble.read(
-        state.deviceId,
-        BleUuids.controlService,
-        BleUuids.lampSection,
-      );
-      if (bytes.isEmpty) {
-        throw const FormatException('auth-rejected');
-      }
-      final j = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-      if (j['name'] == null) {
-        throw const FormatException('auth-rejected');
+      await ble.connect(state.deviceId).timeout(verifyConnectTimeout);
+      if (isSkipPath) {
+        // Empty-password lamps are open-access. Skipping the auth+read probe
+        // shaves ~3-5s off the Skip flow and avoids the "Wrong password"
+        // error path firing on a successful-but-slow probe (which is
+        // nonsense UX when the user just chose to have no password).
+      } else {
+        await AuthClient(ble: ble)
+            .authenticate(
+              deviceId: state.deviceId,
+              password: state.password,
+            )
+            .timeout(verifyOpTimeout);
+        final bytes = await ble
+            .read(
+              state.deviceId,
+              BleUuids.controlService,
+              BleUuids.lampSection,
+            )
+            .timeout(verifyOpTimeout);
+        if (bytes.isEmpty) {
+          throw const FormatException('auth-rejected');
+        }
+        final j = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+        if (j['name'] == null) {
+          throw const FormatException('auth-rejected');
+        }
       }
     } on FormatException catch (_) {
       state = state.copyWith(
@@ -198,12 +246,24 @@ class AddLampNotifier extends _$AddLampNotifier {
         errorMessage: "Wrong password — the lamp did not accept it.",
       );
       return;
+    } on TimeoutException catch (e) {
+      state = state.copyWith(
+        status: AddLampStatus.error,
+        step: AddLampStep.password,
+        error: AddLampError.connectFailed,
+        errorMessage: isSkipPath
+            ? "Setup didn't fully apply — try again."
+            : "The lamp took too long to answer — try again. ($e)",
+      );
+      return;
     } catch (e) {
       state = state.copyWith(
         status: AddLampStatus.error,
         step: AddLampStep.password,
         error: AddLampError.connectFailed,
-        errorMessage: e.toString(),
+        errorMessage: isSkipPath
+            ? "Setup didn't fully apply — try again."
+            : e.toString(),
       );
       return;
     }

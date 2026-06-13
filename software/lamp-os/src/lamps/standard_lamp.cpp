@@ -9,11 +9,16 @@
 #include <cstring>
 #include <string>
 
+#include "components/firmware/firmware_receiver.hpp"
+#if defined(ARDUINO) || defined(ESP_PLATFORM)
+#include <esp_ota_ops.h>
+#endif
 #include "components/network/bluetooth.hpp"
 #include "components/network/ble_control.hpp"
 #include "components/network/nearby_lamps.hpp"
 #include "components/network/show_receiver.hpp"
 #include "components/network/wifi.hpp"
+#include "components/personality/personality_engine.hpp"
 #include "components/transient_override/brightness_override.hpp"
 #include "components/transient_override/color_override.hpp"
 #include "expressions/expression_manager.hpp"
@@ -21,6 +26,7 @@
 #include "behaviors/configurator.hpp"
 #include "behaviors/fade_out.hpp"
 #include "behaviors/knockout.hpp"
+#include "behaviors/personality.hpp"
 #include "behaviors/social.hpp"
 #include "config/config.hpp"
 #include "config/config_types.hpp"
@@ -78,6 +84,19 @@ lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingExpressionOpJson;
 lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingWifiOpJson;
 lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingTestActionJson;
 lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingRemoteOpJson;
+// Phase D — app-originated wispOp writes (CHAR_WISP_OP). Drain on Core 1
+// broadcasts as MSG_CONTROL_OP. Routed through a DEDICATED slot rather
+// than the converged applyRemoteOpLocal so that gossip-relayed wispOps
+// don't get reinterpreted on every lamp — wispOp is wisp-only, lamps
+// only forward.
+lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingWispOpJson;
+// Phase D — wispStatus payloads observed on the mesh (either own BLE
+// inbound or gossip-relayed from another lamp). applyRemoteOpLocal
+// recognizes char:"wispStatus" and posts here; the drain caches into
+// NearbyLamps and notifies BLE subscribers. The MAC slot carries the
+// wisp's own MAC (source of the original CONTROL_OP) so cacheWispStatus
+// knows whose status it is.
+lamp::PendingJsonSlotWithMac<MAX_PENDING_OP_JSON> pendingWispStatusJson;
 // Disposition map writes from CHAR_SOCIAL_DISPOSITIONS land here from
 // Core 0; the loop drain on Core 1 parses + persists via Config so NVS
 // writes serialise with the settings_blob drain on the same core.
@@ -121,6 +140,13 @@ lamp::PendingTypedSlot<lamp::PendingWispHello>          pendingWispHello;
 // the JSON peek + RecentCascade dedup + (optional pendingTriggers enqueue).
 // No local-config consult: cascade is sender-authoritative.
 lamp::PendingTypedSlot<lamp::PendingEvent>              pendingEvent;
+// Phase F: OFFER/DONE control-plane handoff. ShowReceiver's WiFi recv
+// branches populate this slot; the loop drain on Core 1 calls
+// firmwareReceiver.handleControlOnLoop(). MSG_FW_CHUNK does NOT go
+// through a slot — it's handled directly on the WiFi task by the
+// FirmwareReceiver (per the lamp-side plan §5 Option 1, spike-confirmed
+// at 16.6% WiFi-task-busy / 0% drops).
+lamp::PendingTypedSlot<lamp::PendingFirmwareControl>    pendingFirmwareControl;
 portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
 
 // Thin forwarders into the template. Each slot's bounds check + mux
@@ -150,6 +176,17 @@ void postPendingTestActionJson(const char* data, size_t len)        { pendingTes
 void postPendingSettingsBlobJson(const char* data, size_t len)      { pendingSettingsBlobJson.post(pendingMux, data, len); }
 void postPendingRemoteOpJson(const char* data, size_t len)          { pendingRemoteOpJson.post(pendingMux, data, len); }
 void postPendingSocialDispositionsJson(const char* data, size_t len){ pendingSocialDispositionsJson.post(pendingMux, data, len); }
+// Phase D wispOp: app → CHAR_WISP_OP → here → drain → MSG_CONTROL_OP
+// broadcast. The slot carries no mac because the drain inserts the
+// broadcast target itself.
+void postPendingWispOpJson(const char* data, size_t len)            { pendingWispOpJson.post(pendingMux, data, len); }
+// Phase D wispStatus: applyRemoteOpLocal sees char:"wispStatus" and
+// memcpys here under portMUX along with the original wisp's MAC.
+// The drain caches via NearbyLamps + emits a BLE notify.
+static void postPendingWispStatusJson(const uint8_t srcMac[6],
+                                      const char* data, size_t len) {
+  pendingWispStatusJson.post(pendingMux, data, len, srcMac);
+}
 
 namespace lamp {
 // Phase C: typed-payload posts called from ShowReceiver's WiFi recv task.
@@ -161,6 +198,7 @@ void postPendingOverrideBrightness(const PendingOverrideBrightness& src) { pendi
 void postPendingRestoreBrightness(const PendingRestoreBrightness& src)   { pendingRestoreBrightness.post(pendingMux, src); }
 void postPendingWispHello(const PendingWispHello& src)                   { pendingWispHello.post(pendingMux, src); }
 void postPendingEvent(const PendingEvent& src)                           { pendingEvent.post(pendingMux, src); }
+void postPendingFirmwareControl(const PendingFirmwareControl& src)       { pendingFirmwareControl.post(pendingMux, src); }
 
 // Forwarder used by ExpressionManager::tryHandleExpressionEvent (and the
 // legacy triggerExpression CONTROL_OP recv path) to schedule a future
@@ -191,6 +229,7 @@ lamp::Compositor compositor;
 lamp::FrameBuffer shade;
 lamp::FrameBuffer base;
 lamp::SocialBehavior shadeSocialBehavior;
+lamp::PersonalityBehavior shadePersonalityBehavior;
 lamp::ConfiguratorBehavior shadeConfiguratorBehavior;
 lamp::ConfiguratorBehavior baseConfiguratorBehavior;
 lamp::FadeOutBehavior shadeFadeOutBehavior;
@@ -199,6 +238,27 @@ lamp::KnockoutBehavior baseKnockoutBehavior;
 lamp::ExpressionManager expressionManager;
 lamp::Config config;
 lamp::ShowReceiver showReceiver;
+// Phase F: lamp-side OTA receiver. Bound to showReceiver via
+// setFirmwareReceiver() in setup() so the WiFi recv path can hand
+// MSG_FW_CHUNK directly to handleChunkOnRecvTask (Core 0). OFFER/DONE
+// arrive via pendingFirmwareControl and are drained on Core 1.
+lamp::FirmwareReceiver firmwareReceiver;
+
+// Phase G: post-OTA "mark this app valid" state.
+//
+// CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=1 ships in pioarduino's prebuilt
+// sdkconfig. After the first OTA reboot, the new partition is in
+// ESP_OTA_IMG_PENDING_VERIFY state; a second esp_ota_begin against that
+// partition returns ESP_ERR_OTA_ROLLBACK_INVALID_STATE — every subsequent
+// OTA fails until the new firmware calls
+// esp_ota_mark_app_valid_cancel_rollback().
+//
+// We arm a 30-second timer in setup() iff we boot in pending-verify
+// state. The loop tick checks the timer; on fire, we re-confirm basic
+// health (BLE running, loop has iterated) and call mark_app_valid.
+// Otherwise: do nothing — the bootloader will revert on the next reset.
+bool g_pendingVerify = false;
+uint32_t g_markValidDeadlineMs = 0;
 // Phase C transient overrides. Three instances: one ColorOverride per
 // surface (base + shade), and a single BrightnessOverride that maps the
 // whole-lamp brightness (Surface::Any in v1). bind() wires them to their
@@ -374,13 +434,16 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     // Match the drain's unconditional bookkeeping.
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    config.invalidateShadeSection();
+    // DO NOT invalidate the shade section here. See the architectural
+    // comment at the CHAR_BRIGHTNESS drain (~line 954) for why live
+    // preview must not poison the persisted-snapshot section cache.
 
   } else if (strcmp(ch, "baseColors") == 0) {
     applyBaseColorsLocal(doc["colors"].as<JsonArray>());
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    config.invalidateBaseSection();
+    // Same as shadeColors above — live preview must not poison the
+    // persisted-snapshot section cache.
 
   } else if (strcmp(ch, "knockout") == 0) {
     int pixel = doc["pixel"] | -1;
@@ -411,7 +474,24 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     } else {
       lamp::enqueueDelayedInvocation(inv, srcMac, inv.delayMs);
     }
+
+  } else if (strcmp(ch, "wispStatus") == 0) {
+    // Phase D: a wispStatus payload reached us — either directly from the
+    // wisp's MSG_CONTROL_OP broadcast or via a peer's gossip relay. We
+    // don't APPLY anything locally (lamps don't have a zone state to
+    // mutate); we just cache + notify so the phone-paired lamp's
+    // CHAR_WISP_STATUS read/notify surface stays current. srcMac is the
+    // wisp's MAC (preserved through gossip relay by ShowReceiver, which
+    // copies op.sourceMac into the inbound slot).
+    postPendingWispStatusJson(srcMac, payloadJson, len);
   }
+  // wispOp intentionally has NO branch here. The dedicated CHAR_WISP_OP
+  // slot drain broadcasts a MSG_CONTROL_OP; the wisp(s) on the mesh
+  // consume it. A gossip-relayed wispOp lands here, finds no matching
+  // branch, and silently drops — which is exactly the desired behavior.
+  // See docs/superpowers/plans/2026-06-04-wisp-phase-d-zone-selection.md
+  // ("Don't add wispOp to applyRemoteOpLocal naively") for the design.
+
   // settings forwarding is intentionally deferred — it triggers a remote
   // reboot whose UX over the grid needs more thought. Follow-up plan.
 }
@@ -542,6 +622,14 @@ void initBehaviors() {
   baseKnockoutBehavior = lamp::KnockoutBehavior(&base, 0, true);
   baseKnockoutBehavior.knockoutPixels = config.base.knockoutPixels;
 
+  // PersonalityBehavior — additive shade-tint layer fed by
+  // PersonalityEngine::getBleedContributions. Perpetually-playing so its
+  // draw runs every frame. allowedInHomeMode=true so the subtle Fond bleed
+  // stays visible even in the user's calm-down mode (it's a quiet social
+  // signal, not a loud effect).
+  shadePersonalityBehavior = lamp::PersonalityBehavior(&shade, /*frames=*/1);
+  shadePersonalityBehavior.allowedInHomeMode = true;
+
   expressionManager.begin(&shade, &base);
   expressionManager.loadFromConfig(config.expressions);
 
@@ -557,6 +645,11 @@ void initBehaviors() {
   // Configurator behaviors (highest priority — UI preview)
   allBehaviors.push_back(&baseConfiguratorBehavior);
   allBehaviors.push_back(&shadeConfiguratorBehavior);
+
+  // Personality bleed overlays on top of the configurator scene so the
+  // Fond color-bleed reads against the painted baseline rather than
+  // getting wiped. Registered AFTER configurator and BEFORE fade-out.
+  allBehaviors.push_back(&shadePersonalityBehavior);
 
   // Fade-out behaviors run last so reboot animation is on top of everything
   allBehaviors.push_back(&baseFadeOutBehavior);
@@ -591,6 +684,17 @@ void initBehaviors() {
   // existing applyEffectiveBrightness path so master-brightness fades
   // share the same NeoPixel setBrightness entry point.
   brightnessOverride.setOnChangeCallback([]() { applyEffectiveBrightness(); });
+
+  // Personality engine — owns crowd-aware dimming (Introvert only),
+  // disposition-driven greeting tuning, the Salty side-eye envelope
+  // (consumed by effectiveBrightness as applySaltyDim), and the
+  // disposition-driven arrival / Fond-bleed-contribution / closest-pulse
+  // cycles. Bleed contributions are drawn additively by
+  // shadePersonalityBehavior — no ColorOverride wiring. Its tick runs
+  // in loop() after the transient-override tick block; sampleAndSmooth
+  // gates most work behind a 1 Hz cadence so the per-loop cost is
+  // negligible.
+  lamp::personalityEngine.begin(&config, &expressionManager, &showReceiver);
 }
 
 /**
@@ -681,6 +785,42 @@ void dispatchLampAction(JsonDocument& doc, unsigned long updateTimeMs) {
       }
     }
   }
+#ifdef LAMP_DEBUG
+  // Personality dev-injection hook: replaces nearbyLamps view inside
+  // PersonalityEngine so a developer can simulate a crowd from one
+  // physical lamp + the Flutter app's test-action button. Without this,
+  // verifying the 50% crowd-dim floor would need 10 lamps in BLE range
+  // simultaneously.
+  //
+  // Payload:
+  //   {"a":"inject_nearby","peers":[
+  //     {"name":"red","baseColor":"#FF0000FF","disposition":5},
+  //     {"name":"blue","baseColor":"#0000FFFF","disposition":1}
+  //   ]}
+  // Pair with {"a":"clear_nearby"} to drop back to live data.
+  else if (action == "inject_nearby") {
+    std::vector<lamp::NearbyLamp> peers;
+    JsonArray arr = doc["peers"];
+    for (JsonVariant v : arr) {
+      lamp::NearbyLamp p;
+      p.name = String(v["name"] | "").c_str();
+      if (p.name.empty()) continue;
+      const String baseHex = String(v["baseColor"] | "#FFFFFFFF");
+      p.baseColor = lamp::hexStringToColor(baseHex.c_str());
+      p.lastRssi = v["rssi"].is<int>() ? static_cast<int8_t>(v["rssi"].as<int>()) : -50;
+      const int disp = v["disposition"] | 3;
+      if (disp >= 1 && disp <= 5 && !p.name.empty()) {
+        config.setDisposition(p.name, static_cast<uint8_t>(disp));
+      }
+      peers.push_back(p);
+    }
+    Serial.printf("[personality] inject_nearby count=%u\n", (unsigned)peers.size());
+    lamp::personalityEngine.setNearbyOverride(std::move(peers));
+  } else if (action == "clear_nearby") {
+    Serial.println("[personality] clear_nearby");
+    lamp::personalityEngine.clearNearbyOverride();
+  }
+#endif
 }
 
 extern void lamp_register_panic_handler();
@@ -691,8 +831,17 @@ extern void lamp_register_panic_handler();
 static uint8_t effectiveBrightness();
 static bool calculateEffectiveHomeMode();
 static uint8_t effectiveBrightness() {
-  return calculateEffectiveHomeMode() ? config.homeMode.brightness
-                                      : config.lamp.brightness;
+  const uint8_t raw = calculateEffectiveHomeMode() ? config.homeMode.brightness
+                                                    : config.lamp.brightness;
+  // PersonalityEngine multipliers: crowd-dim (Introvert + smoothed peer
+  // weight) THEN Salty side-eye envelope (1.0 → 0.70 → 1.0 over fade-in /
+  // hold / fade-out). Both are multipliers in (0, 1] so order is
+  // mathematically commutative; chained crowd-first matches the comment
+  // history ("dimmed by personality, then by transient overrides").
+  // Applied BEFORE the transient brightnessOverride.effective() so paint /
+  // wisp overrides continue to work normally over the dimmed baseline.
+  const uint8_t afterCrowd = lamp::personalityEngine.applyCrowdDim(raw);
+  return lamp::personalityEngine.applySaltyDim(afterCrowd);
 }
 
 static void applyEffectiveBrightness() {
@@ -761,6 +910,10 @@ void setup() {
   wifi::begin();
   wifi::setStateChangeCallback(onWifiStateChanged);
   wifi::setHomeModeEnabledGetter([]() { return config.homeMode.enabled; });
+  // Suspend WiFi background scans while OTA is in flight — the scan hops
+  // the radio across 11+ channels for ~5s and silently drops ESP-NOW
+  // unicast (both OFFER→lamp AND lamp→wisp ACCEPT/REQ) during that window.
+  wifi::setOtaInProgressGetter([]() { return firmwareReceiver.isInProgress(); });
 
   bt.begin(config.lamp.name, config.base.colors[config.base.ac], config.shade.colors[0]);
   bt.activateGattServices(&config, &prefs);
@@ -799,9 +952,45 @@ void setup() {
         pendingInboundOpJson.post(
             pendingMux, reinterpret_cast<const char*>(payload), len, srcMac);
       });
+  // Phase F: install the OTA receiver BEFORE showReceiver.begin() so the
+  // chunk fast-path is wired by the time MSG_FW_* frames start arriving.
+  // FirmwareReceiver::begin captures myMac via showReceiver.getMyMac(),
+  // which is populated after the EspNowLink::begin() call inside
+  // showReceiver.begin() — so receiver-side init has to run AFTER
+  // showReceiver.begin(). The setFirmwareReceiver() call can happen any
+  // time before the first MSG_FW_OFFER arrives, but installing it right
+  // here keeps the wiring co-located.
+  showReceiver.setFirmwareReceiver(&firmwareReceiver);
   // Bring up ESP-NOW grid presence (HELLO + COLORS). Independent of home
   // WiFi — runs on whatever channel the radio is on. See lamp_protocol.hpp.
   showReceiver.begin(&config);
+  firmwareReceiver.begin(&showReceiver);
+
+  // Phase G: arm the post-OTA self-health timer. esp_ota_get_state_partition
+  // returns the ota-image-state of the running partition. If we just
+  // booted from a freshly-OTA'd image, state == ESP_OTA_IMG_PENDING_VERIFY
+  // and the bootloader will auto-rollback on the next reset unless we
+  // explicitly mark the partition valid. We give the lamp 30 seconds of
+  // steady-state runtime before declaring it healthy — long enough to
+  // surface any boot-time crashes that would justify a rollback.
+  //
+  // Without this code path, the SECOND OTA permanently fails (esp_ota_begin
+  // returns ESP_ERR_OTA_ROLLBACK_INVALID_STATE). One-shot-OTA trap. The
+  // reconciliation doc's ESP32-specifics section calls this out as a Phase F
+  // inline requirement.
+  {
+    esp_ota_img_states_t state;
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (running && esp_ota_get_state_partition(running, &state) == ESP_OK) {
+      if (state == ESP_OTA_IMG_PENDING_VERIFY) {
+        g_pendingVerify = true;
+        g_markValidDeadlineMs = millis() + 30000;
+#ifdef LAMP_DEBUG
+        Serial.println("[ota] booted in PENDING_VERIFY, 30s self-health check armed");
+#endif
+      }
+    }
+  }
   // Wire the cascade fan-out path. The manager only sends after this; before
   // begin/setShowReceiver, local triggers fire but never cascade.
   expressionManager.setShowReceiver(&showReceiver);
@@ -877,10 +1066,29 @@ void loop() {
         lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
     if (baseStrip)  baseStrip->setBrightness(
         lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
-    // Invalidate both — brightness can land in either section depending
-    // on whether the app is on the Home Mode page. Two bools is cheap.
-    config.invalidateLampSection();
-    config.invalidateHomeSection();
+    // ARCHITECTURAL INVARIANT for section cache:
+    //   `*SectionJsonCached()` represents the PERSISTED config snapshot
+    //   (last NVS write or boot-load), NOT the live in-memory config.
+    //   The app's ControlNotifier compares its local state against the
+    //   section JSON it reads via CHAR_LAMP_SECTION / CHAR_BASE_SECTION /
+    //   etc. to know what's been "saved." If we invalidate the section
+    //   cache here on a live-preview write, the app re-reads the section
+    //   right after a save-and-reconnect (within its 5s reconnect window
+    //   the brightness writer's debounced live write may also fire) and
+    //   gets the LIVE value, not the persisted one. The save's
+    //   `_original = fresh` then captures the live value as the
+    //   "saved snapshot," which breaks isDirty comparisons forever after
+    //   (until the next save fully reloads, or the lamp reboots).
+    //
+    //   Therefore: live-preview characteristic drains UPDATE the
+    //   in-memory config (needed for effectiveBrightness, render math,
+    //   etc.) but DO NOT invalidate the section cache. Only the
+    //   settingsBlob persist path (which writes NVS) calls
+    //   invalidateAllSections() — that's the canonical "now there's a
+    //   new persisted snapshot" event.
+    //
+    //   See also the parallel drains for shadeColors, baseColors, and
+    //   knockout below — same invariant, same comment by reference.
   }
 
   if (pendingShadeColorsJson.valid) {
@@ -898,12 +1106,10 @@ void loop() {
     if (deserializeJson(doc, buf) == DeserializationError::Ok) {
       applyShadeColorsLocal(doc.as<JsonArray>());
     }
-    // Preserve the prior drain's unconditional bookkeeping — timestamps +
-    // invalidate were already outside the parse-OK / array-non-empty guards,
-    // and keeping them that way avoids a behavior delta.
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    config.invalidateShadeSection();
+    // Live preview only — does NOT invalidate the shade section cache.
+    // See the architectural invariant comment at the brightness drain.
   }
 
   if (pendingBaseColorsJson.valid) {
@@ -923,7 +1129,8 @@ void loop() {
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    config.invalidateBaseSection();
+    // Live preview only — does NOT invalidate the base section cache.
+    // See the architectural invariant comment at the brightness drain.
   }
 
   if (pendingKnockout.valid) {
@@ -939,7 +1146,10 @@ void loop() {
     if (pixel < config.base.px && brightness <= 100) {
       baseKnockoutBehavior.knockoutPixels[pixel] = brightness;
       config.base.knockoutPixels[pixel] = brightness;
-      config.invalidateBaseSection();
+      // Live per-pixel knockout — does NOT invalidate the base section
+      // cache. See the architectural invariant comment at the brightness
+      // drain. Knockout map is persisted via the settingsBlob path on
+      // the next save (knockoutPixels is included in base section JSON).
     }
   }
 
@@ -1048,8 +1258,15 @@ void loop() {
 
         if (written > 0) {
 #ifdef LAMP_DEBUG
-          Serial.printf("[loop] settingsBlob: persisted %u bytes, fading out for reboot\n",
-                        (unsigned)written);
+          // Log the in-memory config snapshot post-merge — this is what
+          // the next boot reads back from NVS, so the next BLE section
+          // read should match these values. Diagnostic for "save+reload
+          // didn't actually persist" reports.
+          Serial.printf("[loop] settingsBlob: persisted %u bytes, lamp.brightness=%u name='%s' socialMode=%u, fading for reboot\n",
+                        (unsigned)written,
+                        (unsigned)config.lamp.brightness,
+                        config.lamp.name.c_str(),
+                        (unsigned)config.lamp.socialMode);
 #endif
           ble_control::notifyStateChange();
           lamp::fadeOutRebootRequested = true;
@@ -1239,6 +1456,43 @@ void loop() {
                                        cmd.carriedFwVersion);
     }
   }
+  // Phase D wispOp drain — app wrote a wispOp via CHAR_WISP_OP; we
+  // broadcast it as MSG_CONTROL_OP so the wisp(s) on the mesh pick it
+  // up. NEVER applied locally — wispOp is wisp-only (lamps don't have a
+  // zone state). ShowReceiver::sendControlOp records its own seq into
+  // controlOpDedup_ before the broadcast, so the reflected copy we get
+  // back from the gossip rebroadcast doesn't try to apply locally.
+  if (pendingWispOpJson.valid) {
+    char buf[MAX_PENDING_OP_JSON + 1];
+    uint16_t len = pendingWispOpJson.drain(pendingMux, buf);
+#ifdef LAMP_DEBUG
+    Serial.printf("[loop] drain wispOp len=%u\n", (unsigned)len);
+#endif
+    if (len > 0) {
+      static const uint8_t kBroadcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+      showReceiver.sendControlOp(kBroadcastMac,
+                                 reinterpret_cast<const uint8_t*>(buf),
+                                 len);
+    }
+  }
+  // Phase D wispStatus drain — applyRemoteOpLocal saw a wispStatus
+  // payload and posted it here with the wisp's source MAC. Cache into
+  // NearbyLamps and push a BLE notification so any app subscribed to
+  // CHAR_WISP_STATUS picks up the change without round-tripping a read.
+  if (pendingWispStatusJson.valid) {
+    char buf[MAX_PENDING_OP_JSON + 1];
+    uint8_t srcMac[6];
+    uint16_t len = pendingWispStatusJson.drain(pendingMux, buf, srcMac);
+#ifdef LAMP_DEBUG
+    Serial.printf("[loop] drain wispStatus len=%u src=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                  (unsigned)len, srcMac[0], srcMac[1], srcMac[2],
+                  srcMac[3], srcMac[4], srcMac[5]);
+#endif
+    if (len > 0) {
+      lamp::nearbyLamps.cacheWispStatus(srcMac, buf, len);
+      ble_control::notifyWispStatus();
+    }
+  }
   // MSG_EVENT drain. The recv side already resolved our delayMs from the
   // stagger entries list and copied the payload bytes into the slot;
   // tryHandleExpressionEvent does the (cheap-peek → RecentCascade dedup →
@@ -1258,6 +1512,21 @@ void loop() {
                                                  cmd.payload, cmd.payloadLen);
     }
   }
+  // Phase F: MSG_FW_OFFER / MSG_FW_DONE drain. ShowReceiver's WiFi recv
+  // path populates the slot; FirmwareReceiver does the heavy work on
+  // Core 1 (esp_ota_begin, signature verify, set_boot_partition). The
+  // chunk fast-path bypasses this slot — see show_receiver.cpp MSG_FW_
+  // CHUNK branch.
+  {
+    lamp::PendingFirmwareControl cmd;
+    if (pendingFirmwareControl.drain(pendingMux, cmd)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[loop] drain fwControl msgType=0x%02X seq=%u\n",
+                    (unsigned)cmd.msgType, (unsigned)cmd.seq);
+#endif
+      firmwareReceiver.handleControlOnLoop(cmd);
+    }
+  }
 
   // Phase C: drive the override state machines. tick() is cheap when Idle
   // (single load + branch) so call unconditionally. Brightness tick uses
@@ -1268,6 +1537,16 @@ void loop() {
     baseColorOverride.tick(now);
     shadeColorOverride.tick(now);
     brightnessOverride.tick(now, effectiveBrightness());
+
+    // Personality engine — runs after the transient-override block so it
+    // reads a consistent post-fade view this tick. Cheap when nothing's
+    // changed (1 Hz internal cadence). consumePendingApply() trips the
+    // existing applyEffectiveBrightness pump when the crowd-dim factor
+    // crosses the deadband, or when SocialMode flips out of Introvert.
+    lamp::personalityEngine.tick(now);
+    if (lamp::personalityEngine.consumePendingApply()) {
+      pendingApplyEffectiveBrightness = true;
+    }
   }
 
   // Fire any delayed triggerExpression invocations whose deadline has passed.
@@ -1290,6 +1569,33 @@ void loop() {
 
   wifi::tick();
   showReceiver.tick();
+  // Phase F: drive OTA stall watchdog + REQ generation + 60s hard cap.
+  // Cheap when state == Idle (single switch + return).
+  firmwareReceiver.tick(millis());
+  // Phase G: post-OTA self-health check. After 30 seconds of steady-state
+  // loop iteration, if BLE is up and the loop has been iterating (we're
+  // inside it now so trivially true), call mark_app_valid so the next OTA
+  // can succeed. If the lamp crashes before the deadline, the bootloader
+  // auto-rollbacks on the next reset.
+  if (g_pendingVerify && static_cast<int32_t>(millis() - g_markValidDeadlineMs) >= 0) {
+    if (ble_control::isRunning()) {
+      const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+      if (err == ESP_OK) {
+#ifdef LAMP_DEBUG
+        Serial.println("[ota] new partition marked valid (post-OTA boot)");
+#endif
+      } else {
+#ifdef LAMP_DEBUG
+        Serial.printf("[ota] mark_app_valid failed: 0x%X\n", (unsigned)err);
+#endif
+      }
+      g_pendingVerify = false;  // one-shot — even on failure don't retry
+    } else {
+      // BLE isn't running; defer another tick. If BLE never comes up,
+      // the lamp's broken anyway and rollback is the right move.
+      g_markValidDeadlineMs = millis() + 5000;  // re-check in 5s
+    }
+  }
   // Rebuild + push any dirty section JSON to its NimBLE characteristic
   // so onRead callbacks (Core 0) hand back NimBLE's already-buffered
   // bytes without walking config vectors. Cheap when nothing's dirty.

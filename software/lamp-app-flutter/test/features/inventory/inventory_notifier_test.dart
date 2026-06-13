@@ -54,4 +54,32 @@ void main() {
     final list = await container.read(inventoryNotifierProvider.future);
     expect(list.map((l) => l.id).toList(), ['2']);
   });
+
+  test('updateName changes the lamp name and persists', () async {
+    final c1 = ProviderContainer();
+    await c1.read(inventoryNotifierProvider.future);
+    final n1 = c1.read(inventoryNotifierProvider.notifier);
+    await n1.add(const InventoryLamp(id: 'aa', name: 'original'));
+    await n1.updateName('aa', 'renamed');
+    final after = await c1.read(inventoryNotifierProvider.future);
+    expect(after.single.name, 'renamed');
+    c1.dispose();
+
+    // Survives container teardown — actually went to prefs.
+    final c2 = ProviderContainer();
+    addTearDown(c2.dispose);
+    final list = await c2.read(inventoryNotifierProvider.future);
+    expect(list.single.name, 'renamed');
+  });
+
+  test('updateName is a no-op for unknown ids', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    await container.read(inventoryNotifierProvider.future);
+    final notifier = container.read(inventoryNotifierProvider.notifier);
+    await notifier.add(const InventoryLamp(id: 'aa', name: 'alpha'));
+    await notifier.updateName('bb', 'beta');
+    final list = await container.read(inventoryNotifierProvider.future);
+    expect(list.single.name, 'alpha');
+  });
 }

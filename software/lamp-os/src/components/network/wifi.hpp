@@ -39,6 +39,16 @@ void setStateChangeCallback(StateChangeCallback cb);
 using HomeModeEnabledGetter = bool (*)();
 void setHomeModeEnabledGetter(HomeModeEnabledGetter fn);
 
+// Caller registers a getter for "is an OTA session currently in flight".
+// wifi.cpp uses it to suppress periodic background scans during OTA — the
+// scan hops the radio for ~5s and silently drops ESP-NOW unicast in BOTH
+// directions while it runs (confirmed hardware-tested 2026-06-04: OFFER
+// retry landed but lamp's ACCEPT/REQ couldn't get back to the wisp).
+// On-demand scans (BLE op:scan) are NOT gated; user-driven scans still
+// work even if a stalled OTA never reports completion.
+using OtaInProgressGetter = bool (*)();
+void setOtaInProgressGetter(OtaInProgressGetter fn);
+
 void tick();
 
 // Home-presence detection. The lamp periodically scans (when no BT client

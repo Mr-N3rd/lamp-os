@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -16,9 +17,13 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     AddLampNotifier.verifyDelay = Duration.zero;
+    AddLampNotifier.verifySkipDelay = Duration.zero;
   });
   tearDown(() {
     AddLampNotifier.verifyDelay = const Duration(seconds: 5);
+    AddLampNotifier.verifySkipDelay = const Duration(seconds: 2);
+    AddLampNotifier.verifyConnectTimeout = const Duration(seconds: 15);
+    AddLampNotifier.verifyOpTimeout = const Duration(seconds: 10);
   });
 
   test('select(deviceId) sets the id and advances to name step', () async {
@@ -150,6 +155,91 @@ void main() {
     expect(inv, isEmpty);
   });
 
+  test('submit() with empty password (Skip) succeeds without probing auth',
+      () async {
+    // Skip path: password is empty. The lamp's isAuthed() early-returns
+    // true for empty passwords, so the auth+read probe is short-circuited.
+    // We just need the post-reboot reconnect to land.
+    final ble = InMemoryBleClient();
+    // Deliberately do NOT seed lampSection — Skip path doesn't read it.
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(activeLampNotifierProvider.future);
+
+    final n = c.read(addLampNotifierProvider.notifier);
+    n.select('dev1');
+    n.setName('jacko');
+    n.setPassword(''); // explicit Skip
+    await n.submit();
+
+    final s = c.read(addLampNotifierProvider);
+    expect(s.step, AddLampStep.done,
+        reason: 'Skip path must complete, not hang on verify probe');
+    expect(s.status, AddLampStatus.idle);
+    expect(s.error, AddLampError.none);
+
+    final inv = await c.read(inventoryNotifierProvider.future);
+    expect(inv.map((l) => l.id).toList(), ['dev1']);
+    expect(inv.first.controlPassword, '');
+  });
+
+  test('submit() Skip path surfaces friendly error on connect timeout',
+      () async {
+    // Skip path with a stalled connect → must time out cleanly and bounce
+    // back to the password step with a non-"Wrong password" message.
+    AddLampNotifier.verifyConnectTimeout = const Duration(milliseconds: 50);
+    final ble = _HangingBleClient(hangOn: _HangOp.connect);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(activeLampNotifierProvider.future);
+
+    final n = c.read(addLampNotifierProvider.notifier);
+    n.select('dev1');
+    n.setName('jacko');
+    n.setPassword('');
+    await n.submit().timeout(const Duration(seconds: 5));
+
+    final s = c.read(addLampNotifierProvider);
+    expect(s.step, AddLampStep.password,
+        reason: 'timeout must bounce, not hang');
+    expect(s.status, AddLampStatus.error);
+    expect(s.error, AddLampError.connectFailed);
+    expect(s.errorMessage, contains("Setup didn't fully apply"),
+        reason: 'Skip path should not say "Wrong password"');
+    final inv = await c.read(inventoryNotifierProvider.future);
+    expect(inv, isEmpty);
+  });
+
+  test('submit() with password surfaces timeout on stalled read', () async {
+    // Non-skip path with a stalled read → recoverable timeout error.
+    AddLampNotifier.verifyOpTimeout = const Duration(milliseconds: 50);
+    final ble = _HangingBleClient(hangOn: _HangOp.read);
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(activeLampNotifierProvider.future);
+
+    final n = c.read(addLampNotifierProvider.notifier);
+    n.select('dev1');
+    n.setName('jacko');
+    n.setPassword('secret');
+    await n.submit().timeout(const Duration(seconds: 5));
+
+    final s = c.read(addLampNotifierProvider);
+    expect(s.step, AddLampStep.password);
+    expect(s.status, AddLampStatus.error);
+    expect(s.error, AddLampError.connectFailed,
+        reason: 'timeout must surface as recoverable connectFailed');
+  });
+
   test('add(deviceId, name) skips wizard and adds to inventory', () async {
     final ble = InMemoryBleClient();
     final c = ProviderContainer(
@@ -169,4 +259,63 @@ void main() {
     final active = await c.read(activeLampNotifierProvider.future);
     expect(active, 'dev2');
   });
+}
+
+enum _HangOp { connect, read }
+
+/// BleClient that hangs forever on the selected op AFTER the initial setup
+/// connect succeeds. submit() calls connect() once for the claim, then
+/// connect() again as part of the post-reboot verify probe — we want the
+/// second connect to hang so the verify-path timeout fires, not the
+/// step-0 connect.
+class _HangingBleClient implements BleClient {
+  _HangingBleClient({required this.hangOn});
+
+  final _HangOp hangOn;
+  int _connectCount = 0;
+  final Set<String> _connected = {};
+
+  @override
+  Future<void> connect(String deviceId) {
+    _connectCount++;
+    // First connect = the step-0 claim connect; let it succeed. Second
+    // connect onward = the verify-probe reconnect; hang there.
+    if (hangOn == _HangOp.connect && _connectCount > 1) {
+      return Completer<void>().future;
+    }
+    _connected.add(deviceId);
+    return Future<void>.value();
+  }
+
+  @override
+  Future<void> disconnect(String deviceId) async {
+    _connected.remove(deviceId);
+  }
+
+  @override
+  bool isConnected(String deviceId) => _connected.contains(deviceId);
+
+  @override
+  Future<Uint8List> read(String d, String s, String c) {
+    if (hangOn == _HangOp.read) return Completer<Uint8List>().future;
+    return Future.value(Uint8List(0));
+  }
+
+  @override
+  Future<void> write(
+    String d,
+    String s,
+    String c,
+    Uint8List v, {
+    bool withoutResponse = false,
+    bool allowLongWrite = false,
+  }) async {}
+
+  @override
+  Stream<Uint8List> subscribe(String d, String s, String c) =>
+      const Stream.empty();
+
+  @override
+  Stream<bool> watchConnected(String deviceId) =>
+      Stream.value(_connected.contains(deviceId));
 }

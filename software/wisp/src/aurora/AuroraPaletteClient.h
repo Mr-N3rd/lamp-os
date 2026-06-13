@@ -13,8 +13,15 @@ class AuroraPaletteClient {
 public:
     // Called when a zone's active palette resolves to a concrete Palette.
     using PaletteHandler = std::function<void(int zone, const Palette&)>;
+    // Phase D: called on EVERY zone we see a palette-state announcement for,
+    // BEFORE setDesired runs. Lets the wisp's ZoneSelector populate its
+    // observed-zones set even for zones whose palette never resolves (GET
+    // rate-limited / stragglers). Decoupled from onPalette_ on purpose:
+    // onPalette_ only fires on a successful color resolve.
+    using ZoneObservedHandler = std::function<void(int zone)>;
 
     void onActivePalette(PaletteHandler h) { onPalette_ = std::move(h); }
+    void onZoneObserved(ZoneObservedHandler h) { onZoneObserved_ = std::move(h); }
     void setInstanceId(const char* id) { instanceId_ = id; }
     // Optional: skip mDNS and connect to a fixed host (useful on networks where
     // the device doesn't advertise _aurora._tcp). mDNS is the default otherwise.
@@ -24,6 +31,13 @@ public:
 
     void begin();
     void loop();
+
+    // Phase D: StatusBeacon needs to mirror this into the wispStatus JSON
+    // payload's `auroraConnected` field. "Streaming" is the only state where
+    // we've actually established a WS session and are processing announcements;
+    // earlier states (discovering / connecting) are best reported as not yet
+    // connected. Read-cheap, no caching at the call site.
+    bool isStreaming() const { return state_ == State::Streaming; }
 
 private:
     enum class State { Idle, Discovering, Connecting, Streaming };
@@ -50,6 +64,7 @@ private:
     std::vector<ZoneState> zones_;
     uint32_t lastFetchMs_ = 0;
     PaletteHandler onPalette_;
+    ZoneObservedHandler onZoneObserved_;
 
     static constexpr uint32_t kFetchRetryMs    = 1000;  // min spacing between GETs
     static constexpr uint32_t kRediscoverFails = 5;     // re-run mDNS after N WS fails

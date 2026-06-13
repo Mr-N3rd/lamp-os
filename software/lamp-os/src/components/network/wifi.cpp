@@ -25,6 +25,7 @@ static uint32_t s_lastScanCompleteMs = 0;
 static uint32_t s_lastBackgroundScanMs = 0;
 static StateChangeCallback s_cb = nullptr;
 static HomeModeEnabledGetter s_homeModeEnabledGetter = nullptr;
+static OtaInProgressGetter   s_otaInProgressGetter   = nullptr;
 
 // Guards s_scanResults + s_recentSsids + s_lastScanCompleteMs against
 // concurrent access. Writer: Core 1 wifi::tick() (scan-complete drain
@@ -141,6 +142,10 @@ void setHomeModeEnabledGetter(HomeModeEnabledGetter fn) {
   s_homeModeEnabledGetter = fn;
 }
 
+void setOtaInProgressGetter(OtaInProgressGetter fn) {
+  s_otaInProgressGetter = fn;
+}
+
 bool homeSsidVisible(const std::string& ssid) {
   if (ssid.empty()) return false;
   // Called from Core 1 (reapplyHomeModeState → calculateEffectiveHomeMode).
@@ -243,7 +248,14 @@ void tick() {
   //    time scan failures stranded the radio off LAMP_ESPNOW_CHANNEL).
   const bool homeModeEnabled =
       s_homeModeEnabledGetter && s_homeModeEnabledGetter();
-  if (s_state == IDLE && !ble_control::isClientConnected() && homeModeEnabled) {
+  // Block periodic scans during OTA — channel hopping silently drops
+  // ESP-NOW unicast in both directions for the duration of the scan
+  // (hardware-confirmed 2026-06-04). On-demand scans (BLE op:scan) still
+  // route through startScan() directly and remain available.
+  const bool otaInProgress =
+      s_otaInProgressGetter && s_otaInProgressGetter();
+  if (s_state == IDLE && !ble_control::isClientConnected() &&
+      homeModeEnabled && !otaInProgress) {
     const uint32_t now = millis();
     const uint32_t elapsed = now - s_lastBackgroundScanMs;
     if (elapsed > BACKGROUND_SCAN_INTERVAL_MS) {

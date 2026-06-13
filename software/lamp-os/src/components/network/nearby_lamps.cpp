@@ -1,5 +1,9 @@
 #include "nearby_lamps.hpp"
 
+#include <ArduinoJson.h>
+
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 namespace lamp {
@@ -145,6 +149,17 @@ std::vector<NearbyLamp> NearbyLamps::getReachableViaBle(uint32_t maxAgeMs) {
       out.push_back(e);
     }
   }
+  // Sort highest RSSI first so consumers can do `peers.front()` for the
+  // physically nearest lamp. Comment in the header has long claimed this
+  // is the contract (cascade-stagger sort key, PersonalityEngine's
+  // closest-smitten pulse target) but the sort was never actually here —
+  // peers came back in insertion order. -127 is the "unknown RSSI"
+  // sentinel; those sort to the back. Stable sort so equal-RSSI peers
+  // keep their original relative order (predictable across ticks).
+  std::stable_sort(out.begin(), out.end(),
+                    [](const NearbyLamp& a, const NearbyLamp& b) {
+                      return a.lastRssi > b.lastRssi;
+                    });
   return out;
 }
 
@@ -202,6 +217,14 @@ void NearbyLamps::cacheWispHello(const uint8_t mac[6],
   // this mutex from Core 0). See the addOrUpdate paths above for the
   // bounded-take pattern when the writer is Core 0.
   xSemaphoreTake(mutex_, portMAX_DELAY);
+  // Different wisp — drop stale status data so the next read doesn't merge
+  // wisp-A's wispStatus payload under wisp-B's MAC. Status fields will
+  // refresh on the next MSG_CONTROL_OP wispStatus broadcast from this wisp
+  // (≤30s heartbeat). Mirror of the same guard in cacheWispStatus.
+  if (wispCache_.present && std::memcmp(wispCache_.mac, mac, 6) != 0) {
+    wispCache_.lastStatusJson.clear();
+    wispCache_.lastStatusMs = 0;
+  }
   std::memcpy(wispCache_.mac, mac, 6);
   wispCache_.present = true;
   wispCache_.lastHelloMs = millis();
@@ -233,6 +256,102 @@ WispCache NearbyLamps::getWispCache() {
   snap = wispCache_;
   xSemaphoreGive(mutex_);
   return snap;
+}
+
+void NearbyLamps::cacheWispStatus(const uint8_t mac[6],
+                                  const char* json, size_t jsonLen) {
+  // Loop-task-only writer (drain of pendingWispStatus on Core 1). The
+  // wispHello side uses portMAX_DELAY for the same reason — Core 0
+  // never takes the write side, so contention is only brief loop-task
+  // reads (BLE notify build path via getWispStatusReadJson).
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  wispCache_.lastStatusJson.assign(json, jsonLen);
+  wispCache_.lastStatusMs = millis();
+  // If we hadn't seen a hello yet, the status broadcast still pins the
+  // wisp's identity. If the cached mac belongs to a different (older)
+  // wisp, take the new one — single-slot semantics in v1 mirror what
+  // cacheWispHello does implicitly when a fresh hello overwrites mac.
+  if (!wispCache_.present || std::memcmp(wispCache_.mac, mac, 6) != 0) {
+    std::memcpy(wispCache_.mac, mac, 6);
+    wispCache_.present = true;
+    // Different wisp — drop stale hello data so the next read doesn't
+    // merge wisp-A's hello fields under wisp-B's MAC. Hello fields will
+    // refresh on the next MSG_WISP_HELLO from this wisp.
+    wispCache_.wispVersion = 0;
+    wispCache_.flags = 0;
+    wispCache_.paletteIdPrefix[0] = '\0';
+    wispCache_.carriedFwChannel[0] = '\0';
+    wispCache_.carriedFwVersion = 0;
+    wispCache_.lastHelloMs = 0;
+  }
+  xSemaphoreGive(mutex_);
+}
+
+std::string NearbyLamps::getWispStatusReadJson() {
+  // Bounded take matches getWispCache — a BLE on-read callback runs on
+  // Core 0 and can't afford to block behind a long writer. The loop-task
+  // writer holds the mutex only for the snapshot copy below, so 2 ms is
+  // plenty in practice; on timeout we hand back "{}" rather than stall
+  // the GATT response.
+  WispCache snap;
+  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(2)) != pdTRUE) {
+    return std::string("{}");
+  }
+  snap = wispCache_;
+  xSemaphoreGive(mutex_);
+
+  // Nothing at all yet — empty object so the app's JSON decode succeeds
+  // with no fields and renders the "no wisp detected" state.
+  if (!snap.present && snap.lastStatusJson.empty()) {
+    return std::string("{}");
+  }
+
+  JsonDocument doc;
+  // Start from the cached wispStatus payload when we have one — its
+  // shape is open-set and the wisp owns it. If absent, build from hello
+  // fields alone so the app at least sees basic visibility.
+  if (!snap.lastStatusJson.empty()) {
+    auto err = deserializeJson(doc, snap.lastStatusJson);
+    if (err) {
+      // Malformed cached payload — treat as empty so we still serve the
+      // hello-derived fields below rather than handing back garbage.
+      doc.clear();
+      doc.to<JsonObject>();
+    }
+  } else {
+    doc.to<JsonObject>();
+    doc["char"] = "wispStatus";
+  }
+
+  // If the wisp's status payload already contains any of these keys,
+  // the wisp-authored value wins — the isNull() guard skips the merge.
+  if (snap.present) {
+    char macStr[18];
+    std::snprintf(macStr, sizeof(macStr),
+                  "%02X:%02X:%02X:%02X:%02X:%02X",
+                  snap.mac[0], snap.mac[1], snap.mac[2],
+                  snap.mac[3], snap.mac[4], snap.mac[5]);
+    if (doc["wispMac"].isNull())              doc["wispMac"] = macStr;
+    if (snap.wispVersion != 0 && doc["wispVersion"].isNull()) {
+      doc["wispVersion"] = snap.wispVersion;
+    }
+    if (snap.lastHelloMs != 0 && doc["helloFlags"].isNull()) {
+      doc["helloFlags"] = snap.flags;
+    }
+    if (snap.paletteIdPrefix[0] != '\0' && doc["helloPaletteIdPrefix"].isNull()) {
+      doc["helloPaletteIdPrefix"] = snap.paletteIdPrefix;
+    }
+    if (snap.lastHelloMs != 0 && doc["helloLastSeenMs"].isNull()) {
+      doc["helloLastSeenMs"] = snap.lastHelloMs;
+    }
+  }
+  if (snap.lastStatusMs != 0 && doc["statusLastSeenMs"].isNull()) {
+    doc["statusLastSeenMs"] = snap.lastStatusMs;
+  }
+
+  std::string out;
+  serializeJson(doc, out);
+  return out;
 }
 
 }  // namespace lamp

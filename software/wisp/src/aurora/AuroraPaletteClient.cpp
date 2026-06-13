@@ -118,7 +118,12 @@ void AuroraPaletteClient::handleFrame(const uint8_t* data, size_t len) {
         for (pb_size_t i = 0; i < d.palette.states_count; ++i) {
             const auto& z = d.palette.states[i];
             if (z.has_active_color_palette_id) {
-                setDesired(z.has_zone ? z.zone : 0, z.active_color_palette_id);
+                const int zoneNum = z.has_zone ? z.zone : 0;
+                // Phase D: notify observed-zones tracking BEFORE setDesired
+                // so the wisp's ZoneSelector sees every zone announced on the
+                // wire, not just ones we manage to resolve colors for.
+                if (onZoneObserved_) onZoneObserved_(zoneNum);
+                setDesired(zoneNum, z.active_color_palette_id);
             }
         }
     }

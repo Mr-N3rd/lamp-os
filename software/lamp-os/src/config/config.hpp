@@ -153,10 +153,11 @@ class Config {
   bool homeSectionDirty() const { return homeSectionDirty_; }
   bool settingsBlobDirty() const { return settingsBlobDirty_; }
 
-  // Per-peer social disposition (1=salty .. 3=neutral .. 5=smitten). Lives
-  // in a SEPARATE NVS key ("dispositions") from the main config blob so the
-  // peer list can grow without bloating CHAR_LAMP_SECTION / settings_blob.
-  // Stored as JSON object { "peerName": 1..5 }. Bounded to ~100 entries.
+  // Per-peer social disposition (1=Salty, 2=Wary, 3=Neutral, 4=Fond,
+  // 5=Smitten). Lives in a SEPARATE NVS key ("dispositions") from the
+  // main config blob so the peer list can grow without bloating
+  // CHAR_LAMP_SECTION / settings_blob. Stored as JSON object
+  // { "peerName": 1..5 }. Bounded to ~100 entries.
   // Per-lamp metadata — never synced cross-mesh; each lamp has its own view.
   static constexpr uint8_t kDispositionDefault = 3;
   static constexpr size_t kDispositionsMax = 100;
