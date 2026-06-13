@@ -92,7 +92,19 @@ Then find the `Serial.printf("[nvs] persistConfig wrote %u bytes\n", ...)` line 
 
 Also update the early-failure log lines if any to include `via`.
 
-- [ ] **Step 3: Update the existing caller in `standard_lamp.cpp:1375`**
+- [ ] **Step 3: Inventory all `persistConfig` callers**
+
+Before editing, grep for every caller so none is missed:
+
+```bash
+cd /Users/jerrett/projects/lamp-os/software/lamp-os && rg "persistConfig\(" src
+```
+
+Expected: callers in `src/lamps/standard_lamp.cpp:1375` only. (The dispositions path has its own `persistDispositions_` and doesn't share this function.) If the grep returns additional matches not in `config.cpp`, update them all in step 4.
+
+- [ ] **Step 4: Update the existing caller(s)**
+
+For each caller found in step 3, pass a short `via` tag matching the surrounding context. Standard tags: `"expressionOp"`, `"settings_blob"`, `"commit"`. Example for the one known caller at `standard_lamp.cpp:1375`:
 
 Change:
 
@@ -106,7 +118,7 @@ to:
       config.persistConfig("expressionOp");
 ```
 
-- [ ] **Step 4: Run native tests**
+- [ ] **Step 5: Run native tests**
 
 ```bash
 cd /Users/jerrett/projects/lamp-os/software/lamp-os && pio test -e native
@@ -114,7 +126,7 @@ cd /Users/jerrett/projects/lamp-os/software/lamp-os && pio test -e native
 
 Expected: 272/272 tests pass.
 
-- [ ] **Step 5: Build firmware**
+- [ ] **Step 6: Build firmware**
 
 ```bash
 cd /Users/jerrett/projects/lamp-os/software/lamp-os && pio run -e upesy_wroom
@@ -122,7 +134,7 @@ cd /Users/jerrett/projects/lamp-os/software/lamp-os && pio run -e upesy_wroom
 
 Expected: SUCCESS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add software/lamp-os/src/config/config.hpp software/lamp-os/src/config/config.cpp software/lamp-os/src/lamps/standard_lamp.cpp
@@ -179,27 +191,34 @@ mkdir -p /Users/jerrett/projects/lamp-os/software/lamp-os/src/components/apply
 //
 // Header-only so native tests can link without dragging in NimBLE / the
 // rest of standard_lamp.cpp.
+//
+// Dependencies pulled in by the include chain:
+//   util/levels.hpp        — lamp::calculateBrightnessLevel
+//   standard_lamp.hpp      — LAMP_MAX_BRIGHTNESS, strip handles
+//   config/config.hpp      — Config, extern lamp::config
 
 #pragma once
 
+#include <Adafruit_NeoPixel.h>
 #include <cstdint>
 
 #include "config/config.hpp"
+#include "lamps/standard_lamp.hpp"
+#include "util/levels.hpp"
 
 namespace lamp {
 
-// Forward declarations — definitions live in standard_lamp.cpp where the
-// strip handles and the micro-fade triple live as file-statics.
 class Config;
 extern Config config;
 
-// Strip handles for setBrightness. Defined in standard_lamp.cpp.
-extern class Adafruit_NeoPixel* shadeStrip;
-extern class Adafruit_NeoPixel* baseStrip;
+// Strip handles defined in standard_lamp.cpp.
+extern Adafruit_NeoPixel* shadeStrip;
+extern Adafruit_NeoPixel* baseStrip;
 
 // Micro-fade triple — file-static in standard_lamp.cpp. Exposed via
 // these accessors so apply_brightness.hpp can read/write without
-// pulling in the rest of the file.
+// pulling in the rest of the file. Definitions live inside
+// `namespace lamp { ... }` in standard_lamp.cpp (Task 2 Step 3).
 uint8_t  brightnessFadeSource();
 uint8_t  brightnessFadeTarget();
 uint32_t brightnessFadeStartMs();
@@ -208,9 +227,7 @@ void     setBrightnessFade(uint8_t source, uint8_t target, uint32_t startMs);
 void     clearBrightnessFadeSeed();
 uint8_t  computeUserBrightnessNow(uint32_t nowMs);
 
-// Bookkeeping the brightness drain has always done — kept as hooks so
-// the helpers can call into the existing configurator behaviors without
-// the apply module needing to know their full surface.
+// Bookkeeping the brightness drain has always done.
 void stampConfiguratorActivity(uint32_t nowMs);
 
 // Apply effective brightness immediately (no fade). Calls into the
@@ -236,15 +253,13 @@ inline void brightnessToConfig(uint8_t level, bool isHomeMode) {
   ::lamp::setBrightnessFade(source, level, fadeNow);
   // Apply initial sample so the strip starts moving this drain cycle.
   // (The compositor's per-tick interpolation handles the rest.)
-  extern uint8_t calculateBrightnessLevel(uint8_t maxBrightness,
-                                          uint8_t level);
   if (::lamp::shadeStrip) {
-    reinterpret_cast<class Adafruit_NeoPixel*>(::lamp::shadeStrip)
-        ->setBrightness(calculateBrightnessLevel(255, source));
+    ::lamp::shadeStrip->setBrightness(
+        ::lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, source));
   }
   if (::lamp::baseStrip) {
-    reinterpret_cast<class Adafruit_NeoPixel*>(::lamp::baseStrip)
-        ->setBrightness(calculateBrightnessLevel(255, source));
+    ::lamp::baseStrip->setBrightness(
+        ::lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, source));
   }
 }
 
@@ -254,15 +269,13 @@ inline void brightnessToConfig(uint8_t level, bool isHomeMode) {
 // for shade/base color cascades).
 inline void brightnessToRender(uint8_t level, bool isHomeMode) {
   (void)isHomeMode;  // Cascade brightness isn't home-mode-routed.
-  extern uint8_t calculateBrightnessLevel(uint8_t maxBrightness,
-                                          uint8_t level);
   if (::lamp::shadeStrip) {
-    reinterpret_cast<class Adafruit_NeoPixel*>(::lamp::shadeStrip)
-        ->setBrightness(calculateBrightnessLevel(255, level));
+    ::lamp::shadeStrip->setBrightness(
+        ::lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
   }
   if (::lamp::baseStrip) {
-    reinterpret_cast<class Adafruit_NeoPixel*>(::lamp::baseStrip)
-        ->setBrightness(calculateBrightnessLevel(255, level));
+    ::lamp::baseStrip->setBrightness(
+        ::lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
   }
 }
 
@@ -284,9 +297,33 @@ inline void brightnessImmediate(uint8_t level, bool isHomeMode) {
 }  // namespace lamp
 ```
 
-- [ ] **Step 3: Add the accessor implementations + extern declarations in `standard_lamp.cpp`**
+- [ ] **Step 3: Add the accessor implementations + move existing functions into `namespace lamp`**
 
-In `software/lamp-os/src/lamps/standard_lamp.cpp`, find the file-statics `s_userBrightnessSource`, `s_userBrightnessTarget`, `s_userBrightnessFadeStartMs`, `s_userBrightnessSeeded` (search for `s_userBrightnessSeeded`). Below them, add the accessor definitions:
+`computeUserBrightnessNow` is at `standard_lamp.cpp:1006` (file-scope global). `applyEffectiveBrightness` is at `standard_lamp.cpp:95` (file-scope global). Both must be *defined* inside `namespace lamp { ... }` for `apply_brightness.hpp` to call them via `::lamp::`. A header declaration alone won't satisfy the linker — the definition must be in the same namespace as the declaration.
+
+3a. Find `computeUserBrightnessNow` (search `static uint8_t computeUserBrightnessNow`). Wrap its definition in `namespace lamp { ... }` and remove the `static` qualifier:
+
+Before:
+```cpp
+static uint8_t computeUserBrightnessNow(uint32_t nowMs) {
+  // ...existing body...
+}
+```
+
+After:
+```cpp
+namespace lamp {
+uint8_t computeUserBrightnessNow(uint32_t nowMs) {
+  // ...existing body unchanged...
+}
+}  // namespace lamp
+```
+
+(If existing call sites in `standard_lamp.cpp` reference it unqualified, qualify them as `lamp::computeUserBrightnessNow(...)` or import via `using lamp::computeUserBrightnessNow;`.)
+
+3b. Same shape for `applyEffectiveBrightness` at line ~95. Wrap definition in `namespace lamp { ... }`, drop `static`, qualify call sites.
+
+3c. Find the file-statics `s_userBrightnessSource`, `s_userBrightnessTarget`, `s_userBrightnessFadeStartMs`, `s_userBrightnessSeeded` (search for `s_userBrightnessSeeded`). Below them, add the accessor definitions inside `namespace lamp`:
 
 ```cpp
 // Accessors for src/components/apply/apply_brightness.hpp — exposed
@@ -317,10 +354,6 @@ void stampConfiguratorActivity(uint32_t nowMs) {
 
 }  // namespace lamp
 ```
-
-Find the existing free function `computeUserBrightnessNow` — it should already be visible from the brightness drain. If it's `static` (file-scope), remove the `static` qualifier and add a declaration in the `namespace lamp { }` block above (`uint8_t computeUserBrightnessNow(uint32_t nowMs);`). If it's already in `namespace lamp`, no change needed.
-
-Same for `applyEffectiveBrightness` — find the function (search the file). If `static`, drop `static` and declare in the `namespace lamp { }` block above. If already in `namespace lamp`, fine.
 
 - [ ] **Step 4: Add the include in standard_lamp.cpp**
 
@@ -697,7 +730,7 @@ void runExpressionOp(JsonObject doc, bool mutateConfig) {
 }  // namespace lamp
 ```
 
-The existing `applyExpressionOpLocal` static function can stay temporarily — convert it into a one-line wrapper that calls `lamp::runExpressionOp(doc, true)`. Or delete it and update its callers to use the apply:: helper in the next step.
+**Delete the old `applyExpressionOpLocal` static function entirely** (replace it in place with the new `lamp::runExpressionOp` definition above). Step 4 updates all call sites to use the `lamp::apply::expressionOp*` helpers directly, so leaving a wrapper is dead code.
 
 - [ ] **Step 3: Write `apply_expressions.hpp`**
 
@@ -1175,20 +1208,33 @@ In `standard_lamp.cpp`, near the other `namespace lamp { ... }` helper definitio
 namespace lamp {
 
 void updateAdvertisedDeviceName(const char* newName) {
-  // Update the GAP device name. NimBLE will pick it up in subsequent
-  // scan responses; ongoing advertisements may need a tickAdvertising
-  // refresh to push the new name immediately.
+  // Update the GAP device name. NimBLE picks it up for subsequent
+  // *new* advertisement payloads; an active advertisement frame
+  // already in flight does not get rewritten.
   NimBLEDevice::setDeviceName(newName);
-  // TODO during execution: confirm whether bt.tickAdvertising() (or
-  // equivalent in this codebase) auto-rebuilds advertisement payload
-  // on next tick, or if an explicit advert-refresh call is needed.
-  // If the latter, add it here.
+  // bluetooth.cpp's tickAdvertising() (line ~219) rebuilds the COLOR
+  // portion of the advert on color change but does NOT rebuild the
+  // device-name portion — the name was set once at `bt.begin()` and
+  // re-applied only via `applyAdvertisementPayload` when colors change.
+  // So setDeviceName() alone may not surface the new name to a phone
+  // already mid-scan.
+  //
+  // IMPLEMENTER-ACTION (bench-verified during Task 16 step 2):
+  //   - Flash this build to jacko, set a name via settings_blob.
+  //   - From the Pixel app, force-stop and re-scan. Does the new name
+  //     appear?
+  //   - If yes — leave this helper as-is, document the "must rescan"
+  //     behavior in the rename UX.
+  //   - If no — add an explicit advert-payload rebuild here, e.g.:
+  //       bt.refreshAdvertisedName();  // would need to be added to bluetooth.cpp
+  //     or as a workaround: stop + start advertising via
+  //     NimBLEDevice::getAdvertising()->stop(); ->start();
+  //
+  // Do NOT proceed past Task 16 step 2 without confirming this behavior.
 }
 
 }  // namespace lamp
 ```
-
-(The `TODO during execution` is a real implementer-action item — the bench test #1 verifies the behavior; if rename doesn't propagate to scanning phones without a manual app re-discover, this needs an extra call.)
 
 - [ ] **Step 3: Build firmware**
 
@@ -1577,12 +1623,16 @@ Find `if (pendingSettingsBlobJson.valid) {` (around line 1368). Replace the enti
     } else if (incomingDoc["factoryReset"].as<bool>()) {
       // Factory reset sentinel — wipe NVS + reboot, bypass the apply
       // orchestrator entirely.
-#ifdef LAMP_DEBUG
+      // The co-shipping warning is UNCONDITIONAL (not LAMP_DEBUG-gated):
+      // this is forward defense against an app that accidentally bundles
+      // factoryReset with other fields. The app guard makes it impossible
+      // in normal flow, but fleet logs must surface the unexpected case.
       if (incomingDoc.as<JsonObject>().size() > 1) {
         Serial.println(
             "[loop] settingsBlob WARNING: factoryReset co-shipped with "
             "other keys — those keys will be silently dropped.");
       }
+#ifdef LAMP_DEBUG
       Serial.println("[loop] settingsBlob: factoryReset sentinel, wiping NVS");
 #endif
       if (!prefs.begin("lamp", false)) {
@@ -1872,6 +1922,14 @@ EOF
 
 The capstone task. Registers CHAR_COMMIT via WriteRouter with `allowEmpty=true`, adds the file-static debounce state, wires the drain, and ships the hash-dedup optimization.
 
+**Precondition check before starting (Phase A.1 ordering invariant):**
+
+```bash
+ls software/lamp-os/src/components/apply/ | grep -E "apply_(brightness|shade_colors|base_colors|expressions)\.hpp"
+```
+
+Expected: all four files present. If any is missing, **STOP** — Tasks 2-5 (the user/remote mutation split) must be merged first. CHAR_COMMIT cannot ship before the split or the first commit signal will persist cascade-contaminated config. See Task 6's regression test (`test_apply_remote_no_config_mutation`) for the invariant.
+
 **Files:**
 - Modify: `software/lamp-app-flutter/lib/core/ble/uuids.dart` (add `commit` UUID constant)
 - Modify: `software/lamp-os/src/components/network/ble_control.cpp` (register CHAR_COMMIT, post `pendingCommit`)
@@ -1911,33 +1969,57 @@ In the `ble_control` namespace public API section, add:
 ```cpp
 // Posts a commit signal from the BLE callback (Core 0) to the loop
 // task (Core 1). Loop drain debounces and calls config.persistConfig.
-void postPendingCommit();
+// Signature matches WriteRouter::PostFn — the data/len bytes are
+// semantically ignored (the arrival of the write IS the signal).
+void postPendingCommit(const char* data, size_t len);
 ```
 
-- [ ] **Step 4: Wire the CHAR_COMMIT callback in `ble_control.cpp`**
+- [ ] **Step 4a: Verify WriteRouter API shape**
 
-Locate the service-init code (search for the existing CHAR_BRIGHTNESS or CHAR_SETTINGS_BLOB registration). Add a similar block for CHAR_COMMIT using the WriteRouter with `allowEmpty=true`:
+Pre-flight check before writing the registration in Step 4b. Confirm the API matches the spec:
 
-```cpp
-// CHAR_COMMIT — parameterless commit signal. Auth-gated via isAuthed
-// (plaintext path) OR via GCM tag verification (encrypted path) — the
-// WriteRouter's standard auth+crypto plumbing handles both. The payload
-// is semantically ignored: this char's value IS its arrival.
-{
-  auto& route = writeRouter.add(CHAR_COMMIT_UUID);
-  route.setAllowEmpty(true);
-  route.setRawAuth([](uint16_t h) { return isAuthed(h); });
-  route.onWrite([](const uint8_t* /*data*/, size_t /*len*/,
-                   uint16_t /*connHandle*/) {
-    postPendingCommit();
-  });
-}
+```bash
+grep -nE "class WriteRouter|setDebugTag|setAllowEmpty|PostFn|AuthFn" software/lamp-os/src/components/network/write_router.hpp
 ```
 
-And add the `postPendingCommit` definition:
+Expected: `WriteRouter` constructor takes `(size_t maxSize, PostFn post, AuthFn auth)` for the plaintext case; `setDebugTag` and `setAllowEmpty` return `WriteRouter*` for chaining; `PostFn` is `void(*)(const char*, size_t)`; `AuthFn` is `bool(*)(uint16_t)`. The characteristic's NimBLE property is set as the second argument to `s_service->createCharacteristic(uuid, prop)`, NOT through WriteRouter.
+
+If grep returns no results or the signatures differ from the spec, halt and reconcile before proceeding.
+
+- [ ] **Step 4b: Wire the CHAR_COMMIT callback in `ble_control.cpp`**
+
+WriteRouter's API (verified from `software/lamp-os/src/components/network/write_router.hpp:76-186`):
+- Plaintext constructor: `WriteRouter(maxSize, postFn, authFn)`
+- `PostFn` signature: `void(const char* data, size_t len)`
+- `AuthFn` signature: `bool(uint16_t connHandle)`
+- Chained `setDebugTag(tag)` and `setAllowEmpty(bool)` both return `WriteRouter*`
+- NimBLE property is set via the second arg to `s_service->createCharacteristic(uuid, property)`
+
+Locate the existing registrations in `ble_control.cpp` (around line 1166-1175, search `CHAR_SHADE_COLORS`). Add a similar block for CHAR_COMMIT using `NIMBLE_PROPERTY::WRITE` (write-with-response, NOT `LIVE_WRITE_PROPS` which includes WRITE_NR):
 
 ```cpp
-void postPendingCommit() {
+// CHAR_COMMIT — parameterless commit signal. Plaintext WriteRouter; auth
+// is the existing isAuthed() gate. allowEmpty=true so the app can send
+// a single sentinel byte OR an empty payload — both are treated as the
+// commit signal (the bytes are ignored, the arrival IS the signal).
+//
+// Properties = NIMBLE_PROPERTY::WRITE (with-response, NOT the WRITE_NR
+// pair used for live-preview chars). With-response is load-bearing: a
+// BLE disconnect during a commit write must be a recoverable error on
+// the app side, not silently dropped.
+s_service->createCharacteristic(CHAR_COMMIT_UUID, NIMBLE_PROPERTY::WRITE)
+    ->setCallbacks((new WriteRouter(
+        /*maxSize=*/4, postPendingCommit, isAuthed))
+            ->setDebugTag("commit")
+            ->setAllowEmpty(true));
+```
+
+Place this near (just below) the existing CHAR_SHADE_COLORS / CHAR_BASE_COLORS registrations so a future reader finds it next to the other live-preview/control-side chars.
+
+And add the `postPendingCommit` definition (the `data` and `len` parameters are required by `WriteRouter::PostFn`'s signature but unused — the bytes carry no information):
+
+```cpp
+void postPendingCommit(const char* /*data*/, size_t /*len*/) {
   // Single-bool naturally atomic on Xtensa — no portMUX.
   extern volatile bool g_pendingCommit;
   g_pendingCommit = true;
@@ -2024,19 +2106,11 @@ In `standard_lamp.cpp`'s loop drain block. Place this **AFTER** the per-section 
 
 - [ ] **Step 7: Force-flush commit on BLE disconnect**
 
-Find the BLE disconnect handler (search for `pendingFlushDispositionsRequested = true` — adjacent code). Add right after that line:
+The BLE disconnect handler lives in `ble_control.cpp:385-426`. The marker line is `postPendingFlushDispositions();` at `ble_control.cpp:421` — the disconnect's existing force-flush hook for dispositions. Add the commit force-flush right next to it.
 
-```cpp
-  // Force-flush a pending commit on disconnect so a quick edit-then-
-  // disconnect doesn't lose the user's last change.
-  g_pendingCommit = true;
-  commitDirty = true;
-  lastCommitSignalMs = millis() - kCommitFlushIdleMs;  // force immediate flush eligibility
-```
+Cross-core safety: the disconnect handler runs on Core 0 (NimBLE callback context); the commit drain runs on Core 1 (loop task). Writing the debounce timestamp from Core 0 races. Safer pattern: a separate `volatile bool g_forceCommitFlush` that Core 0 sets and Core 1 reads — single-bool naturally atomic on Xtensa, no portMUX needed.
 
-Wait — the BLE disconnect handler likely runs on Core 0. Setting `lastCommitSignalMs` and `commitDirty` from Core 0 races the loop drain on Core 1. Safer pattern: only set `g_pendingCommit = true`, and have a separate `volatile bool g_forceCommitFlush = false` that the disconnect handler sets. The loop drain reads it and triggers an immediate flush.
-
-Replace the above with:
+In `ble_control.cpp:421`, after the existing `postPendingFlushDispositions();` line, add:
 
 ```cpp
   // Force-flush a pending commit on disconnect so a quick edit-then-
@@ -2047,15 +2121,21 @@ Replace the above with:
   g_forceCommitFlush = true;
 ```
 
-And declare/init `g_forceCommitFlush` in `standard_lamp.cpp` near `g_pendingCommit`. In the drain, change the "should we flush" check to:
+In `standard_lamp.cpp`, near the `g_pendingCommit` declaration from Step 5, add:
+
+```cpp
+volatile bool g_forceCommitFlush = false;
+```
+
+In the commit drain block from Step 6, change the "should we flush" condition:
 
 ```cpp
   if (commitDirty &&
       (g_forceCommitFlush ||
        (millis() - lastCommitSignalMs) >= kCommitFlushIdleMs)) {
     g_forceCommitFlush = false;
-    // ... rest of the persist block as in Step 6 ...
-  }
+    if (firmwareReceiver.isInProgress()) {
+      // ... rest of the persist block as in Step 6 ...
 ```
 
 - [ ] **Step 8: Build firmware**
@@ -2374,23 +2454,25 @@ Same as #1 but for any other settings_blob-touching field (e.g., toggle Home Mod
 
 - [ ] **Step 4: Bench test #11 — OTA-during-commit interlock**
 
-This is harder without the app driving OTA, but you can simulate:
-1. Begin an OTA flash via the existing OTA test path (refer to project README / OTA validation memory from 2026-06-05).
-2. Mid-flash, use a manual BLE write tool (`gatttool` or a quick Dart script) to write CHAR_COMMIT to jacko.
-3. In jacko's serial log, expect `[loop] commit drain: OTA in progress, deferred`.
-4. After OTA completes, the commit eventually fires (next tick after idle window passes since the most recent commit signal). **PASS**: no NVS contention; commit-or-defer behavior visible in logs.
+**Default disposition: DEFERRED TO PHASE B.** Phase A doesn't ship the app changes that emit CHAR_COMMIT writes; manually driving a CHAR_COMMIT without a written test client is enough work to be its own task. Mark as deferred in Step 7's commit message and revisit during Phase B's bench pass.
 
-If a manual CHAR_COMMIT write is impractical without Phase B's app changes, mark this bench test as **deferred to Phase B** when the app actually writes commits. Document this in the commit message.
+If you want to verify it now anyway, the lightweight option is a Dart snippet using `flutter_blue_plus` from a tiny test app, or `bluetoothctl` (Linux only) — neither is part of this plan's scope.
 
-- [ ] **Step 5: Bench test #12 — Cascade contamination regression**
+Native test coverage for the interlock is in Task 15 (`test_ota_in_progress_defers_flush`); the bench test is a "did the wiring actually compose end-to-end" smoke check.
 
-Requires both lamps and the wisp in steady-state. Sequence:
-1. Make floral cascade a brightness pulse to jacko (e.g., a social greet — verify in floral's serial that a brightness CONTROL_OP is being broadcast).
-2. While the cascade is mid-flight, drive a manual CHAR_COMMIT to jacko (same caveat as #11 — may need Phase B's app).
-3. Power-cycle jacko.
-4. **PASS**: jacko's persisted brightness is jacko's LOCAL value, NOT the cascade-relayed value from floral.
+- [ ] **Step 5: Bench test #12 — Cascade contamination regression (proxy version)**
 
-If the manual commit is impractical, do the following proxy: at jacko, set a local brightness via the app's Save-pill path (which writes settings_blob → persistConfig). Then have floral cascade a different brightness. Check that jacko's `config.lamp.brightness` (visible via the next section read) returns to the LOCAL value, not the cascade. The cascade should render visually but not contaminate. **PASS**: floral's cascade brightness shows on jacko's strip during the cascade window but the persisted/served value is jacko's local choice.
+Phase A doesn't ship CHAR_COMMIT app callers, so test the invariant via the settings_blob path instead. The invariant under test: a cascade-relayed brightness CONTROL_OP must NOT contaminate `config.lamp.brightness`.
+
+1. From the app, set jacko's brightness to 50 via the Save pill (writes settings_blob → `persistConfig("settings_blob")` → reboot).
+2. After jacko reboots and reconnects, verify `config.lamp.brightness == 50` via the section read.
+3. Trigger a cascade from floral to jacko at a different brightness (e.g., 90). Confirm via floral's serial that `MSG_CONTROL_OP brightness=90 → jacko` was broadcast and via jacko's serial that the cascade was received.
+4. While jacko's strip renders at 90 (cascade in effect), trigger a section re-read or wait for the next section-cache push.
+5. **PASS**: jacko's `config.lamp.brightness` reads 50 (the persisted value). The cascade rendered visually (90 brightness on the strip) but did NOT mutate config.
+
+If `config.lamp.brightness` reads 90 after the cascade, the user/remote split in Tasks 2-3 didn't land correctly — `applyRemoteOpLocal("brightness")` is still routing through `postPendingBrightness` instead of `apply::brightnessToRender`. Recheck Task 3 step 2.
+
+The full Phase A.2/A.3 path (CHAR_COMMIT actually firing under cascade pressure) is deferred to Phase B's bench pass.
 
 - [ ] **Step 6: Run native tests one more time to make sure nothing regressed**
 
