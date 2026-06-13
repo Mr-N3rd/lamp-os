@@ -1303,10 +1303,22 @@ class ControlNotifier extends _$ControlNotifier {
       expressions: ExpressionsSection(expressions: next),
     ));
     await _writeExpressionOp({'op': 'upsert', 'entry': entry.toJson()});
+    // Firmware-side, applyExpressionOpLocal + persistConfig has now written
+    // the new entry to NVS (added 2026-06-13 — see standard_lamp.cpp's
+    // expressionOp drain). Mirror that on the app side by advancing
+    // `_original.expressions` so isDirty clears immediately and the UI's
+    // "unsaved changes" indicator goes away. The lamp_shell isDirty pill
+    // was sticking on every Update click because `_original` only got
+    // refreshed via the full settingsBlob save + reboot path, which the
+    // expressions screen never invokes.
+    _original = _original.copyWith(
+      expressions: ExpressionsSection(expressions: next),
+    );
   }
 
   /// Remove the expression keyed by (type, target). Live-previews via
-  /// CHAR_EXPRESSION_OP; NVS persistence happens on the next global Save.
+  /// CHAR_EXPRESSION_OP; the firmware persists to NVS immediately
+  /// (added 2026-06-13).
   Future<void> removeExpression({
     required String type,
     required int target,
@@ -1324,6 +1336,12 @@ class ControlNotifier extends _$ControlNotifier {
       'type': type,
       'target': target,
     });
+    // Mirror the firmware-side NVS persist on the app side — same reason
+    // as upsertExpression above. Without this the lamp_shell isDirty
+    // pill stays lit after a delete.
+    _original = _original.copyWith(
+      expressions: ExpressionsSection(expressions: next),
+    );
   }
 
   /// Live-previews `entry` in the firmware's in-memory expressionManager

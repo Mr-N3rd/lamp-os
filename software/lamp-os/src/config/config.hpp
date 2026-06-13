@@ -87,6 +87,20 @@ class Config {
    */
   JsonDocument asJsonDocument();
 
+  /**
+   * @brief Persist the current in-memory config to NVS under the "cfg" key.
+   *
+   * Used by live-preview drains (e.g. expressionOp) that want their change
+   * to survive a reboot WITHOUT going through the settings_blob path's
+   * fade-out-and-reboot. The runtime state has already been applied by
+   * the caller; this just writes the canonical JSON to NVS.
+   *
+   * Returns true iff prefs.begin() succeeded and putString wrote > 0
+   * bytes. On failure the in-memory state is unchanged — the next call
+   * may succeed.
+   */
+  bool persistConfig();
+
   // Per-section serializers — each returns a String of just the JSON for
   // that section. Used by the split CHAR_*_SECTION characteristics so each
   // stays well under MTU.

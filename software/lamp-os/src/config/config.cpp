@@ -269,6 +269,34 @@ void Config::loadDispositionsFromPrefs_() {
   dispositions_.erase(last, dispositions_.end());
 }
 
+bool Config::persistConfig() {
+  if (!prefs) return false;
+  JsonDocument doc = asJsonDocument();
+  String out;
+  serializeJson(doc, out);
+  // Match persistDispositions_'s defensive pattern — prefs.begin can fail
+  // when NVS is full or the partition is corrupt; a putString against an
+  // unopened handle silently writes nothing. Skip the write and let the
+  // caller decide (callers today just move on; expression edits stay in
+  // RAM and the next persistConfig attempt may succeed).
+  if (!prefs->begin("lamp", false)) {
+#ifdef LAMP_DEBUG
+    Serial.println("[nvs] prefs.begin failed (persistConfig)");
+#endif
+    return false;
+  }
+  size_t written = prefs->putString("cfg", out.c_str());
+  prefs->end();
+#ifdef LAMP_DEBUG
+  if (written == 0) {
+    Serial.println("[nvs] persistConfig putString wrote 0 bytes");
+  } else {
+    Serial.printf("[nvs] persistConfig wrote %u bytes\n", (unsigned)written);
+  }
+#endif
+  return written > 0;
+}
+
 bool Config::persistDispositions_() {
   if (!prefs) return false;
   String out = asDispositionsJson();

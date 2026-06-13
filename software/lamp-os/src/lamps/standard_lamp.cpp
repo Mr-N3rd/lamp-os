@@ -1353,10 +1353,27 @@ void loop() {
 #endif
 
     JsonDocument doc;
+    bool applied = false;
     if (deserializeJson(doc, buf) == DeserializationError::Ok) {
       applyExpressionOpLocal(doc.as<JsonObject>());
+      applied = true;
     }
     config.invalidateExpressionsSection();
+
+    // Immediate NVS persist after the runtime mutation. Diverges from the
+    // architectural invariant documented at the brightness drain above
+    // ("live-preview drains do NOT write NVS — only settings_blob does")
+    // because the expression editor UX has no global Save step: the user
+    // taps Update/Add/Delete and expects the change to survive a reboot,
+    // matching the setup-service UX. applyExpressionOpLocal has already
+    // mirrored the change into config.expressions, so config.asJsonDocument()
+    // serializes the new authoritative state — no merge needed, no reboot
+    // needed. (If we later extend this pattern to baseColors/shadeColors/
+    // brightness, those will need a debounce because slider drags can fire
+    // ~4 BLE writes/sec and we don't want one NVS write per drag tick.)
+    if (applied) {
+      config.persistConfig();
+    }
   }
 
   // settings_blob drain — runs AFTER expressionOp drain so that any
