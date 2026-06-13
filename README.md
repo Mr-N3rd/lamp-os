@@ -98,6 +98,32 @@ flutter pub get
 flutter run                            # picks any connected Android device
 ```
 
+**Android emulator (Windows):** for UI / navigation / widget-test work without a physical phone. Note: **emulators have no Bluetooth radio**, so you can't actually talk to lamps from one — anything that depends on BLE scan, connect, GATT read/write, or the seen/nearby lamp list won't function. Use the emulator for layout, theme, routing, and form work; switch to a physical device for anything touching `core/ble/`.
+
+```powershell
+# 1. Enable hardware acceleration (one-time, requires reboot).
+#    Settings → Apps → Optional features → More Windows features →
+#    enable "Windows Hypervisor Platform". (Disable Hyper-V if it's on —
+#    Android Emulator uses WHPX, not Hyper-V directly.)
+
+# 2. Create a virtual device.
+#    Android Studio → Tools → Device Manager → Create Device.
+#    Pick Pixel 7, system image API 34 (download if needed), Finish.
+
+# 3. List + launch from the CLI.
+flutter emulators                         # shows installed AVDs
+flutter emulators --launch Pixel_7_API_34
+flutter run                               # picks the running emulator
+```
+
+**iOS from Windows:** there's no local path. Building or running on an iOS device or Simulator requires Xcode, which is macOS-only — there is no Windows iOS Simulator. Options:
+
+- Borrow a Mac and follow the macOS section above.
+- Push to a CI service with macOS runners (Codemagic, GitHub Actions `macos-latest`, Bitrise) that builds + signs the IPA and side-loads to a registered device.
+- Use a remote-Mac service (MacStadium, MacinCloud) over VNC/SSH and treat it as the dev box.
+
+Android USB debugging from Windows is fine; iOS just isn't.
+
 ### Common Flutter commands
 
 ```sh
