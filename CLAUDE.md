@@ -17,19 +17,13 @@ Read these before changing networking, protocol, or BLE behavior:
 
 - **[`docs/mesh-api.md`](docs/mesh-api.md)** — wire-format spec for every
   message type. The code wins ties; update this doc when it doesn't.
-- **[`docs/mesh-deployment.md`](docs/mesh-deployment.md)** — operational
-  reference: the v0x03 production lock-in, the BLE coex story, empirical
-  per-link recv rates, the gossip-relay-at-scale math, deployment
-  checklist, and the troubleshooting playbook. Captures hard-won findings
-  from real hardware testing; read it before chasing a "mesh feels
-  unreliable" report.
 
 ## Lock-ins (don't change without a protocol version bump)
 
-`PROTOCOL_VERSION = 0x03` is the production wire format. The frozen list
-lives in `docs/mesh-deployment.md` under "Production lock-in". Mixed-fleet
-across protocol versions does not interoperate (loud, diagnosable
-failure: peers don't show up).
+`PROTOCOL_VERSION = 0x03` is the production wire format for the deployed
+fleet — MSG_EVENT gossip-relays, DedupRing capacity is 64, HELLO interval
+is 5 s. Mixed-fleet across protocol versions does not interoperate (loud,
+diagnosable failure: peers don't show up).
 
 Note: the firmware-side `ble_svc_gatt_changed()` Service Changed indication
 + bonded SMP path shipped in commit `49e19c9` was fully reverted in

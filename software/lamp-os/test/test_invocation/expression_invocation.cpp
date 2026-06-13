@@ -2,8 +2,7 @@
 //
 // The Arduino-integrated JSON helpers (serializeInvocation, parseInvocation)
 // depend on ArduinoJson which isn't pulled into the native test env; those
-// are verified by the firmware build + the hardware integration test plan
-// in docs/superpowers/specs/2026-06-02-mesh-expression-triggering-design.md.
+// are verified by the firmware build + on-hardware integration testing.
 //
 // What IS testable natively is the cascade-key stripping helper, which is
 // pure data manipulation. We re-declare a minimal shape here (the same

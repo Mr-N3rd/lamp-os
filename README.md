@@ -45,7 +45,7 @@ Three components live under [`software/`](software/):
 - [`software/wisp/`](software/wisp/) — wisp infrastructure node firmware (Seeed XIAO ESP32-C6, build env `seeed_xiao_esp32_c6`)
 - [`software/lamp-app-flutter/`](software/lamp-app-flutter/) — iOS/Android control app
 
-See [`CLAUDE.md`](CLAUDE.md) for the project orientation, the v0x03 protocol lock-in, and pointers to [`docs/mesh-api.md`](docs/mesh-api.md) and [`docs/mesh-deployment.md`](docs/mesh-deployment.md).
+See [`CLAUDE.md`](CLAUDE.md) for the project orientation, the v0x03 protocol lock-in, and a pointer to [`docs/mesh-api.md`](docs/mesh-api.md) (wire-format spec).
 
 ## Development
 

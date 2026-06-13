@@ -17,6 +17,6 @@ Lamp overrides are transient (RAM-only on the lamp side). When wisp drops or pai
 
 Wisp has no BLE. The app talks to wisp via any nearby lamp acting as a proxy: the lamp surfaces wisp's last-overheard `MSG_WISP_HELLO` on a BLE characteristic, and forwards ops back to wisp over the mesh. WiFi credentials are configured the same way — out of the box, flash wisp once over USB and configure it from the app.
 
-## Spec
+## Wire format
 
-See `docs/superpowers/specs/2026-06-03-wisp-design.md` for the full architecture, wire format, and phased plan.
+Wisp/lamp message types (`MSG_WISP_HELLO`, `MSG_WISP_PAINT`, `MSG_WISP_RELEASE`, `MSG_WISP_OP`) and the OTA exchange (`MSG_FW_OFFER` … `MSG_FW_RESULT`) are documented in [`docs/mesh-api.md`](../../docs/mesh-api.md). LSIG signed-firmware footer format lives alongside the build scripts at [`scripts/README.md`](../../scripts/README.md).

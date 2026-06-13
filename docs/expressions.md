@@ -18,7 +18,7 @@ Files:
 | `software/lamp-os/src/config/config.cpp` | JSON serialisation + parsing; reserved-keys filter |
 | `software/lamp-app-flutter/lib/features/control/domain/sections.dart` | App-side `ExpressionConfig` mirror; same reserved-keys filter |
 | `software/lamp-app-flutter/lib/features/lamp_shell/domain/expression_meta.dart` | Per-type metadata (picker labels, default parameters, default wisp-gate flag) |
-| `docs/superpowers/specs/2026-06-02-mesh-expression-triggering-design.md` | Mesh cascade convention (cross-link, don't duplicate) |
+| `docs/mesh-api.md` (MSG_EVENT section) | Cascade wire format + stagger semantics + dedup window |
 
 ## `Expression` base class contract
 
@@ -83,7 +83,7 @@ Semantics:
 
 ## Mesh cascade integration
 
-When `parameters["cascadeEnabled"] == 1`, a local trigger fans out a matching `MSG_EVENT` to every reachable peer, staggered by `parameters["cascadeStaggerMs"]`. The structural loop break is in `triggerInvocation` — remote-arrived triggers are dispatched to a transient one-shot Expression instance and **never cascade**. See `docs/superpowers/specs/2026-06-02-mesh-expression-triggering-design.md` for the wire format, the `RecentCascade` dedup window (250 ms), and the parse-peek-first optimisation.
+When `parameters["cascadeEnabled"] == 1`, a local trigger fans out a matching `MSG_EVENT` to every reachable peer, staggered by `parameters["cascadeStaggerMs"]`. The structural loop break is in `triggerInvocation` — remote-arrived triggers are dispatched to a transient one-shot Expression instance and **never cascade**. See `docs/mesh-api.md` (MSG_EVENT section) for the wire format, the gossip-relay rule, and the per-msgType DedupRing (64 slots).
 
 ## Testing
 

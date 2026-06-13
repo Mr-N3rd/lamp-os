@@ -428,11 +428,3 @@ phone        lamp A (paired)             mesh                    wisp
 | `MSG_FW_RESULT` (0x45) | F | lamp → wisp: terminal status code |
 
 (Phase F is "force-push firmware over the mesh" — wisp carries a signed firmware blob embedded at wisp-build time and pushes to out-of-date lamps. See the wisp build script and `embed_firmware.py` when that lands.)
-
-## Related docs
-
-- **[mesh-deployment.md](mesh-deployment.md)** — operational reference for
-  shipping the fleet: production lock-in, BLE coex impact + the adaptive
-  TIGHT/WIDE conn-params behavior, empirical per-link recv rates, the
-  gossip-relay-at-scale math, the deployment checklist, and the
-  troubleshooting playbook. Read this before flashing a venue.
