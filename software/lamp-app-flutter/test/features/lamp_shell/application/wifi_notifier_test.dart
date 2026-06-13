@@ -93,9 +93,11 @@ void main() {
     addTearDown(sub.close);
     await c.read(wifiNotifierProvider(_devId).future);
 
-    // Push a notify with state "connected" and NO scanResults.
-    final ble = c.read(bleClientProvider);
-    await ble.write(
+    // Push a notify with state "connected" and NO scanResults. Use
+    // simulateNotify rather than write() because production fbp does
+    // NOT echo writes to subscribers (audit cq-C1).
+    final ble = c.read(bleClientProvider) as InMemoryBleClient;
+    ble.simulateNotify(
       _devId,
       BleUuids.controlService,
       BleUuids.wifiState,
@@ -123,8 +125,8 @@ void main() {
     addTearDown(sub.close);
     await c.read(wifiNotifierProvider(_devId).future);
 
-    final ble = c.read(bleClientProvider);
-    await ble.write(
+    final ble = c.read(bleClientProvider) as InMemoryBleClient;
+    ble.simulateNotify(
       _devId,
       BleUuids.controlService,
       BleUuids.wifiState,

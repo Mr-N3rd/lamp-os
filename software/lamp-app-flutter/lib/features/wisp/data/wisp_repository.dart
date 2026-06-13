@@ -99,9 +99,16 @@ class WispRepository {
   /// their next scan). The wisp's own connection state surfaces back
   /// through `WispStatus.wifiConnected` on the next status notify.
   ///
-  /// Plaintext over BLE today; the link is gated by the connection-level
-  /// auth check, but the password is not double-encrypted en-route.
-  /// Matches the lamp-side wisp config posture (also plaintext NVS).
+  /// SECURITY (accepted threat T1): the WiFi PSK leaks in TWO places —
+  /// (a) here on the BLE write to `CHAR_WISP_OP`, and (b) downstream
+  /// when the lamp re-broadcasts the wispOp as plaintext MSG_CONTROL_OP
+  /// on the ESP-NOW mesh for the wisp to ingest. The mesh-leg leak is
+  /// the more concerning one — ESP-NOW range is ~30 m LoS so a sniffer
+  /// doesn't have to be visually near the user. The only real fix is
+  /// fleet-wide mesh authentication (shared PSK distributed at
+  /// provisioning), which was deliberately rejected — see
+  /// docs/superpowers/notes/2026-06-10-accepted-security-threats.md.
+  /// Threat is bounded by physical proximity at configuration time.
   Future<void> setWifi(String ssid, String password) async {
     await _writeOp({
       'char': 'wispOp',

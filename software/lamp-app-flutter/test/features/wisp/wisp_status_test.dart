@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_app/features/wisp/domain/wisp_source_mode.dart';
 import 'package:lamp_app/features/wisp/domain/wisp_status.dart';
+import 'package:lamp_app/features/wisp/domain/zone_source.dart';
 
 /// Wrap a JSON string as the raw UTF-8 bytes the BLE layer hands us.
 Uint8List _b(String s) => Uint8List.fromList(utf8.encode(s));
@@ -15,7 +16,7 @@ void main() {
       expect(s.present, isFalse);
       expect(s.wispMac, isNull);
       expect(s.currentZone, isNull);
-      expect(s.zoneSource, 'none');
+      expect(s.zoneSource, ZoneSource.none);
       expect(s.observedZones, isEmpty);
     });
 
@@ -24,7 +25,7 @@ void main() {
       expect(s.present, isFalse);
       expect(s.wispMac, isNull);
       expect(s.currentZone, isNull);
-      expect(s.zoneSource, 'none');
+      expect(s.zoneSource, ZoneSource.none);
     });
 
     test('invalid UTF-8 bytes → empty status (no throw)', () {
@@ -58,7 +59,7 @@ void main() {
       expect(s.present, isTrue);
       expect(s.wispMac, 'AA:BB:CC:DD:EE:FF');
       expect(s.currentZone, 3);
-      expect(s.zoneSource, 'nvs');
+      expect(s.zoneSource, ZoneSource.nvs);
       expect(s.observedZones, [0, 3, 7]);
       expect(s.wifiConnected, isTrue);
       expect(s.auroraConnected, isTrue);
@@ -68,21 +69,21 @@ void main() {
       final s = WispStatus.fromBytes(_b(
         '{"wispMac":"AA:BB:CC:DD:EE:FF","zoneSource":"firstSeen"}',
       ));
-      expect(s.zoneSource, 'firstSeen');
+      expect(s.zoneSource, ZoneSource.firstSeen);
     });
 
     test('zoneSource "appOp" round-trips', () {
       final s = WispStatus.fromBytes(_b(
         '{"wispMac":"AA:BB:CC:DD:EE:FF","zoneSource":"appOp"}',
       ));
-      expect(s.zoneSource, 'appOp');
+      expect(s.zoneSource, ZoneSource.appOp);
     });
 
     test('zoneSource "none" round-trips', () {
       final s = WispStatus.fromBytes(_b(
         '{"wispMac":"AA:BB:CC:DD:EE:FF","zoneSource":"none"}',
       ));
-      expect(s.zoneSource, 'none');
+      expect(s.zoneSource, ZoneSource.none);
     });
 
     test('extra unknown keys do not crash', () {

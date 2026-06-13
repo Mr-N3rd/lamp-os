@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/app_snackbar.dart';
 import '../../../core/widgets/friendly_error.dart';
 import '../../control/application/control_notifier.dart';
 import '../../control/domain/sections.dart';
@@ -16,7 +17,14 @@ class ExpressionsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(controlNotifierProvider(lampId));
+    // .select to the expressions slice (audit perf-H2). The brightness /
+    // shade / base slider drags on ControlNotifier no longer rebuild
+    // this whole list of expression rows — only mutations to the
+    // expressions section (add / edit / reorder / delete / enable
+    // toggle) do.
+    final async = ref.watch(controlNotifierProvider(lampId).select(
+      (a) => a.whenData((s) => s.expressions),
+    ));
     return Scaffold(
       body: async.when(
         loading: () => ConnectingView(deviceId: lampId),
@@ -27,10 +35,10 @@ class ExpressionsScreen extends ConsumerWidget {
               'and try again.',
           rawError: e,
         ),
-        data: (state) {
+        data: (exprSection) {
           final notifier =
               ref.read(controlNotifierProvider(lampId).notifier);
-          if (state.expressions.expressions.isEmpty) {
+          if (exprSection.expressions.isEmpty) {
             return const Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
@@ -57,9 +65,9 @@ class ExpressionsScreen extends ConsumerWidget {
           }
           return ListView.builder(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            itemCount: state.expressions.expressions.length,
+            itemCount: exprSection.expressions.length,
             itemBuilder: (ctx, i) {
-              final e = state.expressions.expressions[i];
+              final e = exprSection.expressions[i];
               return _ExpressionTile(
                 lampId: lampId,
                 expression: e,
@@ -82,16 +90,11 @@ class ExpressionsScreen extends ConsumerWidget {
                     target: e.target,
                   );
                   if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Removed "${e.type}"'),
-                      duration: const Duration(seconds: 4),
-                      action: SnackBarAction(
-                        label: 'UNDO',
-                        onPressed: () =>
-                            notifier.upsertExpression(e),
-                      ),
-                    ),
+                  AppSnackbar.action(
+                    context,
+                    message: 'Removed "${e.type}"',
+                    actionLabel: 'UNDO',
+                    onAction: () => notifier.upsertExpression(e),
                   );
                 },
                 onTrigger: () => notifier.testExpression(e),

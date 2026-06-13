@@ -1,7 +1,7 @@
 # LampOS Flutter app
 
-Flutter (Dart) rewrite of the Capacitor + Vue lamp control app.
-Lives in the `flutter-rewrite` worktree until parity is reached on a real device.
+iOS/Android control app for the lamp fleet. Talks BLE GATT to lamps;
+does not directly participate in the ESP-NOW mesh.
 
 See:
 - Spec: `docs/superpowers/specs/2026-05-28-flutter-rewrite-design.md`

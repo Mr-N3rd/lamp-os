@@ -10,6 +10,7 @@ import '../../control/domain/lamp_color.dart';
 import '../../../core/ble/ble_client_provider.dart';
 import '../../../core/ble/uuids.dart';
 import '../data/wisp_repository.dart';
+import '../domain/zone_source.dart';
 import '../domain/wisp_source_mode.dart';
 import '../domain/wisp_status.dart';
 
@@ -184,21 +185,23 @@ class WispNotifier extends _$WispNotifier {
   /// `zoneSource: appOp` so the UI feels responsive; the next status
   /// notify will replace this with the wisp's authoritative view.
   ///
-  /// Throws if the BLE write fails — the optimistic state stays in
-  /// place (no notify is coming to reconcile it), so callers must
-  /// surface the failure to the user. The next genuine status notify
-  /// (or a manual refresh) will eventually correct local state once
-  /// the link recovers.
+  /// On BLE write failure, rolls the optimistic state back to its
+  /// pre-call snapshot before rethrowing (audit perf-M8). Without the
+  /// rollback the user sees the chip "stick" on the failed selection
+  /// even though the wisp never received the op — and there's no notify
+  /// coming to reconcile it.
   Future<void> setZone(int zoneId) async {
+    final prev = state;
     final cur = state.value ?? WispStatus.empty;
     state = AsyncData(cur.copyWith(
       currentZone: zoneId,
-      zoneSource: 'appOp',
+      zoneSource: ZoneSource.appOp,
     ));
     try {
       await _repo.setZone(zoneId);
     } catch (e, st) {
       debugPrint('WispNotifier.setZone($zoneId) failed: $e\n$st');
+      state = prev;
       rethrow;
     }
   }
@@ -207,19 +210,21 @@ class WispNotifier extends _$WispNotifier {
   /// next status update will show `zoneSource: firstSeen` (or `none`
   /// if no zone has been observed yet).
   ///
-  /// Throws on write failure (see [setZone] for rationale).
+  /// Rolls optimistic state back on write failure (see [setZone]).
   Future<void> clearZone() async {
+    final prev = state;
     final cur = state.value ?? WispStatus.empty;
     state = AsyncData(cur.copyWith(
       // Don't optimistically null currentZone — the wisp may keep
       // following whatever it was on until firstSeen kicks in. Just
       // flip the source so the "Clear selection" button hides.
-      zoneSource: 'firstSeen',
+      zoneSource: ZoneSource.firstSeen,
     ));
     try {
       await _repo.clearZone();
     } catch (e, st) {
       debugPrint('WispNotifier.clearZone() failed: $e\n$st');
+      state = prev;
       rethrow;
     }
   }
@@ -246,14 +251,17 @@ class WispNotifier extends _$WispNotifier {
 
   /// Phase E — set the wisp source mode (Off / Manual / Aurora).
   /// Optimistically reflects in local state so the pill picker doesn't
-  /// lag the tap; the wispStatus notify reconciles within ~2s.
+  /// lag the tap; the wispStatus notify reconciles within ~2s. Rolls
+  /// back the optimistic state on BLE write failure (audit perf-M8).
   Future<void> setSource(WispSourceMode mode) async {
+    final prev = state;
     final cur = state.value ?? WispStatus.empty;
     state = AsyncData(cur.copyWith(source: mode));
     try {
       await _repo.setSource(mode);
     } catch (e, st) {
       debugPrint('WispNotifier.setSource($mode) failed: $e\n$st');
+      state = prev;
       rethrow;
     }
   }
@@ -336,6 +344,16 @@ class WispNotifier extends _$WispNotifier {
   /// WispStatus to publish (the palette state is held outside it), but
   /// rebroadcasting the existing value is enough to nudge widgets that
   /// read [draftManualPalette] / [manualPaletteDirty] via the notifier.
+  ///
+  /// PERF (audit perf-H7, deferred): this defeats Riverpod's equality
+  /// dedup — `AsyncData(cur)` is a new wrapper around the same value,
+  /// so consumers that `ref.watch` rebuild even when nothing they read
+  /// has changed. The clean fix is to move `_draftManualPalette` into
+  /// its own `StateProvider` so consumers can `.select` to just the
+  /// palette slice. That refactor's wider than this remediation pass —
+  /// the gradient-bar resolution drop (256 → 30, this commit) cuts the
+  /// downstream cost so the visible jank is gone even with the
+  /// over-broad notify.
   void _bumpState() {
     final cur = state.value ?? WispStatus.empty;
     state = AsyncData(cur);

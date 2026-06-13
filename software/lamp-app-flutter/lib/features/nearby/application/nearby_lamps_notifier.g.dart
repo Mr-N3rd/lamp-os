@@ -83,7 +83,7 @@ final class NearbyLampsNotifierProvider
 }
 
 String _$nearbyLampsNotifierHash() =>
-    r'6b902a64c478a9ade5f5357e44079ba430dac593';
+    r'fab8bb03dc63ba63b9779991ffdc271dabd56dfe';
 
 abstract class _$NearbyLampsNotifier extends $Notifier<List<NearbyLamp>> {
   List<NearbyLamp> build();

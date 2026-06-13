@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_app/features/control/domain/lamp_color.dart';
 import 'package:lamp_app/features/control/domain/sections.dart';
+import 'package:lamp_app/features/social/domain/social_mode.dart';
 
 void main() {
   test('LampSection parses brightness + name', () {
@@ -120,5 +121,99 @@ void main() {
     expect(s.expressions, hasLength(2));
     expect(s.expressions[0].type, 'breathing');
     expect(s.expressions[1].target, 3);
+  });
+
+  group('value-class equality (audit cq-H / W7.7)', () {
+    // The point of overriding ==/hashCode on these is so Riverpod's
+    // `.select` and AsyncValue equality can short-circuit on unchanged
+    // sections. The tests pin that behaviour against accidental
+    // regression.
+
+    test('LampSection equal-by-field but distinct instances are ==', () {
+      // Build the second instance via fromJson so dart's const-literal
+      // canonicalisation doesn't make `identical(a, b)` true and mask a
+      // missing ==/hashCode override.
+      const a = LampSection(
+        name: 'a',
+        brightness: 100,
+        advancedEnabled: false,
+        socialMode: SocialMode.ambivert,
+        fwVersion: 1,
+        fwChannel: 'stable',
+      );
+      final b = LampSection.fromJson(<String, dynamic>{
+        'name': 'a',
+        'brightness': 100,
+        'advancedEnabled': false,
+        'socialMode': SocialMode.ambivert.wire,
+        'fwVersion': 1,
+        'fwChannel': 'stable',
+      });
+      expect(identical(a, b), isFalse);
+      expect(a, equals(b));
+      expect(a.hashCode, b.hashCode);
+    });
+
+    test('BaseSection equality uses deep colors + knockout', () {
+      // Build with mutable lists/maps so Dart's const-literal
+      // canonicalisation can't make `identical(a, b)` true and mask a
+      // missing == override.
+      // ignore: prefer_const_constructors
+      final a = BaseSection(
+        px: 35,
+        ac: 0,
+        bpp: 4,
+        byteOrder: 'GRBW',
+        colors: [const LampColor(r: 255, g: 0, b: 0, w: 0)],
+        knockout: {1: 50, 7: 75},
+      );
+      // ignore: prefer_const_constructors
+      final b = BaseSection(
+        px: 35,
+        ac: 0,
+        bpp: 4,
+        byteOrder: 'GRBW',
+        colors: [const LampColor(r: 255, g: 0, b: 0, w: 0)],
+        knockout: {1: 50, 7: 75},
+      );
+      expect(identical(a, b), isFalse);
+      expect(a, equals(b));
+      expect(a.hashCode, b.hashCode);
+
+      // Mutating one slot in the knockout map should produce inequality.
+      // ignore: prefer_const_constructors
+      final c = BaseSection(
+        px: 35,
+        ac: 0,
+        bpp: 4,
+        byteOrder: 'GRBW',
+        colors: [const LampColor(r: 255, g: 0, b: 0, w: 0)],
+        knockout: {1: 50, 7: 80},
+      );
+      expect(a, isNot(equals(c)));
+    });
+
+    test('ExpressionConfig equality uses deep parameters map', () {
+      const a = ExpressionConfig(
+        type: 'breathing',
+        enabled: true,
+        colors: [LampColor(r: 1, g: 2, b: 3, w: 0)],
+        intervalMin: 60,
+        intervalMax: 900,
+        target: 3,
+        parameters: {'rate': 5, 'depth': 10},
+      );
+      const b = ExpressionConfig(
+        type: 'breathing',
+        enabled: true,
+        colors: [LampColor(r: 1, g: 2, b: 3, w: 0)],
+        intervalMin: 60,
+        intervalMax: 900,
+        target: 3,
+        parameters: {'rate': 5, 'depth': 10},
+      );
+      expect(a, equals(b));
+      expect(a.hashCode, b.hashCode);
+    });
   });
 }

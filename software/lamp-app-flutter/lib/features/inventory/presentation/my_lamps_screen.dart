@@ -39,6 +39,12 @@ class MyLampsScreen extends ConsumerWidget {
         ref.watch(inventoryNotifierProvider).value ?? const [];
     final nearby = ref.watch(nearbyLampsNotifierProvider);
     final activeId = ref.watch(activeLampNotifierProvider).value;
+    // Materialise the id→NearbyLamp map once at the screen level so the
+    // per-tile _nearbyHit() lookup is O(1) instead of an O(n) linear
+    // scan. At an event with 22 lamps, the old loop was running ~484
+    // comparisons per build cycle (per tile × per nearby entry); the
+    // map cuts that to a hash lookup (audit perf-H6).
+    final nearbyById = <String, NearbyLamp>{for (final n in nearby) n.id: n};
 
     return Scaffold(
       appBar: AppBar(
@@ -52,6 +58,7 @@ class MyLampsScreen extends ConsumerWidget {
               _MyLampTile(
                 lamp: l,
                 nearby: nearby,
+                nearbyById: nearbyById,
                 isCurrent: l.id == activeId,
               ),
             const SizedBox(height: 8),
@@ -69,11 +76,17 @@ class _MyLampTile extends ConsumerWidget {
   const _MyLampTile({
     required this.lamp,
     required this.nearby,
+    required this.nearbyById,
     required this.isCurrent,
   });
 
   final InventoryLamp lamp;
   final List<NearbyLamp> nearby;
+
+  /// Pre-built id→NearbyLamp index so the per-tile hit check is O(1)
+  /// instead of O(n). Same list as `nearby` but materialised at the
+  /// screen level (audit perf-H6).
+  final Map<String, NearbyLamp> nearbyById;
 
   /// True iff this tile represents the currently-active lamp. Used to
   /// guard the `controlNotifierProvider` watch — watching every tile's
@@ -83,12 +96,7 @@ class _MyLampTile extends ConsumerWidget {
   /// fall back to nearby-scan-derived status.
   final bool isCurrent;
 
-  NearbyLamp? _nearbyHit() {
-    for (final n in nearby) {
-      if (n.id == lamp.id) return n;
-    }
-    return null;
-  }
+  NearbyLamp? _nearbyHit() => nearbyById[lamp.id];
 
   void _onTap(BuildContext context, WidgetRef ref) {
     // Park the active-lamp pointer so AppBar pickers / future opens
@@ -96,9 +104,12 @@ class _MyLampTile extends ConsumerWidget {
     unawaited(
         ref.read(activeLampNotifierProvider.notifier).set(lamp.id));
     // routeForLamp picks BT-only vs. control based on the lamp's
-    // mesh-protocol advertisement bit. See its docstring for the
-    // offline-lamp fallback rationale.
-    GoRouter.maybeOf(context)?.push(routeForLamp(lamp.id, nearby));
+    // mesh-protocol advertisement bit, falling back to the inventory's
+    // cached `lastKnownIsMesh` for offline lamps. See its docstring.
+    final inv = ref.read(inventoryNotifierProvider).value;
+    GoRouter.maybeOf(context)?.push(
+      routeForLamp(lamp.id, nearby, inventory: inv),
+    );
   }
 
   @override
@@ -117,9 +128,9 @@ class _MyLampTile extends ConsumerWidget {
         ref.watch(controlNotifierProvider(lamp.id).select(
           (async) => async.value?.connected ?? false,
         ));
-    final status = statusFor(
+    final status = statusForById(
       lampId: lamp.id,
-      nearby: nearby,
+      nearbyById: nearbyById,
       connected: connected,
     );
     return InkWell(

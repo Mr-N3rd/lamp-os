@@ -26,12 +26,16 @@ namespace wisp {
 inline constexpr size_t kStatusRingPixelCount = 30;
 
 // Warm-white fallback used when the ring has no palette to display
-// (sourceMode=Off, or Manual/Aurora with an empty palette). Tuned to read
-// as a tungsten bulb on a NEO_GRB WS2812 strip — slightly amber, no blue
-// bias. The same R/G ratio matches Adafruit's classic "warm white" example.
+// (sourceMode=Off, or Manual/Aurora with an empty palette). Pulled
+// noticeably warmer than "Adafruit warm white" because the WS2812 ring
+// runs at kStatusRingBrightness=40 (~16% of full scale), which
+// compresses the R:G:B ratio and washes out a too-pale warm-white tint.
+// At brightness 40 these values scale to approximately (40, 24, 8) on
+// the LEDs — a clear candle-amber that reads as warm rather than
+// near-white.
 inline constexpr uint8_t kWarmWhiteR = 255;
-inline constexpr uint8_t kWarmWhiteG = 180;
-inline constexpr uint8_t kWarmWhiteB = 100;
+inline constexpr uint8_t kWarmWhiteG = 150;
+inline constexpr uint8_t kWarmWhiteB = 50;
 
 // Render `numStops` RGB stops into `outRgb` (3 bytes per pixel, length
 // pixelCount*3) using linear interpolation. Returns false (and leaves

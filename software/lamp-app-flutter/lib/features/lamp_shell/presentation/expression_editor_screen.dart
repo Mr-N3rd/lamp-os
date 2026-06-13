@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -155,11 +157,11 @@ class _ExpressionEditorScreenState
     // charge and the picker's writes are visible. Tests disable the
     // configurator behavior, which would otherwise let the expression
     // keep painting over our live writes.
-    notifier.completeExpressionTest();
+    unawaited(notifier.completeExpressionTest());
 
     void writeLive(LampColor c) {
-      if (previewShade) notifier.setShadeColor(c);
-      if (previewBase) notifier.setBaseColors([c]);
+      if (previewShade) unawaited(notifier.setShadeColor(c));
+      if (previewBase) unawaited(notifier.setBaseColors([c]));
     }
 
     final picked = await showColorPickerSheet(
@@ -172,10 +174,10 @@ class _ExpressionEditorScreenState
     // The picker's writes were for preview only; the expression's
     // palette is what should actually change (handled by the caller).
     if (previewShade && originalShade.isNotEmpty) {
-      notifier.setShadeColor(originalShade.first);
+      unawaited(notifier.setShadeColor(originalShade.first));
     }
     if (previewBase) {
-      notifier.setBaseColors(originalBase);
+      unawaited(notifier.setBaseColors(originalBase));
     }
 
     return picked;

@@ -1,7 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:collection/collection.dart';
+
 import 'wisp_source_mode.dart';
+import 'zone_source.dart';
+
+const _observedZonesEq = ListEquality<int>();
 
 /// Parsed `CHAR_WISP_STATUS` payload. The lamp serves a merged JSON that
 /// combines the last `wispStatus` MSG_CONTROL_OP broadcast (from the
@@ -16,7 +21,7 @@ import 'wisp_source_mode.dart';
 class WispStatus {
   const WispStatus({
     this.currentZone,
-    this.zoneSource = 'none',
+    this.zoneSource = ZoneSource.none,
     this.observedZones = const <int>[],
     this.wifiConnected = false,
     this.auroraConnected = false,
@@ -39,13 +44,11 @@ class WispStatus {
   /// it forwards). `null` when [zoneSource] is `"none"`.
   final int? currentZone;
 
-  /// Where [currentZone] came from. Mirrors the wisp's
-  /// `ZoneSelector::Source` enum stringified:
-  ///   `"none"`        — no zone selected, wisp is idle
-  ///   `"firstSeen"`   — wisp adopted the first zone it observed on the mesh
-  ///   `"nvs"`         — operator persisted a choice from a previous session
-  ///   `"appOp"`       — operator set it this session via a `setZone` wispOp
-  final String zoneSource;
+  /// Where [currentZone] came from. See [ZoneSource] for the enum
+  /// semantics. Audit cq-H: pre-enum this field was a `String` and
+  /// every comparison site spelled out the literal — brittle to typos
+  /// and impossible to exhaustive-switch over.
+  final ZoneSource zoneSource;
 
   /// Zone IDs the wisp has heard recently on the mesh. Drives the
   /// zone-picker chip list in the UI.
@@ -159,7 +162,7 @@ class WispStatus {
     final sourceRaw = json['source'];
     return WispStatus(
       currentZone: asInt(json['currentZone']),
-      zoneSource: zoneSrc.isEmpty ? 'none' : zoneSrc,
+      zoneSource: parseZoneSource(zoneSrc.isEmpty ? null : zoneSrc),
       observedZones: asIntList(json['observedZones']),
       wifiConnected: asBool(json['wifiConnected']),
       auroraConnected: asBool(json['auroraConnected']),
@@ -183,7 +186,7 @@ class WispStatus {
 
   WispStatus copyWith({
     int? currentZone,
-    String? zoneSource,
+    ZoneSource? zoneSource,
     List<int>? observedZones,
     WispSourceMode? source,
   }) {
@@ -204,4 +207,39 @@ class WispStatus {
       source: source ?? this.source,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WispStatus &&
+          currentZone == other.currentZone &&
+          zoneSource == other.zoneSource &&
+          _observedZonesEq.equals(observedZones, other.observedZones) &&
+          wifiConnected == other.wifiConnected &&
+          auroraConnected == other.auroraConnected &&
+          paletteIdPrefix == other.paletteIdPrefix &&
+          lastSeenMs == other.lastSeenMs &&
+          wispMac == other.wispMac &&
+          wispVersion == other.wispVersion &&
+          helloFlags == other.helloFlags &&
+          helloPaletteIdPrefix == other.helloPaletteIdPrefix &&
+          helloLastSeenMs == other.helloLastSeenMs &&
+          statusLastSeenMs == other.statusLastSeenMs &&
+          source == other.source;
+
+  @override
+  int get hashCode => Object.hash(
+        currentZone,
+        zoneSource,
+        _observedZonesEq.hash(observedZones),
+        wifiConnected,
+        auroraConnected,
+        paletteIdPrefix,
+        lastSeenMs,
+        wispMac,
+        wispVersion,
+        Object.hash(helloFlags, helloPaletteIdPrefix, helloLastSeenMs),
+        statusLastSeenMs,
+        source,
+      );
 }

@@ -23,15 +23,29 @@ void main() {
     );
   });
 
-  test('subscribe streams subsequent writes', () async {
+  test('subscribe streams simulated notifications', () async {
+    // Production semantics (post-audit cq-C1): real BLE peripherals
+    // DON'T echo our own writes to subscribers — only explicit lamp-
+    // pushed notifications fire. The fake honors that contract. Tests
+    // that want to observe pushes use simulateNotify().
     await ble.connect('dev1');
     final events = <Uint8List>[];
     final sub = ble.subscribe('dev1', 'svc', 'chr').listen(events.add);
-    await ble.write('dev1', 'svc', 'chr', Uint8List.fromList([7]));
-    await ble.write('dev1', 'svc', 'chr', Uint8List.fromList([8]));
+    ble.simulateNotify('dev1', 'svc', 'chr', Uint8List.fromList([7]));
+    ble.simulateNotify('dev1', 'svc', 'chr', Uint8List.fromList([8]));
     await Future<void>.delayed(Duration.zero);
     await sub.cancel();
     expect(events.map((b) => b.first).toList(), [7, 8]);
+  });
+
+  test('writes do NOT echo to subscribers', () async {
+    await ble.connect('dev1');
+    final events = <Uint8List>[];
+    final sub = ble.subscribe('dev1', 'svc', 'chr').listen(events.add);
+    await ble.write('dev1', 'svc', 'chr', Uint8List.fromList([42]));
+    await Future<void>.delayed(Duration.zero);
+    await sub.cancel();
+    expect(events, isEmpty);
   });
 
   test('scheduleEncryptionFailure throws insufficientEncryption once', () async {
@@ -68,6 +82,44 @@ void main() {
     await ble.connect('dev1');
     await ble.write('dev1', 'svc', 'chr', Uint8List.fromList([1]));
     expect(await ble.read('dev1', 'svc', 'chr'), Uint8List.fromList([1]));
+  });
+
+  group('isBleDisconnectError', () {
+    test('recognises BleDisconnectedException', () {
+      expect(
+        isBleDisconnectError(const BleDisconnectedException('dev1')),
+        isTrue,
+      );
+    });
+
+    test('recognises BleNotConnected', () {
+      expect(
+        isBleDisconnectError(const BleNotConnected('dev1')),
+        isTrue,
+      );
+    });
+
+    test('recognises fbp-style "device is disconnected" message strings', () {
+      // Belt-and-suspenders for transient signals that fbp emits as
+      // bare exceptions (some platform error paths). Pinning ensures we
+      // don't regress when fbp upgrades reword the message.
+      expect(
+        isBleDisconnectError(Exception('device is disconnected')),
+        isTrue,
+      );
+      expect(
+        isBleDisconnectError(Exception('device is not connected')),
+        isTrue,
+      );
+    });
+
+    test('rejects unrelated errors', () {
+      expect(isBleDisconnectError(Exception('discoverservices failed')),
+          isFalse);
+      expect(isBleDisconnectError(Exception('timeout')), isFalse);
+      expect(isBleDisconnectError(const FormatException('bad bytes')),
+          isFalse);
+    });
   });
 
   group('InMemoryBleClient.watchConnected', () {

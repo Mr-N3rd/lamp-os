@@ -164,12 +164,13 @@ firmware (the snapshot on `main` that still ships `artnet.cpp` +
 3. `artnet:on` to start broadcasting ArtNet to `255.255.255.255:6454`.
    One frame per Aurora palette change plus a 1 s backstop.
 
-**Coex caveat:** ESP-NOW remains pinned to channel 1 at boot, but
+**Coex caveat:** ESP-NOW remains pinned to channel 11 at boot, but
 associating to the venue AP re-tunes the radio to whatever channel the
 AP advertises. Mesh reliability degrades the further the AP sits from
-channel 1. This is the same constraint Aurora already imposes; the
+channel 11. This is the same constraint Aurora already imposes; the
 ArtNet path piggybacks the existing trade-off, it does not introduce a
-new one.
+new one. (Moved 1 → 11 on 2026-06-10 because channel 1 is the consumer-
+router default and overwhelmingly the most congested 2.4 GHz channel.)
 
 **Wire format produced** — see `software/wisp/src/artnet_frame.h`:
 universe 1, 8 fixtures × 10 channels (shade RGBW, base RGBW, mode byte,
@@ -193,7 +194,7 @@ Check the `viaBle` / `viaEspNow` flags on the nearby-lamps payload
 BLE central scan still sees them. Common causes:
 
 - **Channel drift.** A WiFi scan that hit `WIFI_SCAN_FAILED` could
-  strand the radio off `LAMP_ESPNOW_CHANNEL=1`. Logged as `[wifi.sched]`
+  strand the radio off `LAMP_ESPNOW_CHANNEL=11`. Logged as `[wifi.sched]`
   lines. Fixed by the boot-scan delay + home-mode-gated scan in
   `wifi::tick`, but still worth checking if it bites.
 - **BLE coex starvation.** Active GATT session with TIGHT conn-params.

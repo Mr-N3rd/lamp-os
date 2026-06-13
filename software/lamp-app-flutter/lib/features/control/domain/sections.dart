@@ -1,7 +1,21 @@
+import 'package:collection/collection.dart';
+
 import '../../social/domain/social_mode.dart';
 import 'lamp_color.dart';
 
+const _listEq = ListEquality<Object?>();
+const _mapEq = MapEquality<Object?, Object?>();
+
 /// CHAR_LAMP_SECTION payload, see firmware Config::asLampJson.
+///
+/// Manually-overridden `==` / `hashCode` (audit cq-H / W7.7): Riverpod's
+/// `.select` and AsyncValue equality short-circuit on `prev == next`.
+/// Without explicit equality the default identity compare always misses
+/// — every notifier rebuild propagated to every consumer even when no
+/// observable field changed. Full @freezed conversion was rejected
+/// because the `fromJson` factories carry non-trivial coercion logic
+/// (knockout list → map, byteOrder fallback from bpp, etc.) that the
+/// generator can't faithfully reproduce.
 class LampSection {
   const LampSection({
     required this.name,
@@ -34,6 +48,27 @@ class LampSection {
             SocialMode.fromWire((json['socialMode'] as num?)?.toInt()),
         fwVersion: (json['fwVersion'] as num?)?.toInt(),
         fwChannel: json['fwChannel'] as String?,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LampSection &&
+          name == other.name &&
+          brightness == other.brightness &&
+          advancedEnabled == other.advancedEnabled &&
+          socialMode == other.socialMode &&
+          fwVersion == other.fwVersion &&
+          fwChannel == other.fwChannel;
+
+  @override
+  int get hashCode => Object.hash(
+        name,
+        brightness,
+        advancedEnabled,
+        socialMode,
+        fwVersion,
+        fwChannel,
       );
 }
 
@@ -96,6 +131,27 @@ class BaseSection {
       knockout: knockoutMap,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BaseSection &&
+          px == other.px &&
+          ac == other.ac &&
+          bpp == other.bpp &&
+          byteOrder == other.byteOrder &&
+          _listEq.equals(colors, other.colors) &&
+          _mapEq.equals(knockout, other.knockout);
+
+  @override
+  int get hashCode => Object.hash(
+        px,
+        ac,
+        bpp,
+        byteOrder,
+        _listEq.hash(colors),
+        _mapEq.hash(knockout),
+      );
 }
 
 /// CHAR_SHADE_SECTION payload, see firmware Config::asShadeJson.
@@ -129,6 +185,19 @@ class ShadeSection {
           .toList(),
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ShadeSection &&
+          px == other.px &&
+          bpp == other.bpp &&
+          byteOrder == other.byteOrder &&
+          _listEq.equals(colors, other.colors);
+
+  @override
+  int get hashCode =>
+      Object.hash(px, bpp, byteOrder, _listEq.hash(colors));
 }
 
 /// CHAR_HOME_SECTION payload. Presence-only home mode: the lamp never
@@ -157,6 +226,17 @@ class HomeSection {
       enabled: (json['enabled'] as bool?) ?? ssid.isNotEmpty,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HomeSection &&
+          ssid == other.ssid &&
+          brightness == other.brightness &&
+          enabled == other.enabled;
+
+  @override
+  int get hashCode => Object.hash(ssid, brightness, enabled);
 }
 
 /// A single expression configuration. CHAR_EXPRESSION_SECTION returns an array
@@ -212,6 +292,29 @@ class ExpressionConfig {
         'target': target,
         ...parameters,
       };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ExpressionConfig &&
+          type == other.type &&
+          enabled == other.enabled &&
+          _listEq.equals(colors, other.colors) &&
+          intervalMin == other.intervalMin &&
+          intervalMax == other.intervalMax &&
+          target == other.target &&
+          _mapEq.equals(parameters, other.parameters);
+
+  @override
+  int get hashCode => Object.hash(
+        type,
+        enabled,
+        _listEq.hash(colors),
+        intervalMin,
+        intervalMax,
+        target,
+        _mapEq.hash(parameters),
+      );
 }
 
 /// CHAR_EXPRESSION_SECTION payload — a JSON array of ExpressionConfig objects.
@@ -227,4 +330,13 @@ class ExpressionsSection {
             .map(ExpressionConfig.fromJson)
             .toList(),
       );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ExpressionsSection &&
+          _listEq.equals(expressions, other.expressions);
+
+  @override
+  int get hashCode => _listEq.hash(expressions);
 }

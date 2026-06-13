@@ -38,14 +38,29 @@ static std::vector<unsigned char> s_advertisementData;
 // replaces; we rebuild the entire AdvertisementData each time.)
 static std::string s_advertisementName;
 
-// Fixed firmware-version byte advertised as the trailing mfg byte.
-// `0x02` = current build (supports the app's mesh protocol). Future
-// firmware bumps the number; the app reads `isMesh = mfg.length >= 7
-// && mfg[6] >= 2`. The byte's purpose is purely version identification
-// — the previous `meshFlag` semantics (set when peers were heard
-// recently) were unused by the app and the firmware itself, so the
-// runtime tracking was deleted.
-static constexpr unsigned char ADV_VERSION_BYTE = 0x02;
+// Capability bitfield advertised as the trailing manufacturer-data byte.
+// Each bit is an independent feature flag the app can use for routing /
+// preview decisions. Forward-compatible: new bits added as we ship
+// features; old apps just don't read them. Bumping bits NEVER breaks
+// fielded lamps because the check is always `(byte & WANTED_BIT) != 0`.
+//
+//   bit 0 (0x01) — reserved (always 0; bookmark for legacy v1 lamps
+//                  that didn't advertise this byte at all)
+//   bit 1 (0x02) — kBleCapMeshProtocol — speaks the v0x03 mesh wire
+//                  format. Drives the app's ControlScreen vs
+//                  BtOnlyLampScreen routing.
+//   bit 2 (0x04) — reserved for BLE OTA receive (Phase 5a) once the
+//                  app exposes "this lamp supports BLE OTA".
+//   bit 3 (0x08) — reserved for gossip-OTA distributor (Phase 5b')
+//                  once the app surfaces "this lamp can update peers".
+//   bit 4-7      — reserved.
+//
+// The current firmware sets ONLY bit 1, so the byte is 0x02 — bytewise
+// identical to the prior "firmware version 0x02" sentinel. v2 apps
+// checking `mfg[6] >= 2` still pass; v3+ apps using
+// `(mfg[6] & kBleCapMeshProtocol) != 0` get the same answer.
+static constexpr unsigned char kBleCapMeshProtocol = 0x02;
+static constexpr unsigned char ADV_CAPABILITY_BYTE = kBleCapMeshProtocol;
 
 static void applyAdvertisementPayload(NimBLEAdvertising* adv,
                                       const std::string& name,
@@ -153,11 +168,12 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
   // advertisement packet via setAdvertisementData below, which gives us
   // deterministic control over what goes on the wire.
   pAdvertising->enableScanResponse(false);
-  // Adv payload shape: [magic16(2), baseRGB(3), shadeRGB(3), version(1)]
-  // = 9 bytes total. Shade was briefly dropped for a meshFlag byte; that
-  // byte's runtime value is no longer read by anything, so it's now a
-  // fixed firmware-version number and shade is back. The app reads
-  // shade from bytes 5-7. Legacy v1 8-byte advs (no version byte) and
+  // Adv payload shape: [magic16(2), baseRGB(3), shadeRGB(3), capabilities(1)]
+  // = 9 bytes total. byte 8 was previously a "firmware version" byte hard-
+  // coded to 0x02; it's now a forward-compatible capability bitfield
+  // (see ADV_CAPABILITY_BYTE comment above). The byte's value is still
+  // 0x02 today (only bit 1 "mesh protocol" is set), so v2 apps continue
+  // to route correctly. Legacy v1 8-byte advs (no capability byte) and
   // intermediate v2 6-byte advs (no shade) are still tolerated by the
   // scanner above for cross-firmware compat.
   s_advertisementData = {
@@ -169,7 +185,7 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
       static_cast<unsigned char>(inShadeColor.r),
       static_cast<unsigned char>(inShadeColor.g),
       static_cast<unsigned char>(inShadeColor.b),
-      ADV_VERSION_BYTE,
+      ADV_CAPABILITY_BYTE,
   };
   applyAdvertisementPayload(pAdvertising, s_advertisementName,
                             s_advertisementData);

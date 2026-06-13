@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -73,7 +75,7 @@ class _BaseEditorSheetState extends ConsumerState<BaseEditorSheet> {
       );
       if (picked == null) {
         // Cancelled — restore the snapshot we took before the picker opened.
-        notifier.setBaseColors(original);
+        unawaited(notifier.setBaseColors(original));
       }
       // Save case: the last onLive tick already wrote the correct color; no
       // further action needed.

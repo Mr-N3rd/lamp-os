@@ -29,15 +29,25 @@ class SocialScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(controlNotifierProvider(lampId));
-    final state = async.value;
-    if (state == null) {
+    // .select() so this screen only rebuilds when (mode, selfName, hasState)
+    // changes — NOT on every slider tick or color drag that goes through
+    // controlNotifierProvider (audit perf-H1).
+    final ctl = ref.watch(controlNotifierProvider(lampId).select((a) {
+      final lamp = a.value?.lamp;
+      return (
+        hasState: lamp != null,
+        mode: lamp?.socialMode ?? SocialMode.ambivert,
+        selfName: lamp?.name ?? '',
+      );
+    }));
+    if (!ctl.hasState) {
       return const Center(
         child: CircularProgressIndicator(color: BrandColors.fogGrey),
       );
     }
     final notifier = ref.read(controlNotifierProvider(lampId).notifier);
-    final mode = state.lamp.socialMode;
+    final mode = ctl.mode;
+    final selfName = ctl.selfName;
 
     final nearby = ref.watch(nearbyLampsNotifierProvider);
 
@@ -51,7 +61,6 @@ class SocialScreen extends ConsumerWidget {
     // NOTE: disposition lookup/write uses the lamp's user-set name. A
     // renamed peer's disposition orphans (slice-1 acknowledged
     // limitation; see social-tab spec).
-    final selfName = state.lamp.name;
     final rows = <_SocialLampRow>[
       for (final l in nearby)
         if (l.name.isNotEmpty && l.id != lampId && l.name != selfName)

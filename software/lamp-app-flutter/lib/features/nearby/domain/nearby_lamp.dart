@@ -38,6 +38,18 @@ abstract class NearbyLamp with _$NearbyLamp {
   /// AddLamp flow uses this to decide between the adopt wizard (factory
   /// default → user must claim and personalize it) and a one-tap add
   /// (anything else → already configured, just add to inventory).
+  ///
+  /// KNOWN LIMITATION (audit M3): a user who renames their lamp back to
+  /// 'stray', sets the base to Lamplit brand purple, and turns the shade
+  /// off is indistinguishable from a freshly-flashed lamp. Their lamp
+  /// will be routed through the adopt wizard. That's the LEAST WRONG
+  /// answer — adopt wizard prompts for the password, and a lamp that
+  /// looks factory but isn't will simply fail to claim without it; the
+  /// user can then back out and re-set their lamp's identity. We don't
+  /// add a "look-up-by-id-against-inventory" override here because the
+  /// scan list legitimately includes lamps the user wants to ADD (not
+  /// just identify); the policy choice "always run the configured-lamp
+  /// path when colors are non-default" wins on simplicity.
   bool get isFactoryDefault =>
       name == _defaultName &&
       baseRgb == _defaultBaseRgb &&

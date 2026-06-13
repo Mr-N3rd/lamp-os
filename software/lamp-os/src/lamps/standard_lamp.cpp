@@ -90,6 +90,16 @@ lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingRemoteOpJson;
 // than the converged applyRemoteOpLocal so that gossip-relayed wispOps
 // don't get reinterpreted on every lamp — wispOp is wisp-only, lamps
 // only forward.
+//
+// SECURITY (accepted threat T1): wispOp `setWifi` carries the home WiFi
+// PSK as plaintext JSON. The MSG_CONTROL_OP broadcast we emit from the
+// drain is also plaintext — the wisp has no shared key with the lamp
+// to decrypt with, so the only real fix is fleet-wide mesh auth (a
+// shared PSK distributed at provisioning). That was deliberately
+// rejected. See docs/superpowers/notes/2026-06-10-accepted-security-
+// threats.md on the app side for the full rationale. Threat scope:
+// passive ESP-NOW sniffer in mesh range on LAMP_ESPNOW_CHANNEL during
+// a setWifi op — bounded by physical proximity at configuration time.
 lamp::PendingJsonSlot<MAX_PENDING_OP_JSON> pendingWispOpJson;
 // Phase D — wispStatus payloads observed on the mesh (either own BLE
 // inbound or gossip-relayed from another lamp). applyRemoteOpLocal

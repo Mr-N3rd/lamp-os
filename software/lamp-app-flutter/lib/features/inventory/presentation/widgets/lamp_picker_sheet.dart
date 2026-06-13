@@ -132,8 +132,13 @@ class _InventoryLampTile extends ConsumerWidget {
       // sheet directly (without GoRouter) skip the route change — the
       // active-lamp state change is what matters in that scenario.
       // routeForLamp sends BT-only firmware to the dedicated info pane
-      // instead of trapping the user on the ConnectingView.
-      GoRouter.maybeOf(context)?.go(routeForLamp(lamp.id, nearby));
+      // instead of trapping the user on the ConnectingView. Inventory
+      // is passed too so an out-of-range BT-only lamp routes correctly
+      // via the cached `lastKnownIsMesh`.
+      final inv = ref.read(inventoryNotifierProvider).value;
+      GoRouter.maybeOf(context)?.go(
+        routeForLamp(lamp.id, nearby, inventory: inv),
+      );
     }
   }
 
@@ -194,13 +199,47 @@ class _InventoryLampTile extends ConsumerWidget {
       inv: lamp,
       near: nearby.firstWhereOrNull((n) => n.id == lamp.id),
     );
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: (isOffline && !isCurrent) ? null : () => _onTap(context, ref),
-      onLongPress: () => _confirmRemove(context, ref),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        child: Row(
+    // Discoverable delete via swipe-left (audit ux-H3). Pre-fix the only
+    // delete affordance was an undiscoverable long-press; matches the
+    // Dismissible convention used in Expressions screen.
+    return Dismissible(
+      key: ValueKey(lamp.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        color: BrandColors.error,
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.delete_outline, color: BrandColors.lampWhite),
+            SizedBox(width: 8),
+            Text(
+              'Remove',
+              style: TextStyle(
+                color: BrandColors.lampWhite,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+      confirmDismiss: (_) async {
+        return await _confirmRemoveDialog(context);
+      },
+      onDismissed: (_) async {
+        await ref.read(inventoryNotifierProvider.notifier).remove(lamp.id);
+      },
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: (isOffline && !isCurrent) ? null : () => _onTap(context, ref),
+        // long-press preserved as a back-compat affordance for users
+        // who learned it; can be dropped in a follow-up once everyone
+        // discovers the swipe.
+        onLongPress: () => _confirmRemove(context, ref),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          child: Row(
           children: [
             StatusDot(kind: status, size: 14),
             const SizedBox(width: 12),
@@ -250,7 +289,38 @@ class _InventoryLampTile extends ConsumerWidget {
           ],
         ),
       ),
+    ),
     );
   }
+}
+
+/// Yes/No dialog used by the Dismissible's `confirmDismiss` so a swipe
+/// doesn't yeet a lamp without a sanity check. Shared with the long-
+/// press path's `_confirmRemove` for consistency.
+Future<bool> _confirmRemoveDialog(BuildContext context) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: BrandColors.midnightBlack,
+      title: const Text('Remove this lamp?',
+          style: TextStyle(color: BrandColors.lampWhite)),
+      content: const Text(
+        "We'll drop it from your inventory. You can adopt it again later.",
+        style: TextStyle(color: BrandColors.fogGrey),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Remove',
+              style: TextStyle(color: BrandColors.error)),
+        ),
+      ],
+    ),
+  );
+  return ok == true;
 }
 

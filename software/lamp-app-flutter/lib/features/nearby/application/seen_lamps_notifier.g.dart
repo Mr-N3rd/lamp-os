@@ -62,7 +62,7 @@ final class SeenLampsNotifierProvider
   }
 }
 
-String _$seenLampsNotifierHash() => r'7ca249745506bdd32694b21cf6871599d789a52b';
+String _$seenLampsNotifierHash() => r'46460cd6e578ed2492d0962fb31a026381fd13a0';
 
 /// Persistent record of every lamp we've ever heard via BLE adv. Mirrors
 /// the same scanner stream `nearbyLampsNotifier` listens to, but keeps

@@ -14,7 +14,12 @@ namespace wisp {
 // software/lamp-os/src/components/network/wifi.cpp. If the lamp side ever
 // moves, mirror here.
 #ifndef LAMP_ESPNOW_CHANNEL
-#define LAMP_ESPNOW_CHANNEL 1
+// Moved 1 → 11 on 2026-06-10 to dodge 2.4 GHz channel-1 congestion
+// (consumer-router default). Channel 11 is consistently the least-
+// utilized of the three non-overlapping NA channels (1/6/11). Mixed-
+// fleet across channels does NOT interoperate — peers on the old
+// channel are invisible.
+#define LAMP_ESPNOW_CHANNEL 11
 #endif
 
 // Handler signature for inbound frames. Fires from the WiFi recv task —

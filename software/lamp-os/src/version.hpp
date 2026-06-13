@@ -10,7 +10,7 @@
 // `<` comparisons in the distributor's "lowest version peer" pick.
 namespace lamp {
 
-constexpr uint32_t FIRMWARE_VERSION = 0x010051;  // 1.0.81 (wisp carrier — OTA target)
+constexpr uint32_t FIRMWARE_VERSION = 0x010052;  // 1.0.82 (channel 1 → 11 migration)
 
 // Channel is purely a placeholder string in Phase A. In Phase E it comes from
 // a -D flag baked at build time (`-D FIRMWARE_CHANNEL='"beta"'`) and gates

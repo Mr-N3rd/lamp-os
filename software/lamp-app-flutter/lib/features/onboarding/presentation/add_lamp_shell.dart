@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../control/presentation/widgets/connecting_view.dart';
 import '../application/add_lamp_notifier.dart';
@@ -78,6 +80,23 @@ class _AddLampShellState extends ConsumerState<AddLampShell> {
         step != AddLampStep.scan && step != AddLampStep.connecting;
     return Scaffold(
       appBar: AppBar(
+        // Explicit back affordance for the Scan step — pre-fix the user
+        // had no way out (GoRouter auto-leading shows up only when
+        // canPop is true, which fails on deep-link entry, and the
+        // in-flow Back button only appears once the user advances to
+        // Name). Audit ux-H2.
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: () {
+            final router = GoRouter.maybeOf(context);
+            if (router == null) return;
+            if (router.canPop()) {
+              router.pop();
+            } else {
+              router.go(AppRoutes.myLamps);
+            }
+          },
+        ),
         title: const Text('Adopt a lamp'),
         bottom: showDots
             ? PreferredSize(

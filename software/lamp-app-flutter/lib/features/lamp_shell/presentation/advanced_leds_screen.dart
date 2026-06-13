@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/back_button_leading.dart';
 import '../../../core/widgets/friendly_error.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/control_notifier.dart';
@@ -59,6 +60,7 @@ class _AdvancedLedsScreenState extends ConsumerState<AdvancedLedsScreen> {
     final async = ref.watch(controlNotifierProvider(widget.lampId));
     return Scaffold(
       appBar: AppBar(
+        leading: const BackButtonLeading(),
         title: const Text('Advanced LED setup'),
       ),
       body: async.when(

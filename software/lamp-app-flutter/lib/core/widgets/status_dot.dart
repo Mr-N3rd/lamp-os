@@ -58,29 +58,40 @@ class _StatusDotState extends State<StatusDot>
       StatusKind.mesh => BrandColors.lumenGreen,
     };
 
-    return AnimatedBuilder(
-      animation: _ctrl,
-      builder: (context, _) {
-        final glow = widget.kind == StatusKind.mesh
-            ? 6 + _ctrl.value * 8
-            : (widget.kind == StatusKind.bluetooth ? 4.0 : 0.0);
-        return Container(
-          width: widget.size,
-          height: widget.size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: color,
-            boxShadow: glow > 0
-                ? [
-                    BoxShadow(
-                      color: color.withValues(alpha: 0.6),
-                      blurRadius: glow,
-                    ),
-                  ]
-                : const [],
-          ),
-        );
-      },
+    // Screen-readers see only the visual dot otherwise — name it (audit
+    // W8): "Mesh connected" / "Bluetooth only" / "Offline".
+    final semanticsLabel = switch (widget.kind) {
+      StatusKind.offline => 'Offline',
+      StatusKind.bluetooth => 'Bluetooth only',
+      StatusKind.mesh => 'Mesh connected',
+    };
+
+    return Semantics(
+      label: semanticsLabel,
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (context, _) {
+          final glow = widget.kind == StatusKind.mesh
+              ? 6 + _ctrl.value * 8
+              : (widget.kind == StatusKind.bluetooth ? 4.0 : 0.0);
+          return Container(
+            width: widget.size,
+            height: widget.size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color,
+              boxShadow: glow > 0
+                  ? [
+                      BoxShadow(
+                        color: color.withValues(alpha: 0.6),
+                        blurRadius: glow,
+                      ),
+                    ]
+                  : const [],
+            ),
+          );
+        },
+      ),
     );
   }
 }

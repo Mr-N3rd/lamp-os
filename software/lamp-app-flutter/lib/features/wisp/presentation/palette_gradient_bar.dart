@@ -35,7 +35,13 @@ class PaletteGradientBar extends StatelessWidget {
     required this.sourceMode,
     required this.manualPalette,
     this.height = 36,
-    this.pixelCount = 256,
+    // Dropped 256 → 30 (audit perf-H7). The bar is a representation of
+    // what the wisp's ring shows; the ring HAS 30 pixels, so anything
+    // finer is a visual lie AND ~8× the computation per repaint. At a
+    // 36 px height the eye can't resolve >30 samples horizontally
+    // anyway. Kept as a parameter so debug screens can crank it back up
+    // when comparing against the firmware ramp.
+    this.pixelCount = 30,
   });
 
   /// Current wisp source mode. Drives which palette feeds the bar.

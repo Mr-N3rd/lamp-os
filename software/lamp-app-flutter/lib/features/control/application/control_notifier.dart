@@ -74,6 +74,14 @@ class ControlNotifier extends _$ControlNotifier {
   StreamSubscription<bool>? _connSub;
   Timer? _reconnectTimer;
   static const _reconnectDelays = [500, 1000, 2000, 4000, 8000]; // ms, capped
+  /// Max number of consecutive reconnect attempts before we give up and
+  /// surface an error state instead of polling forever (audit perf-M4).
+  /// 30 attempts × the capped 8 s delay = ~4 minutes of background
+  /// reconnect work. Past that, the lamp is almost certainly out of
+  /// range and continuing to retry just keeps the radio warm + drains
+  /// the user's battery. User can pull to refresh / re-tap the lamp to
+  /// reset the loop.
+  static const _maxReconnectAttempts = 30;
 
   // Inventory "last-seen color" debouncer. We don't need to persist every
   // slider tick — only the trailing value. The previous code was awaiting a
@@ -156,9 +164,13 @@ class ControlNotifier extends _$ControlNotifier {
       } catch (e, st) {
         lastError = e;
         lastStack = st;
+        // Disconnect / not-connected go through the typed path now
+        // (BleDisconnectedException from FbpBleClient). The remaining
+        // transient signals — discoverServices flakes and connect/auth
+        // timeouts — are still detected by message inspection because
+        // fbp doesn't surface them as discrete types.
         final msg = e.toString().toLowerCase();
-        final isTransient = msg.contains('disconnect') ||
-            msg.contains('not connected') ||
+        final isTransient = isBleDisconnectError(e) ||
             msg.contains('discoverservices') ||
             msg.contains('timeout');
         if (!isTransient) break;
@@ -236,7 +248,16 @@ class ControlNotifier extends _$ControlNotifier {
       orElse: () => throw StateError('lamp $deviceId not in inventory'),
     );
 
-    await ble.connect(deviceId);
+    // Skip the cold GATT connect when a pre-warm has already established
+    // the link (BleClient.prewarm wired into the BLE adv stream — see
+    // nearby_lamps_notifier.dart). Saves the 200-500 ms `device.connect`
+    // handshake + 100-400 ms `discoverServices` round-trip on the
+    // common "user opens app, taps a nearby paired lamp" path. Cold-tap
+    // path (lamp out of range until just before the tap) still pays
+    // those costs normally.
+    if (!ble.isConnected(deviceId)) {
+      await ble.connect(deviceId);
+    }
     // Register disconnect now — only after a successful connect. If connect
     // itself threw, there's nothing to tear down, and registering this
     // earlier would crash dispose on platforms where the BLE client can't
@@ -597,13 +618,11 @@ class ControlNotifier extends _$ControlNotifier {
         payload,
         allowLongWrite: true,
       );
+    } on BleDisconnectedException {
+      // Expected: the reboot drops the link mid-write. Treated as success.
     } catch (e) {
-      // Expected: the reboot disconnects mid-write. Anything else is a real
-      // failure; rethrow so the UI can surface it.
-      final msg = e.toString().toLowerCase();
-      final looksLikeReboot =
-          msg.contains('not connected') || msg.contains('disconnect');
-      if (!looksLikeReboot) rethrow;
+      // Non-link failures — rethrow so the UI can surface them.
+      if (!isBleDisconnectError(e)) rethrow;
     }
 
     // 4. After the firmware reboots, manually re-read every section and
@@ -795,10 +814,19 @@ class ControlNotifier extends _$ControlNotifier {
         knockout: const {},
       ),
     ));
+    // Serialize the per-pixel writes (audit perf-M3). Pre-fix this
+    // fan-out fired up to ~144 unawaited writes in a single tick,
+    // queue-bursting the BLE TX queue against a ~33 Hz drain. Now we
+    // walk them sequentially so the queue stays shallow + the radio
+    // doesn't drop frames; total wall-clock is still fast (one tx per
+    // ~30 ms ≈ 4.5 s worst case for the full 144) and the user only
+    // hits this from "Reset all" which they don't repeat-spam.
     final ble = ref.read(bleClientProvider);
-    for (final i in edited) {
-      unawaited(_safeWriteKnockout(ble, i, 100));
-    }
+    unawaited(() async {
+      for (final i in edited) {
+        await _safeWriteKnockout(ble, i, 100);
+      }
+    }());
   }
 
   // ---------------------------------------------------------------------------
@@ -899,12 +927,10 @@ class ControlNotifier extends _$ControlNotifier {
         payload,
         allowLongWrite: true,
       );
+    } on BleDisconnectedException {
+      // Expected: the reboot drops the link mid-write.
     } catch (e) {
-      // Expected: the reboot disconnects mid-write.
-      final msg = e.toString().toLowerCase();
-      final looksLikeReboot =
-          msg.contains('not connected') || msg.contains('disconnect');
-      if (!looksLikeReboot) rethrow;
+      if (!isBleDisconnectError(e)) rethrow;
     }
 
     // Lamp is now factory-fresh — tear down everything tied to this
@@ -922,7 +948,7 @@ class ControlNotifier extends _$ControlNotifier {
     //      watching this provider sees a terminal state rather than a
     //      stuck AsyncLoading.
     _reconnectTimer?.cancel();
-    _connSub?.cancel();
+    unawaited(_connSub?.cancel());
     _connSub = null;
     try {
       await ble.disconnect(_deviceId);
@@ -1004,6 +1030,14 @@ class ControlNotifier extends _$ControlNotifier {
     final blob = <String, dynamic>{'lamp': {'password': newPassword}};
     final blobJson = jsonEncode(blob);
     final pw = oldPassword ?? '';
+    // SECURITY (accepted threat T2): when no prior password exists
+    // (factory state, post-reset), the new password is written in
+    // plaintext. There's no shared secret yet to derive an AES key
+    // from. A passive BLE sniffer in range at adoption captures this
+    // lamp's new admin credential. The only real fix — fleet-wide
+    // mesh authentication — was deliberately rejected. See
+    // docs/superpowers/notes/2026-06-10-accepted-security-threats.md.
+    // Threat is bounded by physical proximity at adoption time.
     final payload = pw.isEmpty
         ? Uint8List.fromList([
             LampCrypto.magicPlaintext,
@@ -1024,18 +1058,16 @@ class ControlNotifier extends _$ControlNotifier {
         payload,
         allowLongWrite: true,
       );
+    } on BleDisconnectedException {
+      // Expected: the reboot drops the link mid-write.
     } catch (e) {
-      final msg = e.toString().toLowerCase();
-      final looksLikeReboot =
-          msg.contains('not connected') || msg.contains('disconnect');
-      if (!looksLikeReboot) {
-        // Genuine failure — restore the old credentials so the next
-        // reconnect attempt uses what the firmware still actually has.
-        await ref
-            .read(inventoryNotifierProvider.notifier)
-            .updatePassword(_deviceId, oldPassword);
-        rethrow;
-      }
+      if (isBleDisconnectError(e)) return;
+      // Genuine failure — restore the old credentials so the next
+      // reconnect attempt uses what the firmware still actually has.
+      await ref
+          .read(inventoryNotifierProvider.notifier)
+          .updatePassword(_deviceId, oldPassword);
+      rethrow;
     }
 
     // Reuse the save()-style reconnect cadence: flip the saving banner,
@@ -1360,6 +1392,17 @@ class ControlNotifier extends _$ControlNotifier {
     final cur = state.value;
     if (cur == null) return;
     final attempt = cur.reconnectAttempt;
+    // Park after the cap (audit perf-M4). The reconnect loop ran
+    // forever pre-fix — a wandered-off lamp would keep polling every
+    // 8s indefinitely, draining battery for nothing. User can re-tap
+    // the lamp in MyLamps to reset the attempt counter.
+    if (attempt >= _maxReconnectAttempts) {
+      state = AsyncError(
+        const BleNotConnected('reconnect cap reached'),
+        StackTrace.current,
+      );
+      return;
+    }
     final delayMs = _reconnectDelays[
         attempt < _reconnectDelays.length ? attempt : _reconnectDelays.length - 1];
     _reconnectTimer?.cancel();

@@ -30,6 +30,7 @@
 #include "lamp_protocol.hpp"
 
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 #include "ArtnetEmitter.h"
 #include "StageBeacon.h"
@@ -404,6 +405,21 @@ void processSerialCommand(const String& cmd) {
     Serial.printf("[wifi] ssid='%s' connected=%d ip=%s\n",
                   wifi.ssid().c_str(), wifi.isConnected() ? 1 : 0,
                   WiFi.localIP().toString().c_str());
+  } else if (cmd == "wifi:clear") {
+    // Drop stored creds + disconnect + re-pin the radio to
+    // LAMP_ESPNOW_CHANNEL. Used for debugging the ESP-NOW channel coex
+    // story: once associated to a venue AP, the radio sits on the AP's
+    // channel and the wisp's mesh broadcasts miss peers pinned to
+    // LAMP_ESPNOW_CHANNEL. WiFi.disconnect alone doesn't reset the
+    // channel — we need esp_wifi_set_channel to snap it back.
+    wispConfig.setWifi("", "");
+    wifi.reconnect();
+    esp_wifi_set_channel(LAMP_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    if (stageBeacon.isAdvertising()) {
+      stageBeacon.refreshAdvert();
+    }
+    Serial.printf("[wisp.cmd] wifi creds cleared; radio pinned to channel %d\n",
+                  LAMP_ESPNOW_CHANNEL);
   } else if (cmd.startsWith("wifi:set ")) {
     // Format: "wifi:set <ssid> <pass>" — split on first space after prefix.
     int sp = cmd.indexOf(' ', 9);

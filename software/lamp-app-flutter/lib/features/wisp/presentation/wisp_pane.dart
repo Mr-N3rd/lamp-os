@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/app_snackbar.dart';
 import '../../../core/widgets/friendly_error.dart';
 import '../../../core/widgets/password_prompt_dialog.dart';
 import '../../../core/widgets/settings_row.dart';
@@ -15,6 +16,7 @@ import '../../lamp_shell/presentation/widgets/wifi_network_picker.dart';
 import '../application/wisp_notifier.dart';
 import '../domain/wisp_source_mode.dart';
 import '../domain/wisp_status.dart';
+import '../domain/zone_source.dart';
 import 'palette_gradient_bar.dart';
 
 /// Wisp tab — controls how the wisp drives the lamp grid's paint.
@@ -126,13 +128,16 @@ class _WispBodyState extends ConsumerState<_WispBody> {
       loading: () => const Center(
         child: CircularProgressIndicator(color: BrandColors.fogGrey),
       ),
-      error: (e, _) => FriendlyError.page(
-        title: "Couldn't read wisp status.",
-        subtitle:
-            "The lamp returned a wisp status read error. Try switching "
-            'tabs and back.',
-        rawError: e,
-      ),
+      // A read error here almost always means "this lamp doesn't have
+      // the wisp characteristic" — pre-FriendlyError, this dead-ended
+      // a user on a non-wisp lamp who switched to the Wisp tab. Now
+      // we render the same empty-state body as for `status.present ==
+      // false`, which surfaces the "No wisp detected" guidance and
+      // keeps the tab usable. Audit ux-H4. True catastrophic errors
+      // (BLE disconnect during read) get the same UI, which is fine —
+      // the user's next action is reconnect, and the rest of the app
+      // handles that out-of-band.
+      error: (_, _) => _buildBody(context, WispStatus.empty),
       data: (status) => _buildBody(context, status),
     );
   }
@@ -237,7 +242,7 @@ class _WispBodyState extends ConsumerState<_WispBody> {
   /// has a pin to clear — clearing a `firstSeen` or `none` source is a
   /// no-op on the wisp side and would just confuse the UI.
   bool _canClearSelection(WispStatus s) =>
-      s.zoneSource == 'appOp' || s.zoneSource == 'nvs';
+      s.zoneSource == ZoneSource.appOp || s.zoneSource == ZoneSource.nvs;
 
   /// Runs a wispOp (setZone/clearZone) and surfaces failures as a
   /// SnackBar. Without this the notifier's optimistic update would
@@ -248,9 +253,7 @@ class _WispBodyState extends ConsumerState<_WispBody> {
       await op();
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't reach the wisp — try again.")),
-      );
+      AppSnackbar.error(context, "Couldn't reach the wisp — try again.");
     }
   }
 }
@@ -394,7 +397,7 @@ class _CurrentZone extends StatelessWidget {
     final String? subhead;
     if (status.currentZone == null) {
       headline = 'No zone selected';
-      subhead = status.zoneSource == 'none'
+      subhead = status.zoneSource == ZoneSource.none
           ? 'Tap a zone below to assign one.'
           : null;
     } else {
@@ -437,18 +440,18 @@ class _CurrentZone extends StatelessWidget {
     );
   }
 
-  /// Maps the wire-format `zoneSource` enum to the parenthetical
-  /// "where did this come from?" sub-label on the current-zone card.
-  static String _zoneSourceLabel(String source) {
+  /// Maps the `zoneSource` enum to the parenthetical "where did this
+  /// come from?" sub-label on the current-zone card.
+  static String _zoneSourceLabel(ZoneSource source) {
     switch (source) {
-      case 'appOp':
+      case ZoneSource.appOp:
         return 'Set in app';
-      case 'nvs':
+      case ZoneSource.nvs:
         return 'Persisted on the wisp';
-      case 'firstSeen':
+      case ZoneSource.firstSeen:
         return 'First zone heard on the mesh';
-      case 'none':
-      default:
+      case ZoneSource.none:
+      case ZoneSource.unknown:
         return '';
     }
   }
@@ -873,15 +876,11 @@ class _ManualPaletteEditorState extends ConsumerState<_ManualPaletteEditor> {
     try {
       await notifier.setManualPalette();
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Palette saved.')));
+      AppSnackbar.info(context, 'Palette saved.');
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't reach the wisp — try Save again."),
-        ),
+      AppSnackbar.error(
+        context, "Couldn't reach the wisp — try Save again.",
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -1023,17 +1022,13 @@ class _WifiConfigRowState extends ConsumerState<_WifiConfigRow> {
     try {
       await notifier.setWifi(picked.ssid, pw);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('WiFi creds sent to wisp (${picked.ssid}).'),
-        ),
+      AppSnackbar.info(
+        context, 'Wi-Fi creds sent to wisp (${picked.ssid}).',
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't reach the wisp — try again."),
-        ),
+      AppSnackbar.error(
+        context, "Couldn't reach the wisp — try again.",
       );
     } finally {
       if (mounted) setState(() => _busy = false);

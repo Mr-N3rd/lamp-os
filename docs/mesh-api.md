@@ -35,7 +35,7 @@ disagree, the code wins and this doc should be updated.
                               ▼                    ▼ (re-flash to ship
             ╔════════════════════════════════════════ new lamp firmware)
             ║                  ESP-NOW grid mesh                     ║
-            ║  channel 1  ·  250-byte max frame  ·  ~30-50 m LoS     ║
+            ║  channel 11  ·  250-byte max frame  ·  ~30-50 m LoS    ║
             ╠════════════╦═══════════════════════╦═══════════════════╣
             ║   Lamp 1   ║       Lamp 2          ║      Lamp N       ║
             ║ ESP32-WROOM║      ESP32-WROOM      ║    ESP32-WROOM    ║

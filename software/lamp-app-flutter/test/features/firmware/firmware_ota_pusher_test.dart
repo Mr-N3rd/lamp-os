@@ -46,6 +46,9 @@ class NotifyableBle implements BleClient {
   }
 
   @override
+  Future<void> prewarm(String deviceId) async {}
+
+  @override
   Future<void> connect(String deviceId) async {
     _connected.add(deviceId);
   }

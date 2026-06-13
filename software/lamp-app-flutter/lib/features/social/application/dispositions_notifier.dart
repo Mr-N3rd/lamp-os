@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../../core/ble/ble_client.dart';
 import '../../../core/ble/ble_client_provider.dart';
 import '../../../core/ble/uuids.dart';
 
@@ -18,13 +19,29 @@ part 'dispositions_notifier.g.dart';
 ///
 /// Disposition values are 1..5 (salty, wary, neutral, fond, smitten).
 /// Missing keys default to 3 (neutral) at the call site via `get`.
+///
+/// KNOWN LIMITATION (audit ux-H6): dispositions are keyed by the PEER's
+/// user-set name (`NearbyLamp.name`). When a peer renames itself, its
+/// disposition entry orphans on every lamp that already learned its old
+/// name. The fix is firmware-side: dispositions need to be keyed by
+/// the peer's stable MAC and surface the current name as a display
+/// alias. Tracked separately — would require a CHAR_SOCIAL_DISPOSITIONS
+/// wire-format bump on the firmware side and a one-time migration of
+/// existing maps.
 @Riverpod(keepAlive: false, name: 'dispositionsProvider')
 class Dispositions extends _$Dispositions {
   Timer? _flushTimer;
   Map<String, int> _local = const {};
+  // Cache the BleClient at build() so the onDispose flush can still
+  // dispatch the trailing write AFTER the provider has been torn down.
+  // Without this, `_flush` calls `ref.read(bleClientProvider)` post-
+  // dispose and throws — the throw is swallowed silently by the
+  // try/catch below, and the user's last slider edit vanishes.
+  late final BleClient _ble;
 
   @override
   Future<Map<String, int>> build(String lampId) async {
+    _ble = ref.read(bleClientProvider);
     ref.onDispose(() {
       // If a debounced write is pending when the provider disposes
       // (user dragged the slider and switched tabs / backgrounded the
@@ -37,9 +54,8 @@ class Dispositions extends _$Dispositions {
         unawaited(_flush());
       }
     });
-    final ble = ref.read(bleClientProvider);
     try {
-      final bytes = await ble.read(
+      final bytes = await _ble.read(
         lampId,
         BleUuids.controlService,
         BleUuids.socialDispositions,
@@ -86,10 +102,9 @@ class Dispositions extends _$Dispositions {
   }
 
   Future<void> _flush() async {
-    final ble = ref.read(bleClientProvider);
     final json = jsonEncode(_local);
     try {
-      await ble.write(
+      await _ble.write(
         lampId,
         BleUuids.controlService,
         BleUuids.socialDispositions,

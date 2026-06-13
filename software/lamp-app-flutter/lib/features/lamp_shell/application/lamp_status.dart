@@ -24,6 +24,23 @@ StatusKind statusFor({
       break;
     }
   }
+  return _kindFromHit(hit);
+}
+
+/// Map-keyed overload — call this when the caller already has an
+/// id→NearbyLamp index materialised at a higher scope (e.g. screen-
+/// level for a list of inventory tiles). Saves the linear scan in
+/// [statusFor] (audit perf-H6).
+StatusKind statusForById({
+  required String lampId,
+  required Map<String, NearbyLamp> nearbyById,
+  required bool connected,
+}) {
+  if (connected) return StatusKind.mesh;
+  return _kindFromHit(nearbyById[lampId]);
+}
+
+StatusKind _kindFromHit(NearbyLamp? hit) {
   if (hit == null) return StatusKind.offline;
   // `isMesh` = "firmware speaks the app's mesh protocol". Lamps with
   // the current build show as `mesh` whenever in range; legacy v1

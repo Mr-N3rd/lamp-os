@@ -276,6 +276,9 @@ class _HangingBleClient implements BleClient {
   final Set<String> _connected = {};
 
   @override
+  Future<void> prewarm(String deviceId) async {}
+
+  @override
   Future<void> connect(String deviceId) {
     _connectCount++;
     // First connect = the step-0 claim connect; let it succeed. Second

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/theme/brand_colors.dart';
 import '../../../control/application/control_notifier.dart';
+import '../../../inventory/application/inventory_notifier.dart';
 import '../../../nearby/application/lamp_route_resolver.dart';
 import '../../../nearby/application/nearby_lamps_notifier.dart';
 import '../../application/add_lamp_notifier.dart';
@@ -72,8 +73,12 @@ class AddLampDoneStep extends ConsumerWidget {
               onPressed: () {
                 ref.read(addLampNotifierProvider.notifier).reset();
                 // routeForLamp keeps BT-only lamps off the
-                // ConnectingView and on their dedicated pane.
-                context.go(routeForLamp(state.deviceId, nearby));
+                // ConnectingView and on their dedicated pane. Inventory
+                // passed for offline-lamp fallback.
+                final inv = ref.read(inventoryNotifierProvider).value;
+                context.go(
+                  routeForLamp(state.deviceId, nearby, inventory: inv),
+                );
               },
               child: Text('Say hi to $name'),
             ),

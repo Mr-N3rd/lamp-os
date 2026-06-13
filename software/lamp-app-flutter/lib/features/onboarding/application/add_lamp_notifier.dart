@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../../core/ble/ble_client.dart';
 import '../../../core/ble/ble_client_provider.dart';
 import '../../../core/ble/lamp_crypto.dart';
 import '../../../core/ble/uuids.dart';
@@ -118,6 +119,7 @@ class AddLampNotifier extends _$AddLampNotifier {
         await doConnect();
       }
     } catch (e) {
+      if (!ref.mounted) return;
       state = state.copyWith(
         status: AddLampStatus.error,
         error: AddLampError.connectFailed,
@@ -125,6 +127,7 @@ class AddLampNotifier extends _$AddLampNotifier {
       );
       return;
     }
+    if (!ref.mounted) return;
 
     // Step 1: claim. Writes a single plaintext settings_blob to the
     // control service carrying the new lamp.password + lamp.name. The
@@ -133,6 +136,13 @@ class AddLampNotifier extends _$AddLampNotifier {
     // from `isAuthed` in that state). After the drain persists + reboots
     // the lamp, every future write requires GCM auth keyed off the new
     // password.
+    //
+    // SECURITY (accepted threat T2): the password chosen here is the
+    // new admin credential and goes on the wire in plaintext. A passive
+    // BLE sniffer in range at adoption captures it. The only real fix —
+    // fleet-wide mesh authentication — was deliberately rejected. See
+    // docs/superpowers/notes/2026-06-10-accepted-security-threats.md.
+    // Threat is bounded by physical proximity at the adoption moment.
     //
     // The lamp tears down its BLE link mid-write as part of fade-out +
     // reboot; the write throws a "not connected" / "disconnected"
@@ -156,15 +166,13 @@ class AddLampNotifier extends _$AddLampNotifier {
           payload,
           allowLongWrite: true,
         );
+      } on BleDisconnectedException {
+        // Expected: lamp reboots mid-write as part of setup-apply.
       } catch (e) {
-        // Lamp reboots mid-write → fbp surfaces a disconnect error.
-        // Anything else is a real failure.
-        final msg = e.toString().toLowerCase();
-        final looksLikeReboot =
-            msg.contains('not connected') || msg.contains('disconnect');
-        if (!looksLikeReboot) rethrow;
+        if (!isBleDisconnectError(e)) rethrow;
       }
     } catch (e) {
+      if (!ref.mounted) return;
       state = state.copyWith(
         status: AddLampStatus.error,
         error: AddLampError.claimFailed,
@@ -172,6 +180,7 @@ class AddLampNotifier extends _$AddLampNotifier {
       );
       return;
     }
+    if (!ref.mounted) return;
 
     // Step 2: wait for the lamp to reboot, then reconnect + authenticate
     // + probe a section read to confirm the password stuck. The lampSection
@@ -239,6 +248,7 @@ class AddLampNotifier extends _$AddLampNotifier {
         }
       }
     } on FormatException catch (_) {
+      if (!ref.mounted) return;
       state = state.copyWith(
         status: AddLampStatus.error,
         step: AddLampStep.password,
@@ -247,6 +257,7 @@ class AddLampNotifier extends _$AddLampNotifier {
       );
       return;
     } on TimeoutException catch (e) {
+      if (!ref.mounted) return;
       state = state.copyWith(
         status: AddLampStatus.error,
         step: AddLampStep.password,
@@ -257,6 +268,7 @@ class AddLampNotifier extends _$AddLampNotifier {
       );
       return;
     } catch (e) {
+      if (!ref.mounted) return;
       state = state.copyWith(
         status: AddLampStatus.error,
         step: AddLampStep.password,
@@ -267,6 +279,7 @@ class AddLampNotifier extends _$AddLampNotifier {
       );
       return;
     }
+    if (!ref.mounted) return;
 
     // Step 3: success — persist and advance.
     await ref.read(inventoryNotifierProvider.notifier).add(
@@ -277,9 +290,11 @@ class AddLampNotifier extends _$AddLampNotifier {
             critterIndex: _pickCritterIndex(),
           ),
         );
+    if (!ref.mounted) return;
     await ref
         .read(activeLampNotifierProvider.notifier)
         .set(state.deviceId);
+    if (!ref.mounted) return;
     state = state.copyWith(
       step: AddLampStep.done,
       status: AddLampStatus.idle,
@@ -299,7 +314,9 @@ class AddLampNotifier extends _$AddLampNotifier {
               critterIndex: _pickCritterIndex(),
             ),
           );
+      if (!ref.mounted) return;
       await ref.read(activeLampNotifierProvider.notifier).set(deviceId);
+      if (!ref.mounted) return;
       state = state.copyWith(
         deviceId: deviceId,
         name: name,
@@ -307,6 +324,7 @@ class AddLampNotifier extends _$AddLampNotifier {
         status: AddLampStatus.idle,
       );
     } catch (e) {
+      if (!ref.mounted) return;
       state = state.copyWith(
         status: AddLampStatus.error,
         errorMessage: e.toString(),

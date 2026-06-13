@@ -56,4 +56,18 @@ class SeenLamp {
         shadeRgb: shadeRgb ?? this.shadeRgb,
         lastSeenEpochMs: lastSeenEpochMs ?? this.lastSeenEpochMs,
       );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SeenLamp &&
+          id == other.id &&
+          name == other.name &&
+          baseRgb == other.baseRgb &&
+          shadeRgb == other.shadeRgb &&
+          lastSeenEpochMs == other.lastSeenEpochMs;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, name, baseRgb, shadeRgb, lastSeenEpochMs);
 }

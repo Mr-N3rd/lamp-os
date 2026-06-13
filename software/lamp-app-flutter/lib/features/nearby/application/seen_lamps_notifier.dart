@@ -46,6 +46,13 @@ class SeenLampsNotifier extends _$SeenLampsNotifier {
     unawaited(_loadFromPrefs());
     ref.onDispose(() {
       _sub?.cancel();
+      // Flush any pending debounced writes before the persist timer is
+      // dropped. Without this, advs that landed in the last 2 s before
+      // app close (background, kill, restart) are lost — the state has
+      // them in memory but they're never written to SharedPreferences.
+      if (_persistTimer?.isActive ?? false) {
+        unawaited(_persistNow());
+      }
       _persistTimer?.cancel();
     });
     return const [];
@@ -84,20 +91,37 @@ class SeenLampsNotifier extends _$SeenLampsNotifier {
   void _onAd(BleAdvertisement ad) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final existing = state.indexWhere((l) => l.id == ad.id);
-    final entry = existing >= 0
-        ? state[existing].copyWith(
-            name: ad.name,
-            baseRgb: ad.baseRgb,
-            shadeRgb: ad.shadeRgb,
-            lastSeenEpochMs: now,
-          )
-        : SeenLamp(
-            id: ad.id,
-            name: ad.name,
-            baseRgb: ad.baseRgb,
-            shadeRgb: ad.shadeRgb,
-            lastSeenEpochMs: now,
-          );
+    // Factory-default guard: lamps emit factory defaults (name='stray',
+    // base purple, shade off) briefly during the boot NVS race window
+    // and persistently after a field-reset. Don't overwrite a previously-
+    // observed personalised entry with factory defaults — keep the last-
+    // known-good identity until the lamp emits real data again.
+    final adIsFactory = _isFactoryAdvertisement(ad);
+    final SeenLamp entry;
+    if (existing >= 0) {
+      final prior = state[existing];
+      if (adIsFactory && !_isFactoryEntry(prior)) {
+        // Touch the timestamp so we know it's still nearby; keep prior
+        // name + colors. Without this the screen would say "last seen 5
+        // min ago" while the lamp is actively booting in front of us.
+        entry = prior.copyWith(lastSeenEpochMs: now);
+      } else {
+        entry = prior.copyWith(
+          name: ad.name,
+          baseRgb: ad.baseRgb,
+          shadeRgb: ad.shadeRgb,
+          lastSeenEpochMs: now,
+        );
+      }
+    } else {
+      entry = SeenLamp(
+        id: ad.id,
+        name: ad.name,
+        baseRgb: ad.baseRgb,
+        shadeRgb: ad.shadeRgb,
+        lastSeenEpochMs: now,
+      );
+    }
     final next = <SeenLamp>[
       entry,
       for (final l in state)
@@ -125,4 +149,24 @@ class SeenLampsNotifier extends _$SeenLampsNotifier {
       jsonEncode([for (final l in state) l.toJson()]),
     );
   }
+}
+
+// Factory-default sentinels — must match the firmware config_types defaults
+// and the canonical check on NearbyLamp.isFactoryDefault. Kept private here
+// (and duplicated rather than imported) so the seen-list doesn't pull in
+// the nearby-list domain class transitively.
+const String _factoryName = 'stray';
+const int _factoryBaseRgb = 0x300783;
+const int _factoryShadeRgb = 0x000000;
+
+bool _isFactoryAdvertisement(BleAdvertisement ad) {
+  return ad.name == _factoryName &&
+      ad.baseRgb == _factoryBaseRgb &&
+      ad.shadeRgb == _factoryShadeRgb;
+}
+
+bool _isFactoryEntry(SeenLamp l) {
+  return l.name == _factoryName &&
+      l.baseRgb == _factoryBaseRgb &&
+      l.shadeRgb == _factoryShadeRgb;
 }

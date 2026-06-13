@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/app_snackbar.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../../nearby/application/nearby_lamps_notifier.dart';
 
@@ -36,12 +37,18 @@ class BtOnlyLampScreen extends ConsumerStatefulWidget {
   ConsumerState<BtOnlyLampScreen> createState() => _BtOnlyLampScreenState();
 }
 
-class _BtOnlyLampScreenState extends ConsumerState<BtOnlyLampScreen> {
-  /// One-shot: once we've routed the user out on a mesh-capable adv,
-  /// don't fire again (the rebuild during teardown can re-evaluate the
-  /// select() and we'd otherwise schedule a second pushReplacement).
-  bool _routedOut = false;
+/// Process-global set of lamp IDs that have already had a BtOnly →
+/// Control auto-route fire this app session. Survives remounts of
+/// [BtOnlyLampScreen] so the audit-H4 ping-pong (lamp flaps `isMesh`,
+/// auto-route to Control, Control bounces back to BtOnly, BtOnly
+/// auto-routes back to Control, ad infinitum) can't happen — once a
+/// lamp's auto-route fires, every subsequent BtOnly mount for that
+/// lamp ignores the fresh-adv signal. The user keeps full manual
+/// navigation via the AppBar back button. Reset only on app restart;
+/// the auto-route is one-shot convenience, not a steady-state poll.
+final Set<String> _btOnlyAlreadyAutoRouted = <String>{};
 
+class _BtOnlyLampScreenState extends ConsumerState<BtOnlyLampScreen> {
   @override
   Widget build(BuildContext context) {
     final lampId = widget.lampId;
@@ -54,11 +61,18 @@ class _BtOnlyLampScreenState extends ConsumerState<BtOnlyLampScreen> {
     // mesh-capable after all (the previous adv was stale or the lamp
     // just came online with new firmware). Bounce to ControlScreen so
     // the user isn't trapped on a screen that no longer applies.
+    //
+    // ONE-SHOT GLOBALLY (audit H4 fix): the "already routed" flag lives
+    // in `_btOnlyAutoRoutedProvider` so a remount of this screen
+    // (e.g. ControlScreen bounces back to BtOnly on a flaky link) does
+    // NOT re-fire the auto-route. The user can navigate manually via
+    // the back arrow + tap-from-My-Lamps if they want to re-attempt.
     final isMesh = ref.watch(nearbyLampsNotifierProvider.select(
       (list) => list.firstWhereOrNull((l) => l.id == lampId)?.isMesh,
     ));
-    if (!_routedOut && isMesh == true) {
-      _routedOut = true;
+    final alreadyRouted = _btOnlyAlreadyAutoRouted.contains(lampId);
+    if (!alreadyRouted && isMesh == true) {
+      _btOnlyAlreadyAutoRouted.add(lampId);
       final router = GoRouter.maybeOf(context);
       if (router != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -69,7 +83,28 @@ class _BtOnlyLampScreenState extends ConsumerState<BtOnlyLampScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text(name)),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          // Explicit back affordance — without this the user is stranded
+          // on this screen if they landed via a deep link / initial route
+          // (no back stack to auto-derive a leading widget from), and
+          // even when pushed from My Lamps the auto-route `pushReplacement`
+          // at line ~66 erases the stack on its way to ControlScreen. Pop
+          // when possible (returns to My Lamps); otherwise `go` to it
+          // explicitly so this is never a dead end.
+          onPressed: () {
+            final router = GoRouter.maybeOf(context);
+            if (router == null) return;
+            if (router.canPop()) {
+              router.pop();
+            } else {
+              router.go(AppRoutes.myLamps);
+            }
+          },
+        ),
+        title: Text(name),
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -183,24 +218,15 @@ class _ActionCard extends StatelessWidget {
                   // user can paste it into a browser manually.
                   await Clipboard.setData(ClipboardData(text: url));
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        duration: const Duration(seconds: 2),
-                        content:
-                            Text("Couldn't open — copied $url instead"),
-                      ),
+                    AppSnackbar.info(
+                      context, "Couldn't open — copied $url instead",
                     );
                   }
                 }
               } else {
                 await Clipboard.setData(ClipboardData(text: url));
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      duration: const Duration(seconds: 2),
-                      content: Text('Copied $url'),
-                    ),
-                  );
+                  AppSnackbar.info(context, 'Copied $url');
                 }
               }
             },

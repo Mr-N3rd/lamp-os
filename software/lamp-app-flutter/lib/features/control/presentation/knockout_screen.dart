@@ -2,6 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/back_button_leading.dart';
 import '../../../core/widgets/friendly_error.dart';
 import '../../inventory/application/inventory_notifier.dart';
 import '../application/control_notifier.dart';
@@ -134,6 +135,7 @@ class _KnockoutScreenState extends ConsumerState<KnockoutScreen> {
     final knockoutCount = async.value?.base.knockout.length ?? 0;
     return Scaffold(
       appBar: AppBar(
+        leading: const BackButtonLeading(),
         title: Text('Pixel Knockout · $name'),
         actions: [
           Padding(
@@ -206,10 +208,7 @@ class _KnockoutScreenState extends ConsumerState<KnockoutScreen> {
                       key: _columnKey,
                       children: [
                         for (var i = 0; i < pixelCount; i++)
-                          _PixelBar(
-                            index: i,
-                            brightness: state.base.knockout[i] ?? 100,
-                          ),
+                          _PixelBar(lampId: widget.lampId, index: i),
                       ],
                     ),
                   ),
@@ -226,9 +225,16 @@ class _KnockoutScreenState extends ConsumerState<KnockoutScreen> {
                       horizontal: 16, vertical: 8),
                   child: Row(
                     children: [
+                      // Mental-model fix (audit ux-H5): the OLD "Cancel"
+                      // button does real work (rewrites every drifted
+                      // pixel back to its original) and the OLD "Update"
+                      // was a no-op pop (changes already live-applied).
+                      // Renamed to match what they do:
+                      //   "Discard changes" — actively reverts.
+                      //   "Done"            — closes the screen.
                       TextButton.icon(
-                        icon: const Icon(Icons.close, size: 18),
-                        label: const Text('Cancel'),
+                        icon: const Icon(Icons.undo, size: 18),
+                        label: const Text('Discard changes'),
                         onPressed: _cancel,
                       ),
                       Tooltip(
@@ -245,7 +251,7 @@ class _KnockoutScreenState extends ConsumerState<KnockoutScreen> {
                       const Spacer(),
                       FilledButton.icon(
                         icon: const Icon(Icons.check, size: 18),
-                        label: const Text('Update'),
+                        label: const Text('Done'),
                         onPressed: () => Navigator.of(context).pop(),
                       ),
                     ],
@@ -262,14 +268,23 @@ class _KnockoutScreenState extends ConsumerState<KnockoutScreen> {
 
 /// One pixel row: label, horizontal brightness bar, % readout. The bar is
 /// non-interactive; the parent's `Listener` handles all gestures.
-class _PixelBar extends StatelessWidget {
-  const _PixelBar({required this.index, required this.brightness});
+///
+/// Each row is its OWN `ConsumerWidget` and `.select`s on just its index's
+/// knockout value (audit perf-H4). Pre-fix, 144 rows all rebuilt + relaid-
+/// out at ~33 Hz during a drag because the parent's `data: (state) {...}`
+/// rebuilt the entire `Column` on every state change. Now only the rows
+/// whose pixel value actually changed rebuild — typically one per drag tick.
+class _PixelBar extends ConsumerWidget {
+  const _PixelBar({required this.lampId, required this.index});
 
+  final String lampId;
   final int index;
-  final int brightness;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final brightness = ref.watch(controlNotifierProvider(lampId).select(
+      (a) => a.value?.base.knockout[index] ?? 100,
+    ));
     final fraction = (brightness / 100).clamp(0.0, 1.0);
     return SizedBox(
       height: _KnockoutScreenState._rowHeight,

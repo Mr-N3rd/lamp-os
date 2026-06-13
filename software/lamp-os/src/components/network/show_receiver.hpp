@@ -16,7 +16,9 @@
 #include "../firmware/firmware_receiver.hpp"  // FirmwareTransport interface
 
 #ifndef LAMP_ESPNOW_CHANNEL
-#define LAMP_ESPNOW_CHANNEL 1
+// Moved 1 → 11 on 2026-06-10. Keep in lockstep with the wisp's
+// MeshLink.h — see that header for the rationale.
+#define LAMP_ESPNOW_CHANNEL 11
 #endif
 
 // v0x03 mesh-deploy lock-in: bumped from 2000 → 5000 ms to reduce baseline

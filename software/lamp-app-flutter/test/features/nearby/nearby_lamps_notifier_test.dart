@@ -37,7 +37,13 @@ void main() {
       shadeRgb: 0x000000,
       rssi: -50,
     ));
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    // 600 ms > the 500 ms leading-edge emit window in
+    // NearbyLampsNotifier — without this, the second adv lands as
+    // pending and the trailing-edge flush hasn't happened yet by the
+    // time the test reads state. (M1 audit fix: state emissions are
+    // throttled to once per 500 ms so a 22-lamp fleet doesn't
+    // re-notify every consumer at 44 Hz.)
+    await Future<void>.delayed(const Duration(milliseconds: 600));
     final lamps = container.read(nearbyLampsNotifierProvider);
     expect(lamps.length, 1);
     expect(lamps.first.rssi, -50);

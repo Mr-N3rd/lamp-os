@@ -11,10 +11,11 @@
 // (WispConfig's "wisp" namespace, keys wifiSsid / wifiPw) — both WifiLink
 // and StageBeacon read from it.
 //
-// Coex caveat (read once): MeshLink::begin() calls esp_wifi_set_channel(1)
-// before init'ing ESP-NOW. Once we associate to an AP here, the radio
-// switches to whatever channel the AP picked. Mesh peers pinned to channel
-// 1 won't see broadcasts unless the venue AP is also on channel 1. See
+// Coex caveat (read once): MeshLink::begin() calls esp_wifi_set_channel
+// (LAMP_ESPNOW_CHANNEL = 11 as of 2026-06-10) before init'ing ESP-NOW.
+// Once we associate to an AP here, the radio switches to whatever
+// channel the AP picked. Mesh peers pinned to channel 11 won't see
+// broadcasts unless the venue AP is also on channel 11. See
 // docs/mesh-deployment.md "channel coex" — same constraint Aurora faces.
 
 #pragma once

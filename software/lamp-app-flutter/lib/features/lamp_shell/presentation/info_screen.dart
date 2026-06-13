@@ -8,6 +8,7 @@ import '../../../core/app_channel.dart';
 import '../../../core/routing/routes.dart';
 import '../../../core/theme/brand_colors.dart';
 import '../../../core/utils/tap_counter.dart';
+import '../../../core/widgets/app_snackbar.dart';
 import '../../../core/widgets/info_panel.dart';
 import '../../control/application/advanced_session.dart';
 import '../../control/application/control_notifier.dart';
@@ -27,10 +28,16 @@ class InfoScreen extends ConsumerStatefulWidget {
 
 class _InfoScreenState extends ConsumerState<InfoScreen> {
   late final TapCounter _tap;
+  // Memoized once per InfoScreen lifetime. PackageInfo.fromPlatform is a
+  // platform-channel call; without this memo the FutureBuilder used to
+  // construct a fresh future on every controlNotifierProvider tick,
+  // flashing "App ..." for a frame each time.
+  late final Future<PackageInfo> _packageInfo;
 
   @override
   void initState() {
     super.initState();
+    _packageInfo = PackageInfo.fromPlatform();
     _tap = TapCounter(
       count: 5,
       window: const Duration(seconds: 3),
@@ -46,11 +53,7 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
           // Advanced LED screen — that way the user sees the lamp name +
           // home-mode rows alongside the now-unlocked Advanced LED row.
           GoRouter.maybeOf(context)?.push(AppRoutes.setup(widget.lampId));
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                duration: Duration(seconds: 2),
-                content: Text('Advanced settings unlocked')),
-          );
+          AppSnackbar.info(context, 'Advanced settings unlocked');
         }
       },
     );
@@ -139,7 +142,7 @@ class _InfoScreenState extends ConsumerState<InfoScreen> {
         const SizedBox(height: 4),
         Center(
           child: FutureBuilder<PackageInfo>(
-            future: PackageInfo.fromPlatform(),
+            future: _packageInfo,
             builder: (context, snap) {
               final info = snap.data;
               final v = info != null

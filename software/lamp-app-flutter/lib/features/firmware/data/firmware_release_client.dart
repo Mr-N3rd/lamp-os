@@ -30,6 +30,16 @@ enum FirmwareChannel {
 /// Where to fetch from. The default constant points at the production
 /// repo's "latest" + "beta" release endpoints. Tests can swap to a
 /// fake-server URL via the optional [endpointOverride].
+///
+/// SECURITY (audit sec-H4, deferred): we fetch via plain `HttpClient`
+/// with `followRedirects = true` and no TLS pinning. A captive portal
+/// or corporate MITM with a trusted CA can serve any binary. The
+/// Ed25519 verify in `firmware_signature_verifier.dart` is the real
+/// defense — a forged binary fails verification before any bytes
+/// reach the lamp. Adding TLS pinning would be defense-in-depth but
+/// drags certificate-rotation maintenance and risks breakage on
+/// GitHub-edge cert drift. Tracked in
+/// docs/superpowers/notes/2026-06-10-accepted-security-threats.md.
 class FirmwareReleaseClient {
   FirmwareReleaseClient({HttpClient? httpClient, this.endpointOverride})
       : _httpClient = httpClient ?? HttpClient();

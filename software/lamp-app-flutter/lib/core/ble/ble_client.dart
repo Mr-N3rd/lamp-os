@@ -22,10 +22,85 @@ class BleNotConnected implements Exception {
   String toString() => 'BleNotConnected: $deviceId';
 }
 
+/// Thrown when a BLE op fails because the underlying link dropped — most
+/// commonly because the lamp rebooted mid-write (settings_blob persist +
+/// fade-out + reset is the standard "save" path; the link drops as the
+/// radio comes down). Distinct from [BleNotConnected]: that one means
+/// "we never had a connection," this one means "we did, the lamp
+/// disconnected us."
+///
+/// Production callers should `on BleDisconnectedException catch (_)`
+/// instead of string-matching `e.toString().contains('disconnect')` —
+/// the latter breaks every time flutter_blue_plus reworks its error
+/// surface. Audit cq-H (W7.8).
+class BleDisconnectedException implements Exception {
+  const BleDisconnectedException(this.deviceId, [this.cause]);
+  final String deviceId;
+  final Object? cause;
+  @override
+  String toString() =>
+      'BleDisconnectedException: $deviceId${cause == null ? '' : ' ($cause)'}';
+}
+
+/// Thrown when a GATT read returns more bytes than [BleClient]'s
+/// [maxReadBytes] cap. Audit sec-M3 — a hostile or malfunctioning lamp
+/// could otherwise OOM the app via an oversized notification payload.
+class BleReadTooLarge implements Exception {
+  const BleReadTooLarge(this.deviceId, this.length, this.cap);
+  final String deviceId;
+  final int length;
+  final int cap;
+  @override
+  String toString() =>
+      'BleReadTooLarge: $deviceId returned $length bytes (cap $cap)';
+}
+
+/// Cap on the size of a single GATT read or notification payload before
+/// we surface a typed exception. 4 KB comfortably exceeds every
+/// legitimate lamp-side payload (the largest is the wispStatus JSON
+/// at ~230 bytes per CONTROL_MAX_PAYLOAD); anything bigger is either
+/// malformed firmware or an attacker probing for OOM.
+const int kBleMaxReadBytes = 4096;
+
+/// True when [e] is shaped like a disconnect / link-dropped error from
+/// any source (the typed exception from this module, fbp's various
+/// reworded "device disconnected" / "not connected" messages, etc.).
+///
+/// Use this only at boundaries where the underlying client hasn't
+/// already wrapped the failure into [BleDisconnectedException] — e.g.
+/// retry-loop classifiers that compose other transient signals (auth
+/// timeouts, discoverServices failures) and want one helper that
+/// recognises them all. Single-exception call sites should prefer
+/// `on BleDisconnectedException catch (_)` directly.
+bool isBleDisconnectError(Object e) {
+  if (e is BleDisconnectedException || e is BleNotConnected) return true;
+  final msg = e.toString().toLowerCase();
+  return msg.contains('disconnect') || msg.contains('not connected');
+}
+
 abstract class BleClient {
   Future<void> connect(String deviceId);
   Future<void> disconnect(String deviceId);
   bool isConnected(String deviceId);
+
+  /// Best-effort: open a GATT connection to [deviceId] and prime the
+  /// service-handle cache so that a subsequent [connect] / first
+  /// read/write skips the cold-connect latency (200-500 ms GATT
+  /// handshake + 100-400 ms service discovery on most platforms).
+  ///
+  /// Designed to be called fire-and-forget from the BLE adv stream as
+  /// soon as a paired lamp pops into range. Failures are swallowed —
+  /// pre-warming is opportunistic, never on the critical path. If a
+  /// pre-warm is already in flight or the device is already connected,
+  /// this should be a no-op.
+  ///
+  /// Implementations MUST guarantee that at most ONE pre-warm is in
+  /// flight at a time across all device ids — pre-warming holds the
+  /// lamp's BLE peripheral and degrades its mesh airtime even at WIDE
+  /// conn-params, so fanning out to every paired lamp in range would
+  /// hurt the fleet.
+  Future<void> prewarm(String deviceId) async {}
+
   Future<Uint8List> read(String deviceId, String serviceUuid, String charUuid);
   /// Writes [value] to the characteristic.
   ///
@@ -76,8 +151,11 @@ class InMemoryBleClient implements BleClient {
   String _key(String d, String s, String c) => '$d|$s|$c';
 
   StreamController<bool> _ensureConnStream(String deviceId) {
+    // Intentionally never closed — same lifetime contract as _streams
+    // above. Lives with the InMemoryBleClient.
     return _connStreams.putIfAbsent(
       deviceId,
+      // ignore: close_sinks
       () => StreamController<bool>.broadcast(),
     );
   }
@@ -94,6 +172,13 @@ class InMemoryBleClient implements BleClient {
   }
 
   @override
+  Future<void> prewarm(String deviceId) async {
+    // No-op for tests. Production tests that want to assert pre-warm
+    // behavior can use `connect()` directly + verify isConnected — the
+    // observable side-effect is the same.
+  }
+
+  @override
   Future<void> disconnect(String deviceId) async {
     _connected.remove(deviceId);
     _ensureConnStream(deviceId).add(false);
@@ -107,6 +192,9 @@ class InMemoryBleClient implements BleClient {
     if (!_connected.contains(d)) throw BleNotConnected(d);
     final v = _values[_key(d, s, c)];
     if (v == null) throw BleNotFound('$d/$s/$c');
+    if (v.length > kBleMaxReadBytes) {
+      throw BleReadTooLarge(d, v.length, kBleMaxReadBytes);
+    }
     return v;
   }
 
@@ -127,13 +215,32 @@ class InMemoryBleClient implements BleClient {
       throw BleEncryptionRequired(d);
     }
     _values[key] = v;
-    _streams[key]?.add(v);
+    // Production semantics: `FbpBleClient` does NOT echo writes back to
+    // subscribers — the only thing that triggers a notification is when
+    // the lamp explicitly pushes. The fake used to echo here, which let
+    // subscribe-then-write-and-expect-the-write-back patterns pass tests
+    // while breaking on real hardware. Audit cq-C1. Tests that want to
+    // observe writes use `simulateNotify` (see notifyable_ble_client
+    // patterns in firmware_ota_pusher_test).
+  }
+
+  /// Test-only: inject `value` into the (d, s, c) notification stream
+  /// AS IF the lamp had pushed it. Use this instead of relying on
+  /// `write()` to echo to subscribers.
+  void simulateNotify(String d, String s, String c, Uint8List value) {
+    final key = _key(d, s, c);
+    _streams[key]?.add(value);
   }
 
   @override
   Stream<Uint8List> subscribe(String d, String s, String c) {
     if (!_connected.contains(d)) throw BleNotConnected(d);
     final key = _key(d, s, c);
+    // Intentionally never closed — _streams is a per-key cache of
+    // broadcast controllers that lives for the InMemoryBleClient's
+    // process lifetime. Tests reuse the same client across calls;
+    // closing on first subscriber cancel would break the next read.
+    // ignore: close_sinks
     final ctrl = _streams.putIfAbsent(
       key,
       () => StreamController<Uint8List>.broadcast(),
@@ -143,11 +250,14 @@ class InMemoryBleClient implements BleClient {
 
   @override
   Stream<bool> watchConnected(String deviceId) {
+    // ignore: close_sinks (lives in _connStreams cache; never closed)
     final ctrl = _ensureConnStream(deviceId);
     // Subscribe to the broadcast stream BEFORE emitting the initial value so
     // that no events are dropped between the seed yield and yield*. Using a
     // StreamController lets us prepend the current state without the async*
-    // generator's subscription-before-yield race condition.
+    // generator's subscription-before-yield race condition. Closed via
+    // `out.onCancel = sub.cancel` (below) when the consumer cancels.
+    // ignore: close_sinks
     final out = StreamController<bool>();
     final sub = ctrl.stream.listen(
       out.add,

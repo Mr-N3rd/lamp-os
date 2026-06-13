@@ -98,7 +98,11 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final controlAsync = ref.watch(controlNotifierProvider(widget.lampId));
+    // .select to just the home section (audit perf-H3). HomeMode reads
+    // only home.{ssid, brightness}; brightness sliders on the
+    // active lamp's ControlNotifier no longer rebuild this whole tree.
+    final controlAsync = ref.watch(controlNotifierProvider(widget.lampId)
+        .select((a) => a.whenData((s) => s.home)));
 
     return Scaffold(
       appBar: AppBar(
@@ -117,11 +121,11 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
               'and try again.',
           rawError: e,
         ),
-        data: (state) {
+        data: (home) {
           final notifier =
               ref.read(controlNotifierProvider(widget.lampId).notifier);
 
-          final hasSaved = state.home.ssid.isNotEmpty;
+          final hasSaved = home.ssid.isNotEmpty;
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -139,7 +143,7 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
 
               if (hasSaved) ...[
                 _ConnectionStatusRow(
-                  label: 'Home network: ${state.home.ssid}',
+                  label: 'Home network: ${home.ssid}',
                   onForget: _onForget,
                 ),
                 const SizedBox(height: 12),
@@ -168,7 +172,7 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                 children: [
                   Expanded(
                     child: Slider(
-                      value: state.home.brightness.toDouble(),
+                      value: home.brightness.toDouble(),
                       min: 0,
                       max: 100,
                       divisions: 100,
@@ -179,7 +183,7 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                   SizedBox(
                     width: 48,
                     child: Text(
-                      '${state.home.brightness}%',
+                      '${home.brightness}%',
                       textAlign: TextAlign.right,
                       style: const TextStyle(
                         color: BrandColors.fogGrey,

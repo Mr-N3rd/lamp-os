@@ -60,6 +60,18 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
   String? _memoRendered;
   String? _memoFor; // the template the cached result was rendered against
 
+  // Bounded LRU of built SvgPicture widgets keyed by their rendered-color
+  // signature. The audit (perf-H5) noted that even with the string-memo
+  // above, every rebuild constructed a fresh `SvgPicture.string(...)` —
+  // and flutter_svg re-decodes the SVG XML on each mount. Caching the
+  // widget itself lets us hand back the SAME instance across rebuilds for
+  // a color set we already built. 16 entries is enough headroom for a
+  // smooth drag (typical drag visits ~8-12 unique color samples) without
+  // letting an inadvertent leak grow unbounded.
+  static const int _svgCacheSize = 16;
+  final Map<String, SvgPicture> _svgWidgetCache = {};
+  final List<String> _svgCacheOrder = [];
+
   Future<void> _ensureLoaded(String assetPath) async {
     final cached = _templates[assetPath];
     if (cached != null) {
@@ -158,31 +170,45 @@ class _LampPreviewState extends ConsumerState<LampPreview> {
     }
     final cacheKey =
         '${widget.shade.toHex()}|${widget.baseColors.map((c) => c.toHex()).join(",")}';
-    String rendered;
-    if (_memoFor == template &&
-        _memoKey == cacheKey &&
-        _memoRendered != null) {
-      rendered = _memoRendered!;
-    } else {
-      rendered = _renderSvg(template);
-      _memoFor = template;
-      _memoKey = cacheKey;
-      _memoRendered = rendered;
+    // Reuse an already-built SvgPicture widget for this cacheKey (audit
+    // perf-H5). Pre-fix every shade/base hex change rebuilt SvgPicture
+    // with a fresh ValueKey, which forced flutter_svg to re-decode the
+    // SVG source from scratch — measurable jank during continuous color
+    // drags (~17 Hz with the 60 ms coalescer). Now we keep up to
+    // _svgCacheSize recently-built widgets keyed by the rendered-color
+    // signature; same-signature rebuilds return the cached widget.
+    SvgPicture? cached = _svgWidgetCache[cacheKey];
+    if (cached == null) {
+      String rendered;
+      if (_memoFor == template &&
+          _memoKey == cacheKey &&
+          _memoRendered != null) {
+        rendered = _memoRendered!;
+      } else {
+        rendered = _renderSvg(template);
+        _memoFor = template;
+        _memoKey = cacheKey;
+        _memoRendered = rendered;
+      }
+      cached = SvgPicture.string(
+        rendered,
+        // Same ValueKey discipline as before — flutter_svg's internal
+        // picture cache is keyed off this string. Identical key across
+        // the cached-widget reuse means no re-decode.
+        key: ValueKey<String>(cacheKey),
+        width: widget.size,
+        height: widget.size,
+      );
+      _svgWidgetCache[cacheKey] = cached;
+      _svgCacheOrder.add(cacheKey);
+      while (_svgCacheOrder.length > _svgCacheSize) {
+        _svgWidgetCache.remove(_svgCacheOrder.removeAt(0));
+      }
     }
     return SizedBox(
       width: widget.size,
       height: widget.size,
-      // Key on the rendered content so flutter_svg treats each unique
-      // shade/base color set as a brand-new picture. Without this, the
-      // SvgPicture widget is reused across rebuilds and flutter_svg's
-      // internal picture cache hands back the first decode even when our
-      // source string differs.
-      child: SvgPicture.string(
-        rendered,
-        key: ValueKey<String>(cacheKey),
-        width: widget.size,
-        height: widget.size,
-      ),
+      child: cached,
     );
   }
 }

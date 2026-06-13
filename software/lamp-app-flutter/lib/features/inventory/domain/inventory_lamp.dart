@@ -25,6 +25,16 @@ abstract class InventoryLamp with _$InventoryLamp {
     /// resolver treats those as `W = 0`, preserving the prior render.
     List<int>? lastShadeColor,
     List<int>? lastBaseColor,
+    /// Last observed `isMesh` (capability bit 1 in the adv) — true when
+    /// the lamp speaks the app's v0x03 mesh protocol, false for legacy
+    /// BT-only firmware. Set by `nearby_lamps_notifier` whenever a fresh
+    /// adv arrives. `lampRouteResolver` reads this when the live roster
+    /// is empty (lamp out of range) so an offline legacy BT-only lamp
+    /// routes to BtOnlyLampScreen instead of stranding the user on
+    /// ConnectingView forever. Nullable for legacy inventory entries
+    /// written before this field existed — resolvers default to
+    /// "assume mesh-capable" for those, mirroring the pre-fix behavior.
+    bool? lastKnownIsMesh,
   }) = _InventoryLamp;
 
   factory InventoryLamp.fromJson(Map<String, dynamic> json) =>

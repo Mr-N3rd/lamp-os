@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/brand_colors.dart';
+import '../../../core/widgets/back_button_leading.dart';
 import '../application/nearby_lamps_notifier.dart';
 
 class NearbyLampsScreen extends ConsumerWidget {
@@ -11,7 +12,10 @@ class NearbyLampsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final lamps = ref.watch(nearbyLampsNotifierProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Nearby Lamps (debug)')),
+      appBar: AppBar(
+        leading: const BackButtonLeading(),
+        title: const Text('Nearby lamps (debug)'),
+      ),
       body: lamps.isEmpty
           ? const Center(
               child: Text(
