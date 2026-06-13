@@ -3,15 +3,25 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
+import 'package:lamp_app/core/ble/lamp_crypto.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
+import 'package:lamp_app/features/inventory/application/inventory_notifier.dart';
+import 'package:lamp_app/features/inventory/domain/inventory_lamp.dart';
 import 'package:lamp_app/features/lamp_shell/application/wifi_notifier.dart';
 
 const _devId = 'lamp-x';
 
-Future<ProviderContainer> _seeded(String stateJson) async {
+/// Creates a [ProviderContainer] with an in-memory BLE client pre-seeded with
+/// [stateJson] for wifiState, and adds an [InventoryLamp] with
+/// [controlPassword] so that [WifiNotifier._writeOp] can find the lamp.
+Future<ProviderContainer> _seeded(
+  String stateJson, {
+  String controlPassword = 'secret',
+}) async {
   final ble = InMemoryBleClient();
   await ble.connect(_devId);
   await ble.write(
@@ -20,12 +30,21 @@ Future<ProviderContainer> _seeded(String stateJson) async {
     BleUuids.wifiState,
     Uint8List.fromList(utf8.encode(stateJson)),
   );
-  return ProviderContainer(
+  final c = ProviderContainer(
     overrides: [bleClientProvider.overrideWithValue(ble)],
   );
+  // Ensure inventory is loaded before we add the lamp.
+  await c.read(inventoryNotifierProvider.future);
+  await c.read(inventoryNotifierProvider.notifier).add(
+        InventoryLamp(
+            id: _devId, name: 'jacko', controlPassword: controlPassword),
+      );
+  return c;
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   test('build subscribes and parses initial wifiState read', () async {
     final c = await _seeded(
         '{"state":"idle","scanResults":[{"ssid":"home","rssi":-55,"encrypted":true}]}');
@@ -51,8 +70,13 @@ void main() {
     final ble = c.read(bleClientProvider);
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.wifiOp);
-    final decoded = jsonDecode(utf8.decode(written));
-    expect(decoded, {'op': 'scan'});
+    expect(written[0], LampCrypto.magicCiphertext);
+    final plain = await LampCrypto.decryptOpForTesting(
+        written,
+        password: 'secret',
+        saltUuid16: uuidSaltLE16(BleUuids.wifiOp),
+        charShortName: 'wifiOp');
+    expect(jsonDecode(utf8.decode(plain)), {'op': 'scan'});
   });
 
   test('connect() writes {op:connect, ssid, password}', () async {
@@ -67,7 +91,13 @@ void main() {
     final ble = c.read(bleClientProvider);
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.wifiOp);
-    expect(jsonDecode(utf8.decode(written)),
+    expect(written[0], LampCrypto.magicCiphertext);
+    final plain = await LampCrypto.decryptOpForTesting(
+        written,
+        password: 'secret',
+        saltUuid16: uuidSaltLE16(BleUuids.wifiOp),
+        charShortName: 'wifiOp');
+    expect(jsonDecode(utf8.decode(plain)),
         {'op': 'connect', 'ssid': 'home', 'password': 'sekret'});
   });
 
@@ -81,7 +111,13 @@ void main() {
     final ble = c.read(bleClientProvider);
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.wifiOp);
-    expect(jsonDecode(utf8.decode(written)), {'op': 'forget'});
+    expect(written[0], LampCrypto.magicCiphertext);
+    final plain = await LampCrypto.decryptOpForTesting(
+        written,
+        password: 'secret',
+        saltUuid16: uuidSaltLE16(BleUuids.wifiOp),
+        charShortName: 'wifiOp');
+    expect(jsonDecode(utf8.decode(plain)), {'op': 'forget'});
   });
 
   test('notify updates state and preserves scan results', () async {
@@ -137,5 +173,34 @@ void main() {
     final w = c.read(wifiNotifierProvider(_devId)).value!;
     expect(w.state, 'failed');
     expect(w.lastError, 'auth');
+  });
+
+  test('falls back to plaintext when controlPassword is null', () async {
+    // Seed inventory WITHOUT a controlPassword (factory-default / pre-adoption).
+    final ble = InMemoryBleClient();
+    await ble.connect(_devId);
+    await ble.write(
+        _devId, BleUuids.controlService, BleUuids.wifiState,
+        Uint8List.fromList(utf8.encode('{"state":"idle"}')));
+    final c = ProviderContainer(
+      overrides: [bleClientProvider.overrideWithValue(ble)],
+    );
+    addTearDown(c.dispose);
+    // Inventory is empty initially; add a lamp with NO controlPassword.
+    await c.read(inventoryNotifierProvider.future);
+    await c.read(inventoryNotifierProvider.notifier).add(
+      const InventoryLamp(id: _devId, name: 'naked'),
+    );
+    // Prime the wifi notifier.
+    await c.read(wifiNotifierProvider(_devId).future);
+
+    await c.read(wifiNotifierProvider(_devId).notifier).scan();
+
+    final written = await ble.read(
+        _devId, BleUuids.controlService, BleUuids.wifiOp);
+    expect(written[0], LampCrypto.magicPlaintext);
+    expect(
+        jsonDecode(utf8.decode(written.sublist(1))),
+        {'op': 'scan'});
   });
 }

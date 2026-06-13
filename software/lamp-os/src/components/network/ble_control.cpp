@@ -6,6 +6,7 @@
 #include <Preferences.h>
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <string>
 #include <unordered_set>
@@ -16,6 +17,7 @@
 #include "../../util/color.hpp"
 #include "../../lamps/standard_lamp.hpp"
 #include "./bluetooth.hpp"  // for lamp::scanPausedForGattClient + BLE_GAP_SCAN_TIME_MS
+#include "./crypto.hpp"
 #include "./nearby_lamps.hpp"
 #include "./show_receiver.hpp"
 #include "./wifi.hpp"
@@ -61,6 +63,8 @@ static bool                  s_running     = false;
 
 // Per-connection auth state.  Key = connection handle, value = authed.
 static std::map<uint16_t, bool> s_connAuth;
+// Per-connection crypto state (nonce replay window). Lazy-inserted on first use.
+static std::map<uint16_t, lamp::crypto::PerConnState> s_connCrypto;
 
 // Target MTU requested on every new connection
 static constexpr uint16_t TARGET_MTU = 512;
@@ -73,6 +77,77 @@ static bool isAuthed(uint16_t connHandle) {
   if (s_config->lamp.password.empty()) return true;  // No password — open access
   auto it = s_connAuth.find(connHandle);
   return it != s_connAuth.end() && it->second;
+}
+
+// ---------------------------------------------------------------------------
+// UUID → little-endian 16-byte salt (matches Dart uuidSaltLE16)
+// ---------------------------------------------------------------------------
+
+// Parse a UUID string like "5f64f4d1-d6d9-4a44-9b3f-3a8d6f7e6b40" into 16
+// bytes in **reversed hex order** so it matches the Dart side's
+// `uuidSaltLE16(...)`. The HKDF salt is opaque — both sides just need to
+// agree on the bytes.
+static std::array<uint8_t, 16> uuidSaltLE(const char* uuid) {
+  std::array<uint8_t, 16> out{};
+  uint8_t bytes[16];
+  size_t bi = 0;
+  for (size_t i = 0; uuid[i] && bi < 16; ++i) {
+    if (uuid[i] == '-') continue;
+    auto hex2 = [](char c) -> int {
+      if (c >= '0' && c <= '9') return c - '0';
+      if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+      if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+      return 0;
+    };
+    int hi = hex2(uuid[i]);
+    int lo = hex2(uuid[i + 1]);
+    bytes[bi++] = static_cast<uint8_t>((hi << 4) | lo);
+    ++i;  // consumed two hex chars
+  }
+  // Reverse to LE.
+  for (size_t k = 0; k < 16; ++k) out[k] = bytes[15 - k];
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Incoming write dispatcher — magic-byte routing
+// ---------------------------------------------------------------------------
+
+// Decode an inbound write payload. Dispatches on the magic-byte prefix:
+//   - 0x02 → AES-GCM ciphertext via lamp::crypto::decryptOp.
+//     Successful decrypt implicitly authenticates the connection
+//     (GCM auth-tag has already verified the lamp password).
+//   - 0x01 → explicit plaintext prefix; strip it and pass through.
+//   - anything else (legacy unprefixed JSON, including the webapp's bare
+//     '{' first byte) → treat the whole payload as plaintext JSON.
+// Plaintext writes still require a prior CHAR_AUTH success to be authed.
+// Returns true on success (json populated); false to silently reject.
+static bool decodeIncomingOp(const std::string& raw,
+                             uint16_t handle,
+                             const uint8_t* charUuidLE16,
+                             const char* charShortName,
+                             std::string& outJson,
+                             bool& authed) {
+  const auto* p = reinterpret_cast<const uint8_t*>(raw.data());
+  const size_t n = raw.size();
+  if (n == 0) return false;
+
+  if (lamp::crypto::magicByte(p, n) == lamp::crypto::MAGIC_CIPHERTEXT) {
+    auto& conn = s_connCrypto[handle];
+    if (!lamp::crypto::decryptOp(p, n, charUuidLE16, charShortName,
+                                 s_config->lamp.password, conn, outJson)) {
+      return false;
+    }
+    s_connAuth[handle] = true;  // GCM tag IS auth
+    authed = true;
+    return true;
+  }
+
+  // Plaintext path. `0x01` prefix is allowed and stripped; otherwise pass through.
+  size_t start = (lamp::crypto::magicByte(p, n) == lamp::crypto::MAGIC_PLAINTEXT) ? 1 : 0;
+  outJson.assign(reinterpret_cast<const char*>(p + start), n - start);
+  authed = isAuthed(handle);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +177,7 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer* server, NimBLEConnInfo& connInfo, int reason) override {
     uint16_t handle = connInfo.getConnHandle();
     s_connAuth.erase(handle);
+    s_connCrypto.erase(handle);
 
     // Resume the central scan now that the phone is gone.
     lamp::scanPausedForGattClient = false;
@@ -124,11 +200,23 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
 
 class AuthCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    uint16_t handle = connInfo.getConnHandle();
-    std::string written = c->getValue();
-    bool accepted = (written == s_config->lamp.password);
+    static const auto uuid = uuidSaltLE(CHAR_AUTH);
+    const uint16_t handle = connInfo.getConnHandle();
+    const std::string raw = c->getValue();
+    if (raw.size() > 256) return;  // password length sanity
+    std::string body;
+    bool authed = false;
+    if (!decodeIncomingOp(raw, handle, uuid.data(), "auth", body, authed)) return;
+    if (authed) {
+      // Ciphertext path already set s_connAuth — nothing more to do.
+#ifdef LAMP_DEBUG
+      Serial.printf("[ble_control] Auth via ciphertext handle=%u OK\n", handle);
+#endif
+      return;
+    }
+    // Plaintext path: compare the decoded body against the lamp password.
+    const bool accepted = (body == s_config->lamp.password);
     s_connAuth[handle] = accepted;
-
 #ifdef LAMP_DEBUG
     Serial.printf("[ble_control] Auth attempt handle=%u %s\n",
                   handle, accepted ? "ACCEPTED" : "REJECTED");
@@ -223,38 +311,56 @@ class ExpressionOpCallback : public NimBLECharacteristicCallbacks {
 
 class MqttOpCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) return;
-    std::string val = c->getValue();
-    if (val.empty() || val.size() > MAX_PENDING_OP_JSON) return;
+    static const auto uuid = uuidSaltLE(CHAR_MQTT_OP);
+    const uint16_t handle = connInfo.getConnHandle();
+    const std::string raw = c->getValue();
+    if (raw.size() > MAX_PENDING_OP_JSON + 64) return;  // headroom for prefix+tag
+    std::string json;
+    bool authed = false;
+    if (!decodeIncomingOp(raw, handle, uuid.data(), "mqttOp", json, authed)) return;
+    if (!authed) return;
+    if (json.empty() || json.size() > MAX_PENDING_OP_JSON) return;
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE mqttOp len=%u\n", (unsigned)val.size());
+    Serial.printf("[ble_control] WRITE mqttOp len=%u (decoded)\n", (unsigned)json.size());
 #endif
-    postPendingMqttOpJson(val.data(), val.size());
+    postPendingMqttOpJson(json.data(), json.size());
   }
 };
 
 class WifiOpCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) return;
-    std::string val = c->getValue();
-    if (val.empty() || val.size() > MAX_PENDING_OP_JSON) return;
+    static const auto uuid = uuidSaltLE(CHAR_WIFI_OP);
+    const uint16_t handle = connInfo.getConnHandle();
+    const std::string raw = c->getValue();
+    if (raw.size() > MAX_PENDING_OP_JSON + 64) return;  // headroom for prefix+tag
+    std::string json;
+    bool authed = false;
+    if (!decodeIncomingOp(raw, handle, uuid.data(), "wifiOp", json, authed)) return;
+    if (!authed) return;
+    if (json.empty() || json.size() > MAX_PENDING_OP_JSON) return;
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE wifiOp len=%u\n", (unsigned)val.size());
+    Serial.printf("[ble_control] WRITE wifiOp len=%u (decoded)\n", (unsigned)json.size());
 #endif
-    postPendingWifiOpJson(val.data(), val.size());
+    postPendingWifiOpJson(json.data(), json.size());
   }
 };
 
 // ── Remote-op: forward a BLE control write to a far lamp via ESP-NOW ─────
 class RemoteOpCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) return;
-    std::string val = c->getValue();
-    if (val.empty() || val.size() > MAX_PENDING_OP_JSON) return;
+    static const auto uuid = uuidSaltLE(CHAR_REMOTE_OP);
+    const uint16_t handle = connInfo.getConnHandle();
+    const std::string raw = c->getValue();
+    if (raw.size() > MAX_PENDING_OP_JSON + 64) return;  // headroom for prefix+tag
+    std::string json;
+    bool authed = false;
+    if (!decodeIncomingOp(raw, handle, uuid.data(), "remoteOp", json, authed)) return;
+    if (!authed) return;
+    if (json.empty() || json.size() > MAX_PENDING_OP_JSON) return;
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE remoteOp len=%u\n", (unsigned)val.size());
+    Serial.printf("[ble_control] WRITE remoteOp len=%u (decoded)\n", (unsigned)json.size());
 #endif
-    postPendingRemoteOpJson(val.data(), val.size());
+    postPendingRemoteOpJson(json.data(), json.size());
   }
 };
 
@@ -418,18 +524,30 @@ class SettingsBlobCallback : public NimBLECharacteristicCallbacks {
   }
 
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    if (!isAuthed(connInfo.getConnHandle())) {
+    static const auto uuid = uuidSaltLE(CHAR_SETTINGS_BLOB);
+    const uint16_t handle = connInfo.getConnHandle();
+    const std::string raw = c->getValue();
+    // Settings blob can be larger than the op bound; add 64 for ciphertext overhead.
+    // NimBLE already enforces MTU on the link; this is a sanity ceiling only.
+    if (raw.size() > 4096 + 64) return;
+    std::string json;
+    bool authed = false;
+    if (!decodeIncomingOp(raw, handle, uuid.data(), "settingsBlob", json, authed)) {
+#ifdef LAMP_DEBUG
+      Serial.printf("[ble_control] settings_blob write: decrypt/decode failed\n");
+#endif
+      return;
+    }
+    if (!authed) {
 #ifdef LAMP_DEBUG
       Serial.printf("[ble_control] settings_blob write: not authed\n");
 #endif
       return;
     }
-
-    std::string json = c->getValue();
     if (json.empty()) return;
 
 #ifdef LAMP_DEBUG
-    Serial.printf("[ble_control] WRITE settingsBlob len=%u\n", (unsigned)json.size());
+    Serial.printf("[ble_control] WRITE settingsBlob len=%u (decoded)\n", (unsigned)json.size());
 #endif
 
     s_prefs->begin("lamp", false);
@@ -544,10 +662,11 @@ void start(lamp::Config* config, Preferences* prefs) {
   s_service = s_server->createService(SERVICE_UUID);
 
   // Auth — write-with-response so the app receives a GATT ack.
-  // WRITE_ENC: carries the lamp password — require a pair/bond first so
-  // the password is sent over an encrypted link, not in cleartext.
+  // App-layer crypto: AES-GCM (0x02 prefix) auto-authenticates via the
+  // GCM tag; legacy plaintext writes still compare against lamp.password.
+  // Bonding is no longer required at the link layer.
   s_service->createCharacteristic(CHAR_AUTH,
-      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC)
+      NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new AuthCallback());
 
   s_service->createCharacteristic(CHAR_BRIGHTNESS, NIMBLE_PROPERTY::WRITE)
@@ -562,13 +681,14 @@ void start(lamp::Config* config, Preferences* prefs) {
       ->setCallbacks(new ExpressionTestCallback());
   s_service->createCharacteristic(CHAR_EXPRESSION_OP, NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new ExpressionOpCallback());
-  // WRITE_ENC: carries the user's home WiFi password — must not be sniffable.
+  // App-layer crypto protects the WiFi password in transit; no link-layer
+  // bonding required.
   s_service->createCharacteristic(CHAR_WIFI_OP,
-      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC)
+      NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new WifiOpCallback());
-  // WRITE_ENC: carries the broker password.
+  // App-layer crypto protects the broker password in transit.
   s_service->createCharacteristic(CHAR_MQTT_OP,
-      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC)
+      NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new MqttOpCallback());
   s_wifiStateChar = s_service->createCharacteristic(
       CHAR_WIFI_STATE,
@@ -615,19 +735,19 @@ void start(lamp::Config* config, Preferences* prefs) {
   s_nearbyLampsChar->setCallbacks(new NearbyLampsCallback());
   s_nearbyLampsChar->setValue(buildNearbyLampsJson());
 
-  // WRITE_ENC: remote-op payloads can carry credentials in settings/mqtt
-  // forwarding. First call after pairing triggers the OS pair dialog.
+  // App-layer crypto protects forwarded credentials; no link-layer bonding.
   s_service->createCharacteristic(CHAR_REMOTE_OP,
-      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC)
+      NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new RemoteOpCallback());
 
   // Settings blob — write-only. Reads now go through the per-section
   // characteristics (CHAR_LAMP_SECTION etc.), each well under MTU. The
   // single-blob read path was dropped because the full config grew past 512
   // bytes after homeMode was added; see commit da5d4d9.
-  // WRITE_ENC: full config save embeds the lamp password.
+  // App-layer crypto: full config save is AES-GCM encrypted; no link-layer
+  // bonding required.
   s_service->createCharacteristic(CHAR_SETTINGS_BLOB,
-      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC)
+      NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new SettingsBlobCallback());
 
   // State notify — notify only; no write/read needed
@@ -672,6 +792,7 @@ void stop() {
   s_server  = nullptr;
   s_running = false;
   s_connAuth.clear();
+  s_connCrypto.clear();
 
 #ifdef LAMP_DEBUG
   Serial.printf("[ble_control] GATT control service stopped\n");

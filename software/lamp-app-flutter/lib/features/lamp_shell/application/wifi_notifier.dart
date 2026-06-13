@@ -5,7 +5,9 @@ import 'dart:typed_data';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/ble/ble_client_provider.dart';
+import '../../../core/ble/lamp_crypto.dart';
 import '../../../core/ble/uuids.dart';
+import '../../inventory/application/inventory_notifier.dart';
 import '../domain/wifi_state.dart';
 
 part 'wifi_notifier.g.dart';
@@ -59,11 +61,22 @@ class WifiNotifier extends _$WifiNotifier {
 
   Future<void> _writeOp(Map<String, dynamic> op) async {
     final ble = ref.read(bleClientProvider);
-    await ble.write(
-      _deviceId,
-      BleUuids.controlService,
-      BleUuids.wifiOp,
-      Uint8List.fromList(utf8.encode(jsonEncode(op))),
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final lamp = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () => throw StateError(
+          'WifiNotifier._writeOp: lamp $_deviceId not in inventory'),
     );
+    final password = lamp.controlPassword ?? '';
+    final bytes = password.isEmpty
+        ? LampCrypto.wrapPlaintext(op)
+        : await LampCrypto.encryptOp(
+            op: op,
+            password: password,
+            saltUuid16: uuidSaltLE16(BleUuids.wifiOp),
+            charShortName: 'wifiOp',
+          );
+    await ble.write(
+        _deviceId, BleUuids.controlService, BleUuids.wifiOp, bytes);
   }
 }

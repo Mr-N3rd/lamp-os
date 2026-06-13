@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_app/core/ble/ble_client.dart';
 import 'package:lamp_app/core/ble/ble_client_provider.dart';
+import 'package:lamp_app/core/ble/lamp_crypto.dart';
 import 'package:lamp_app/core/ble/uuids.dart';
 import 'package:lamp_app/features/control/application/control_notifier.dart';
 import 'package:lamp_app/features/control/application/control_state.dart';
@@ -46,7 +47,11 @@ void main() {
     expect(state.shade.colors.single.toHex(), '#000000FF');
 
     final auth = await ble.read(_devId, BleUuids.controlService, BleUuids.auth);
-    expect(utf8.decode(auth), 'secret');
+    // Auth write is now a ciphertext frame: magic + nonce + tag + {"auth":true}
+    expect(auth[0], LampCrypto.magicCiphertext);
+    expect(auth.length,
+        1 + LampCrypto.nonceLen + LampCrypto.tagLen +
+            utf8.encode('{"auth":true}').length);
   });
 
   test('disconnect is called when build() throws after connect', () async {
@@ -167,8 +172,14 @@ void main() {
 
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.settingsBlob);
-    final parsed =
-        jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    // settingsBlob is now encrypted when controlPassword is set.
+    expect(written[0], LampCrypto.magicCiphertext);
+    final plain = await LampCrypto.decryptOpForTesting(
+        written,
+        password: 'secret',
+        saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+        charShortName: 'settingsBlob');
+    final parsed = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
     expect((parsed['lamp'] as Map)['brightness'], 80);
     expect(parsed['expressions'], isNotNull); // unchanged field preserved
   });
@@ -503,7 +514,14 @@ void main() {
 
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.settingsBlob);
-    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    // settingsBlob is now encrypted when controlPassword is set.
+    expect(written[0], LampCrypto.magicCiphertext);
+    final plain = await LampCrypto.decryptOpForTesting(
+        written,
+        password: 'secret',
+        saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+        charShortName: 'settingsBlob');
+    final parsed = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
     final knockout = (parsed['base'] as Map)['knockout'] as List;
     expect(knockout, [{'p': 3, 'b': 50}]);
   });
@@ -563,7 +581,14 @@ void main() {
     await n.save();
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.settingsBlob);
-    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    // settingsBlob is now encrypted when controlPassword is set.
+    expect(written[0], LampCrypto.magicCiphertext);
+    final plain = await LampCrypto.decryptOpForTesting(
+        written,
+        password: 'secret',
+        saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+        charShortName: 'settingsBlob');
+    final parsed = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
     expect((parsed['lamp'] as Map)['name'], 'foyer');
   });
 
@@ -629,7 +654,14 @@ void main() {
 
     final written = await ble.read(
         _devId, BleUuids.controlService, BleUuids.settingsBlob);
-    final parsed = jsonDecode(utf8.decode(written)) as Map<String, dynamic>;
+    // settingsBlob is now encrypted when controlPassword is set.
+    expect(written[0], LampCrypto.magicCiphertext);
+    final plain = await LampCrypto.decryptOpForTesting(
+        written,
+        password: 'secret',
+        saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+        charShortName: 'settingsBlob');
+    final parsed = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
     final homeNode = parsed['homeMode'] as Map<String, dynamic>;
     expect(homeNode['ssid'], 'WiFi');
     expect(homeNode['brightness'], 80);

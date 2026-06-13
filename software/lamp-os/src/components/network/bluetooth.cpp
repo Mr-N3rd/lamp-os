@@ -60,11 +60,16 @@ void BluetoothComponent::begin(std::string name, Color inBaseColor,
   NimBLEDevice::init(name.substr(0, 12));
   NimBLEDevice::setPower(BLE_POWER_LEVEL);
 
-  // Enable LE Secure Connections + bonding (Just-Works pairing). Sensitive
-  // GATT writes (CHAR_AUTH, CHAR_WIFI_OP, CHAR_SETTINGS_BLOB) are marked
-  // WRITE_ENC; the first such write triggers an OS-mediated pair, after
-  // which the whole link is encrypted at the BLE link layer. Bond persists
-  // in NVS, so subsequent connections re-encrypt silently.
+  // LE Secure Connections + Just-Works bonding remain enabled, but the
+  // link layer no longer forces encryption on any characteristic — see
+  // `app-layer crypto` below. Sensitive writes (CHAR_AUTH, CHAR_WIFI_OP,
+  // CHAR_MQTT_OP, CHAR_REMOTE_OP, CHAR_SETTINGS_BLOB) accept an
+  // app-layer AES-GCM frame keyed off the lamp password via
+  // `lamp::crypto`; legacy plaintext writes still work for the
+  // webapp/old clients. The OS will not pop a pair dialog on any
+  // write. Phones bonded under the old WRITE_ENC scheme still
+  // re-encrypt silently because their bond record is still valid;
+  // fresh phones simply skip the bond altogether.
   NimBLEDevice::setSecurityAuth(/*bonding=*/true,
                                 /*mitm=*/false,
                                 /*sc=*/true);

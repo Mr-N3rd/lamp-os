@@ -6,6 +6,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/ble/ble_client.dart';
 import '../../../core/ble/ble_client_provider.dart';
+import '../../../core/ble/lamp_crypto.dart';
 import '../../../core/ble/uuids.dart';
 import '../../../core/ble/write_coalescer.dart';
 import '../../inventory/application/inventory_notifier.dart';
@@ -360,8 +361,25 @@ class ControlNotifier extends _$ControlNotifier {
     blob['mqtt'] = mqttNode;
 
     // 3. Write the merged blob. The firmware will fade out + reboot.
-    final payload =
-        Uint8List.fromList(utf8.encode(jsonEncode(blob)));
+    final blobJson = jsonEncode(blob);
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final lamp = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () =>
+          throw StateError('lamp $_deviceId not in inventory'),
+    );
+    final pw = lamp.controlPassword ?? '';
+    final payload = pw.isEmpty
+        ? Uint8List.fromList([
+            LampCrypto.magicPlaintext,
+            ...utf8.encode(blobJson),
+          ])
+        : await LampCrypto.encryptOp(
+            op: blob,
+            password: pw,
+            saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+            charShortName: 'settingsBlob',
+          );
     try {
       await ble.write(
           _deviceId, BleUuids.controlService, BleUuids.settingsBlob, payload);
