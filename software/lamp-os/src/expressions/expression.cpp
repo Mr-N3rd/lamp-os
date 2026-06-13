@@ -29,6 +29,12 @@ void Expression::saveBufferState() {
   savedBuffer = fb->buffer;
 }
 
+// Defined out-of-line at the bottom of this file. Queries the lamp's
+// two ColorOverride globals — returns true iff the wisp is actively
+// holding either surface. Used by shouldAffectBuffer() AND control()
+// below to suppress disabled-during-wisp expressions.
+bool isWispCurrentlyOverriding();
+
 bool Expression::shouldAffectBuffer() {
   // Context is wired by Compositor::addBehavior at register time (or by
   // ExpressionManager::setCompositor for transients). Until both are wired
@@ -39,6 +45,19 @@ bool Expression::shouldAffectBuffer() {
   // Check if current buffer matches our target
   bool isShade = (fb == context_->expressionFrameBuffers[0]);  // Shade is first
   bool isBase = (fb == context_->expressionFrameBuffers[1]);   // Base is second
+
+  // Wisp-override draw gate. control() already suppresses auto-trigger
+  // and (for Breathing) per-frame onUpdate while wisp paint is held, but
+  // an expression that was already PLAYING when wisp activated keeps
+  // its CACHED last frame — and draw() runs each tick regardless,
+  // stomping the wisp paint with stale data. The 2026-06-13 "jacko
+  // renders pink despite correct wisp blue at beginFade" symptom was
+  // exactly this: a frozen BreathingExpression::draw() repainting its
+  // last targetColor over the wisp gradient every frame. Suppress
+  // draw too while wisp owns the relevant surface.
+  if (disabledDuringWispOverride() && isWispCurrentlyOverriding()) {
+    return false;
+  }
 
   switch (target) {
     case TARGET_SHADE:
@@ -51,12 +70,6 @@ bool Expression::shouldAffectBuffer() {
       return false;
   }
 }
-
-// Defined out-of-line at the bottom of this file. Queries the lamp's
-// two ColorOverride globals — returns true iff the wisp is actively
-// holding either surface. Used by control() below to suppress
-// auto-trigger on expressions flagged disabledDuringWispOverride.
-bool isWispCurrentlyOverriding();
 
 void Expression::control() {
   // Wisp-override gate: skip auto-trigger when the operator has marked

@@ -131,6 +131,14 @@ void BreathingExpression::control() {
   // the strip shows; our animation effectively pauses mid-cycle and
   // resumes when the wisp lets go. See docs/expressions.md.
   if (disabledDuringWispOverride() && isWispCurrentlyOverriding()) {
+    // Audit (2026-06-13): reset lastBreathUpdateMs so the first tick
+    // after wisp releases recomputes phase from now()-not-stale-now.
+    // Without this, deltaMs spans the entire wisp-hold duration and
+    // adds a huge phaseIncrement in one shot — the wrap-once `if
+    // (breathPhase >= 1.0f) breathPhase -= 1.0f;` at line 47 only
+    // handles one cycle of overflow, so multi-cycle holds skip palette
+    // colors visibly on resume.
+    lastBreathUpdateMs = 0;
     return;
   }
 
