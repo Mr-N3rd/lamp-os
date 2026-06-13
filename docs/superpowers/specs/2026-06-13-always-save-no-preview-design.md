@@ -63,6 +63,12 @@ For UI flows where a single action carries the new value (rename dialog Save, pe
 
 Phase A ships to the fleet via gossip OTA. App can stay unchanged on the bench during Phase A; the new char is dormant until Phase B starts using it.
 
+### Internal ordering within Phase A — load-bearing
+
+**A.1 (split user/remote mutation paths) MUST land before A.2 / A.3 in the deployment timeline.** If CHAR_COMMIT goes live in a build without the split, a mesh-relayed brightness cascade or social-greet paint can contaminate `config.*` in RAM. The first commit signal — possibly from the same user's drag on a different surface — persists the contaminated value. Bench test #12 detects this regression but not before the bad firmware has touched NVS.
+
+Acceptable within a single PR: yes, as long as the git history orders A.1's commits before A.2's. Acceptable across PRs: A.1 must merge and the fleet must OTA-roll forward to that build before A.2's PR even ships. Treat A.1 as a hard prerequisite gate.
+
 ### A.1 — Split user-source vs remote-source mutation paths (load-bearing prerequisite)
 
 **Problem identified by the protocol audit**: today's `applyRemoteOpLocal` (in `standard_lamp.cpp` around line 487) calls `applyShadeColorsLocal`, `applyBaseColorsLocal`, the brightness drain logic, and `applyExpressionOpLocal` — all of which mutate `config.*` directly. Once CHAR_COMMIT serializes the current `config` snapshot, mesh-relayed transient values (cascade brightness pulses, peer-swap paints, social-greet cascades) become silently persistable.
@@ -84,35 +90,41 @@ UUID: pick a fresh one in the control service (mint via `python -c "import uuid;
 
 Properties: `write` (with-response, **not** WRITE_NR — BLE disconnect during a commit must be a recoverable error, not a silent loss).
 
-Payload: single-byte plaintext sentinel (e.g., `0x01`) when password is unset; AES-GCM ciphertext (29-byte minimum: `0x02 + 12B nonce + 16B tag`) when password is set. The callback IGNORES the payload — its semantic is "commit signal."
+**Payload + authentication**:
+- When password is unset: `WriteRouter` with `allowEmpty_=true` and `setRawAuth(isAuthed)`. App sends 1 byte (`0x01`) or 0 bytes; payload semantically ignored. The `isAuthed(connHandle)` gate is sufficient — no encrypted channel exists.
+- When password is set: same `WriteRouter` slot accepts AES-GCM ciphertext framing (`0x02 + 12B nonce + ciphertext + 16B tag`). The router decrypts via `LampCrypto::decryptOp` and **verifies the GCM tag** before posting `pendingCommit = true` — inheriting the same forgery resistance as other encrypted writes. The decrypted plaintext is discarded (empty plaintext OK). Without GCM verification, an attacker who skipped the pair-bond handshake could spam commits at will.
 
-Callback shape: mirror `BrightnessCallback` in `software/lamp-os/src/components/network/ble_control.cpp:466-485`. Do NOT use WriteRouter — it rejects empty payloads and adds JSON parsing the commit doesn't need.
+**WriteRouter usage**: empty-payload support exists today via the `allowEmpty_` flag (`software/lamp-os/src/components/network/write_router.hpp:125-167`). Use it for CHAR_COMMIT to inherit existing crypto framing + auth integration. The earlier draft's "do not use WriteRouter" advice was based on an outdated read of the source.
 
 ```cpp
-// Sketch — exact shape per existing callback style
-class CommitCallback : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic*, NimBLEConnInfo& info) override {
-    if (!isAuthed(info.getConnHandle())) return;
-    pendingCommit = true;
-  }
-};
+// Sketch — actual shape uses WriteRouter
+auto& route = writeRouter.add(CHAR_COMMIT_UUID);
+route.setAllowEmpty(true);
+route.setRawAuth([](uint16_t h) { return isAuthed(h); });
+route.onWrite([](const uint8_t*, size_t, uint16_t /*connHandle*/) {
+  pendingCommit = true;
+});
 ```
 
-Post: `volatile bool pendingCommit` (single-bool naturally atomic on Xtensa; no portMUX needed).
+Post: `volatile bool pendingCommit` (single-bool naturally atomic on Xtensa; no portMUX needed). Lives file-static in `standard_lamp.cpp` next to the other `pending*` flags.
 
 ### A.3 — CHAR_COMMIT drain (loop task)
 
 Drain in `standard_lamp.cpp`'s loop drain block. Place AFTER the per-section live-preview drains (brightness, shadeColors, baseColors, knockout, expressionOp) so the persist sees their just-mutated state. Place BEFORE the settings_blob drain so a commit and a discrete blob write in the same tick don't fight.
 
-Debounce: mirror the dispositions pattern at `software/lamp-os/src/config/config.cpp:~270`. Set `cfgDirty_` flag + `lastCommitMs_` timestamp on each `pendingCommit = true` arrival. Flush only when idle ≥ `kCommitFlushIdleMs` (initial: 1500 ms) OR on BLE disconnect.
+Debounce: file-static state in `standard_lamp.cpp` next to the other `pending*` flags. Set `commitDirty` flag + `lastCommitSignalMs` timestamp on each `pendingCommit = true` arrival. Flush only when idle ≥ `kCommitFlushIdleMs` (initial: **1500 ms** — see rationale below) OR on BLE disconnect (mirroring the existing `pendingFlushDispositionsRequested` force-flush in the BLE-disconnect handler).
+
+This is intentionally NOT a `Config` member like `DispositionDebouncer` is. The commit flush is about *when this lamp persists*, not about Config-internal mutation state — keeping it next to the other lamp-level pending flags makes the loop-task drain readable.
 
 On flush:
 1. **Gate on `!firmwareReceiver.isInProgress()`**. A persist concurrent with OTA chunk-writes competes for the same NVS subsystem and can corrupt OTA. If OTA is in progress, defer the flush — re-check next tick.
 2. Compute `currentSerialized = serializeJson(config.asJsonDocument())`.
 3. Hash-dedup against `lastPersistedHash_`. If equal, skip the write — saves NVS wear on the "user dragged but ended at the same value" case.
 4. `config.persistConfig(via="commit")` — see A.6 for path-tagged log.
-5. On success: `config.invalidateAllSections()` + `ble_control::notifyStateChange()`.
-6. On failure: `ble_control::notifyStateChange()` (so app can detect in-RAM vs NVS skew and re-read), log loud.
+5. On success: `config.invalidateAllSections()` + `ble_control::notifyStateChange()`, update `lastPersistedHash_ = hash(currentSerialized)`.
+6. On failure: `ble_control::notifyStateChange()` (so app can detect in-RAM vs NVS skew and re-read), log loud. **Do not** update `lastPersistedHash_` — the next commit signal will retry the same payload.
+
+**Debounce window rationale**: 1500 ms is intentionally finer-grained than the dispositions path's 5000 ms idle. Dispositions debounces against per-tick slider drags (~20 Hz BLE writes). CHAR_COMMIT receives at most one signal per natural UI fence (slider release + per-pane Update tap), so the upstream rate is already low. 1500 ms gives just enough room to coalesce "user clicks Update on shade, then base, then expressions" sequences within ~2 s into one NVS write, without making the user wait visibly for the save to land before navigating away.
 
 ### A.4 — settings_blob drain rewrite
 
@@ -124,17 +136,17 @@ New shape:
 2. **OTA-in-progress interlock**: if `firmwareReceiver.isInProgress()`, log loud and discard the write. App will re-issue when OTA finishes.
 3. Parse → for each top-level key in incoming blob (other than `reboot` and `factoryReset`):
    - Dispatch to user-source `applyXxxLocal` helper for that section. **Skip the `expressions` key** — see A.5.
-4. `config.persistConfig(via="settings_blob")`.
+4. `config.persistConfig(via="settings_blob")`. Capture the return value as `persisted`.
 5. `config.invalidateAllSections()` + `ble_control::notifyStateChange()`.
-6. Reboot decision: `incomingDoc["reboot"] | true` — **default true** for backward compat. Set `lamp::fadeOutRebootRequested = true` if true.
+6. Reboot decision: `incomingDoc["reboot"] | true` — **default true** for backward compat. Set `lamp::fadeOutRebootRequested = true` ONLY when (a) the flag resolves true AND (b) `persisted` was true in step 4. Stale RAM is safer than rebooting into a half-applied state.
 
 ### A.5 — `applyXxxLocal` helpers (user-source variants)
 
 New / extracted helpers:
 
 - **`applyLampLocal(JsonObject)`** — handles `name`, `brightness`, `advancedEnabled`, `socialMode`.
-  - On name change: call `NimBLEDevice::setDeviceName(newName)` so the BLE advertised name updates without reboot. Mesh HELLO (`software/lamp-os/src/components/network/show_receiver.cpp:474`) already reads `config.lamp.name` live every 5 s, so peers see the new name on the next tick.
-  - On brightness: call new helper `applyBrightnessImmediate(level, isHomeMode)` that updates the config field + invokes `applyEffectiveBrightness()`. **Does not** seed the micro-fade triple — that's a slider-live-preview-only concern.
+  - On name change: call `NimBLEDevice::setDeviceName(newName)` so the BLE GAP device name updates without reboot. **Verify** during implementation whether `bt.tickAdvertising()` (or equivalent advertising-rebuild path) automatically picks up the new GAP name, or whether an explicit advert-payload rebuild is needed. If the latter, this helper must also trigger it. Mesh HELLO (`software/lamp-os/src/components/network/show_receiver.cpp:474`) already reads `config.lamp.name` live every 5 s, so peers see the new name on the next tick regardless of the BLE advert path.
+  - On brightness: call new helper `applyBrightnessImmediate(level, isHomeMode)` that (a) updates the config field, (b) invokes `applyEffectiveBrightness()` to push the value into the strips immediately, and (c) **resets `s_userBrightnessSeeded = false`** so a subsequent live-preview slider drag re-seeds its micro-fade triple from the new persisted level instead of rubber-banding from a stale source. **Does not** seed the micro-fade triple itself — that's a slider-live-preview-only concern.
 - **`applyHomeModeLocal(JsonObject)`** — handles `ssid`, `password`, `enabled`, `brightness`.
 - **`applyBaseAcLocal(int)`** — tiny, for the `base.ac` field that has no live-preview char.
 - **`applyBaseKnockoutLocal(JsonArray)`** — extracted from inline knockout drain logic at `standard_lamp.cpp:~1325` so settings_blob's full-section path can reuse.
@@ -151,24 +163,40 @@ Change signature: `bool Config::persistConfig(const char* via)`. Log: `[nvs] per
 
 ### A.7 — Keep CHAR_HOMEMODEFOCUS routing
 
-The existing routing at `software/lamp-os/src/components/network/ble_control.cpp:529-542` flips a flag that routes CHAR_BRIGHTNESS writes to `config.homeMode.brightness` vs `config.lamp.brightness`. With always-save, the home mode pane could write its own settings_blob with `homeMode.brightness` set, but the **live preview during a slider drag** still needs the routing — otherwise the slider in the home-mode pane would push to the wrong field. 14 lines, load-bearing, keep.
+The existing routing flips a flag (`s_homeModePageActive` and related) that routes CHAR_BRIGHTNESS writes to `config.homeMode.brightness` vs `config.lamp.brightness`. Implementer: grep `ble_control.cpp` for `HomeModeFocus` to find the callback (the line cite from prior drafts was stale).
+
+With always-save, the home mode pane could write its own settings_blob with `homeMode.brightness` set, but the **live preview during a slider drag** still needs the routing — otherwise the slider in the home-mode pane would push to the wrong field. Load-bearing, keep.
+
+**One subtle UX hazard surfaced by the protocol audit**: when the user navigates away from the home mode pane, the focus flag flips back to "lamp." If a pending CHAR_COMMIT was scheduled for the home brightness but hasn't flushed yet, the commit might persist `config.homeMode.brightness` while the user is now editing lamp brightness. This is in practice handled by the debounce-flush-on-dispose path (B.5) — when the home-mode screen disposes, the trailing commit fires before the focus flag flips. Add an explicit assertion in `applyHomeModeLocal` that the focus flag was held when the value was written, OR document this as a known race that the app-side dispose ordering must guarantee.
 
 ### A.8 — Native tests (Phase A)
 
-All in `software/lamp-os/test/`. Native env, no hardware.
+All in `software/lamp-os/test/`. Native env cannot link `standard_lamp.cpp` (pulls in NimBLE, FastLED, ConfiguratorBehavior, expressionManager). Existing native tests use the **mirror-class pattern** — see `test_disposition_debounce` which redeclares `DispositionDebouncer`'s public surface in the test file to test it in isolation. Phase A native tests follow the same pattern.
 
-- `test_commit_drain` — CHAR_COMMIT signal triggers `persistConfig` after the debounce idle window. Verifies dirty-flag latching, hash-dedup skips identical commits, OTA interlock defers.
-- `test_settings_blob_no_reboot` — `{"reboot": false}` writes NVS but leaves `fadeOutRebootRequested` false.
+- `test_commit_drain` — mirror-class redeclaration of the `commitDirty` / `lastCommitSignalMs` / `kCommitFlushIdleMs` debounce + hash-dedup logic. Verifies dirty-flag latching, hash-dedup skips identical commits, OTA interlock defers, BLE-disconnect force-flush.
+- `test_settings_blob_no_reboot` — mirror-style. Verifies `{"reboot": false}` path persists but doesn't set `fadeOutRebootRequested`.
 - `test_settings_blob_reboot_default` — blob without explicit `reboot` key reboots (backward compat).
-- `test_settings_blob_factory_reset` — regression for the existing factoryReset path. Currently untested.
-- `test_apply_remote_no_config_mutation` — replaying brightness/colors/expression remote ops leaves `config.*` byte-identical.
-- `test_apply_brightness_immediate` — settings_blob brightness writes apply through `applyBrightnessImmediate` and skip the micro-fade triple.
+- `test_settings_blob_factory_reset` — regression for the factoryReset short-circuit. Currently untested.
+- `test_apply_remote_no_config_mutation` — requires extracting `applyXxxToConfig` and `applyXxxToRender` into a header-only / free-function module (a new `software/lamp-os/src/components/apply/` directory or similar) so pure native code can link. The extraction is a prerequisite of writing this test. Without it, fall back to mirror-style that asserts the invariant on a stub.
+- `test_apply_brightness_immediate` — same extraction story. `applyBrightnessImmediate` must live in an extractable header so the test can call it without dragging the full lamp build in.
+
+**Decision**: extract `applyXxxToConfig` / `applyXxxToRender` / `applyBrightnessImmediate` into `software/lamp-os/src/components/apply/` (new directory) — header-only or with a tiny implementation file. This makes Phase A's tests possible AND makes the user/remote split more visible in the codebase (it's load-bearing for cascade containment).
 
 Acceptance for Phase A: existing 272 native tests stay green + 6 new tests, total 278 green.
 
 ## Phase B — App
 
 Phase B is app-only — `flutter build apk --debug` + `adb install -r` for a Pixel test. No firmware changes ship with Phase B. Risk is `adb install -r`-reversible.
+
+### Phase B preconditions
+
+Before any Phase B code can ship to the user's Pixel:
+
+1. **Every paired lamp the user owns must be on Phase A firmware.** Verify at connect via the existing CHAR_FW_VERSION read (`software/lamp-os/src/components/network/ble_control.cpp` exposes this). Each lamp's `controlNotifier` build path probes the firmware version; if it's pre-Phase-A, the app uses the OLD Save-pill behavior for that lamp (display the pill, route everything through `save()`). The `hasCommitChar` GATT discovery in B.3 is a redundant check — the firmware-version probe is the authoritative gate.
+
+2. **Service discovery must expose `hasCommitChar` on the BleClient connection state.** New field. Add to `software/lamp-app-flutter/lib/core/ble/ble_client.dart` (or wherever connect/discovery lives). Populated during the post-connect service walk by checking whether CHAR_COMMIT's UUID appears in the discovered characteristic list.
+
+3. **Mixed-fleet behavior** (some lamps Phase A, some pre-Phase A) is supported via per-lamp branching in `controlNotifier`. The `_SaveAction` pill in `lamp_shell.dart` is preserved during Phase B's transition and shown only when the watched lamp is pre-Phase-A. Deletion of the pill machinery in B.9 happens in a *follow-up* PR (call it B.9.2) after the user confirms their fleet is fully on Phase A.
 
 ### B.1 — `_mutate` helper
 
@@ -220,11 +248,15 @@ If the lamp doesn't expose CHAR_COMMIT (running pre-Phase-A firmware), the app m
 
 Implementation:
 - `BleClient` (or its caller) probes the control service's characteristic list at connect time and exposes `bool hasCommitChar`.
-- The notifier exposes `commit({Section? section})` — section is metadata used by the fallback path only.
-  - `hasCommitChar == true` → write CHAR_COMMIT (single-byte sentinel / encrypted). The `section` argument is unused on the wire — the firmware persists current RAM state regardless.
-  - `hasCommitChar == false` → synthesize a partial blob from `state.value` for the named section and write `settingsBlob({"<section>": <currentValue>}, reboot: false)`. Each call site that fires `commit` knows which section it just edited, so the section parameter is local knowledge, not a wire parameter.
+- Define an enum in `controlNotifier`:
+  ```dart
+  enum CommitSection { lamp, base, shade, homeMode, baseKnockout }
+  ```
+- The notifier exposes `Future<void> commit(CommitSection section)`. The section parameter is local knowledge — each call site (brightness slider's `onChangeEnd`, shade editor's Update tap, etc.) knows which section it just edited.
+  - `hasCommitChar == true` → write CHAR_COMMIT (single-byte sentinel / encrypted). The `section` argument is unused on the wire — the firmware persists the current RAM state regardless. The section is dead arg in this branch but kept for symmetry with the fallback.
+  - `hasCommitChar == false` → fallback synthesizes a partial blob from `state.value` for the named section. Full-section payload (e.g., for `CommitSection.lamp`, ships `{"lamp": {"name": s.lamp.name, "brightness": s.lamp.brightness, "advancedEnabled": s.lamp.advancedEnabled, "socialMode": s.lamp.socialMode}}`). Writes `settingsBlob(payload, reboot: false)`. Full-section vs only-changed: full-section is cheaper to reason about — the firmware's per-section `applyXxxLocal` is idempotent on unchanged fields, so re-sending the whole section costs only the BLE write bandwidth (which is well within ATT MTU for any section the app cares about).
 
-This keeps CHAR_COMMIT itself purely parameterless (which is its safety property — can't be wrong because it carries no data) while the app's fallback layer fills in the data dimension at the higher level.
+This keeps CHAR_COMMIT itself purely parameterless on the wire (its safety property — can't be wrong because it carries no data) while the app's fallback layer fills in the data dimension at the higher level.
 
 Once the entire fleet has Phase A firmware, the fallback path can be deleted in a follow-up PR.
 
@@ -284,27 +316,31 @@ Future<void> setLampName(String name) async {
 }
 ```
 
-### B.8 — Nonce-reuse verification (security gate)
+### B.8 — Nonce-reuse — verified safe
 
-Before merging Phase B, verify that `LampCrypto.encryptOp` does NOT use a deterministic nonce derived solely from salt+password. Today's `save()` writes ONE settings_blob per save (no concurrency risk). New design fires multiple discrete settings_blob writes in close succession (rename + personality + home toggle within a session).
+`software/lamp-app-flutter/lib/core/crypto/lamp_crypto.dart:96` calls `_aes.encrypt(plaintext, secretKey: key)` without an explicit nonce argument. The underlying `package:cryptography` library generates a random nonce per call (AesGcm's default). Two concurrent `writeSettingsBlob` calls produce independent random nonces — no AES-GCM nonce-reuse risk.
 
-If nonce is `HKDF(salt+password+counter)` or includes a random component, safe — proceed.
+No serialization mutex needed. Add a Flutter test asserting that two concurrent `writeSettingsBlob` calls produce distinct ciphertext bytes (regression guard for any future change to nonce derivation).
 
-If deterministic on salt+password, two writes with the same key+nonce is an AES-GCM nonce-reuse — confidentiality and authenticity both break. Required mitigation: serialize discrete settings_blob writes through a single-slot mutex on the notifier (similar pattern to how `_writeRouter` queues, but at the notifier layer).
+### B.9 — Deletions (split across two PRs)
 
-Add a Flutter test asserting that two concurrent `writeSettingsBlob` calls don't reuse the same nonce.
+Phase B's main PR introduces the new pattern but **preserves** the Save-pill machinery for pre-Phase-A lamps during the fleet transition. The deletions land in a follow-up B.9.2 PR after the user confirms their fleet is fully on Phase A firmware.
 
-### B.9 — Deletions
+**B.9.1 — Stays in main Phase B PR (gated on per-lamp `hasCommitChar` flag):**
+- `_SaveAction` widget rendering — show only when `hasCommitChar == false` for the active lamp
+- `controlNotifier.save()` — invoked only when `hasCommitChar == false`
+- `isDirty` getter — still consumed by the pill on pre-Phase-A lamps
+- `_isLampDirty`, etc. — still needed by isDirty's implementation
+- `_original` snapshot — still needed by isDirty's diff
+- `_awaitReconnectAndReload` — still needed by save() path
+- `lampSaveStatusProvider` — still drives the connecting-view "Saving changes…" branch on pre-Phase-A lamps
+- "Saving changes…" branch in `connecting_view.dart`
 
-When all panes are wired to the new pattern:
-- `controlNotifier.save()`
-- `_isLampDirty`, `_isBaseDirty`, `_isShadeDirty`, `_isHomeDirty`, `_isExpressionsDirty`
-- `_original` field + `_awaitReconnectAndReload`
-- `isDirty` getter
-- `lampSaveStatusProvider` + `lamp_save_status.dart` + `.g.dart`
-- `_SaveAction` widget in `lamp_shell.dart` (+ the `actions: [...]` reference)
-- "Saving changes…" branch in `connecting_view.dart` (revert to plain Connecting state)
+**B.9.2 — Follow-up PR (after fleet fully on Phase A):**
+- All of the above, plus:
+- `lamp_save_status.dart` + `.g.dart` (full delete)
 - `inventory_notifier.dart`'s `_invalidatePerLampState` line that touches `lampSaveStatusProvider(id)` (just drop that line, keep `advancedSessionProvider(id)`)
+- `connecting_view.dart` reverts to plain Connecting state
 
 ### B.10 — Tests (Phase B)
 
@@ -331,7 +367,7 @@ Run on jacko + floral + Pixel after Phase A flashes, before Phase B install:
 1. **Rename persists**: rename jacko via Phase A firmware + OLD app (uses settings_blob with default reboot=true). Power-cycle. Reconnect. Verify name persists.
 2. **Old-app + new-firmware compat**: old app on Pixel, new firmware on jacko. Tap Save pill. Verify settings_blob still triggers reboot + persist.
 3. **Phase B: brightness commit-after-debounce**: drag slider, release, wait 600 ms, power-cycle. Verify last brightness persists.
-4. **Phase B: brightness commit-during-debounce loss window**: drag, release, power-cycle within 500 ms. Document loss (likely intentional — debounce expired before commit fired).
+4. **Phase B: brightness commit-during-debounce loss window**: drag, release, power-cycle within 500 ms. Document the loss. **Accepted limitation** — the alternative (no debounce, every onChangeEnd commits immediately) would trigger an NVS write on every tap-to-position, and the debounce already commits on BLE disconnect (B.5). A USB-unplug-within-500-ms-of-release window is intentionally outside the persist guarantee. Listed in "Deferred / documented" with rationale.
 5. **Phase B: mid-edit BLE disconnect**: rename via dialog. Toggle Bluetooth off mid-write. Verify snackbar fires, local state reverts, no crash.
 6. **Phase B: concurrent two-lamp edits**: rename jacko AND change floral shade colors back-to-back from one Pixel. Verify both lamps persist independently.
 7. **Phase B: factory reset path**: still wipes NVS + reboots (`standard_lamp.cpp:~1398` short-circuit intact).
@@ -348,23 +384,28 @@ These are real issues surfaced by the audits but not in this spec's scope. Docum
 - **Disposition map keyed by lamp name** (`software/lamp-os/src/config/config.hpp:~174` "KNOWN LIMITATION"): rename frictionless after this refactor means users hit the name-changed-disposition-orphaned bug more often. Fix in a separate spec; switch keying to MAC.
 - **Multi-app concurrent-edit arbitration**: "last write wins per field" is the documented behavior. Multi-phone editing the same lamp simultaneously can produce mixed final state. Acceptable for current usage; CHAR_EDIT_SESSION-style session tokens deferred.
 - **Hash-dedup edge case**: if a user drags through a transient that matches the last-persisted hash, the commit no-ops. UX: imperceptible. Document and move on.
+- **500 ms brightness loss window**: if the user yanks lamp power within ~500 ms of releasing the slider, the debounce hasn't fired and the change is lost. Documented in bench test #4. Mitigated by BLE-disconnect force-flush (B.5) — a graceful disconnect (app backgrounded, BT off) flushes the pending commit before disconnect; only a hard power-cut hits this window.
+- **Coalesced live-preview write failures bubble silently**: brightness/colors/knockout live-preview writes via `WriteCoalescer` schedule async; if the deferred write fails, the existing `safeWrite` swallows non-disconnect errors and kicks the reconnect ladder on disconnect. The `_mutate` wrap covers the explicit commit call but NOT the live-preview drag-tick failures. Acceptable per current contract (matches today's wisp `setOffColor` behavior). Document in `controlNotifier`'s class doc.
 
 ## File map (critical files)
 
 **Firmware (Phase A):**
-- `software/lamp-os/src/lamps/standard_lamp.cpp:407-472` (applyExpressionOpLocal, applyXxxLocal split)
-- `software/lamp-os/src/lamps/standard_lamp.cpp:487-545` (applyRemoteOpLocal — needs the To-Render variants)
-- `software/lamp-os/src/lamps/standard_lamp.cpp:1219-1490` (full drain block; CHAR_COMMIT drain inserted here, settings_blob rewritten)
-- `software/lamp-os/src/components/network/ble_control.cpp:178-470` (CharCallback shapes; new CommitCallback registered here)
-- `software/lamp-os/src/components/network/ble_control.cpp:760-820` (SettingsBlobCallback — receives `reboot` flag now)
-- `software/lamp-os/src/config/config.hpp:84-105` (Config::persistConfig signature change)
-- `software/lamp-os/src/config/config.cpp:272-298` (persistConfig path-tagged log)
+- `software/lamp-os/src/components/apply/` (**new directory** — extracted `applyXxxToConfig`, `applyXxxToRender`, `applyBrightnessImmediate` helpers, header-only or with a small `.cpp` to keep them native-testable)
+- `software/lamp-os/src/lamps/standard_lamp.cpp:407-472` (applyExpressionOpLocal — splits into ToConfig/ToRender via the new apply/ module)
+- `software/lamp-os/src/lamps/standard_lamp.cpp:487-545` (applyRemoteOpLocal — calls only ToRender variants after the split)
+- `software/lamp-os/src/lamps/standard_lamp.cpp:1219-1490` (full drain block; CHAR_COMMIT drain inserted after live-preview drains and before settings_blob; settings_blob rewritten)
+- `software/lamp-os/src/components/network/ble_control.cpp` (register CHAR_COMMIT in the service-init code; reuse WriteRouter with `allowEmpty=true` + `setRawAuth(isAuthed)`. SettingsBlobCallback receives `reboot` flag.)
+- `software/lamp-os/src/components/network/write_router.hpp:125-167` (existing `allowEmpty_` support — reused, not modified)
+- `software/lamp-os/src/config/config.hpp:84-105` (Config::persistConfig signature: `bool persistConfig(const char* via)`)
+- `software/lamp-os/src/config/config.cpp:272-298` (persistConfig path-tagged log; update call sites in the same commit as the signature change — see verification item #6)
 - `software/lamp-os/src/components/network/show_receiver.cpp:474` (mesh HELLO reads name live — confirm)
-- `software/lamp-os/test/test_protocol_v2/` (new test files A.8)
+- `software/lamp-os/test/test_commit_drain/`, `test_settings_blob_*/`, `test_apply_*/` (new test directories per A.8)
 
 **App (Phase B):**
-- `software/lamp-app-flutter/lib/features/control/application/control_notifier.dart` (everything — new helpers, mutator rewrites, deletions)
-- `software/lamp-app-flutter/lib/features/control/application/lamp_save_status.dart` (delete)
+- `software/lamp-app-flutter/lib/core/ble/ble_client.dart` (add `hasCommitChar` to connection state; populate during service discovery — Phase B's FIRST task)
+- `software/lamp-app-flutter/lib/core/ble/uuids.dart` (add `commit` UUID — same constant the firmware registers)
+- `software/lamp-app-flutter/lib/features/control/application/control_notifier.dart` (everything — new helpers, mutator rewrites, deletions, `CommitSection` enum)
+- `software/lamp-app-flutter/lib/features/control/application/lamp_save_status.dart` (delete *in B.9.2 follow-up*, not in main Phase B — still needed for pre-Phase-A-firmware lamps during transition)
 - `software/lamp-app-flutter/lib/features/control/presentation/widgets/connecting_view.dart` (Saving changes branch delete)
 - `software/lamp-app-flutter/lib/features/control/presentation/widgets/brightness_card.dart` (onChangeEnd → schedule commit)
 - `software/lamp-app-flutter/lib/features/control/presentation/widgets/shade_editor_sheet.dart` (Update → commit + pop; Cancel → snap-back)
@@ -380,10 +421,14 @@ These are real issues surfaced by the audits but not in this spec's scope. Docum
 
 ## Open verification items before plan write
 
-1. Confirm `LampCrypto.encryptOp` nonce derivation (B.8). Read `software/lamp-app-flutter/lib/core/crypto/lamp_crypto.dart` or wherever encryptOp lives.
-2. Confirm CHAR_COMMIT UUID. Generate fresh, add to `software/lamp-app-flutter/lib/core/ble/uuids.dart` and the firmware service-init code in sync.
-3. Confirm `firmwareReceiver.isInProgress()` is callable from the loop drain context (Core 1). Should be — it's read in nearby drain blocks today.
-4. Confirm whether dispositions debounce uses 5 s or different idle window; align `kCommitFlushIdleMs` with the project's convention or document why 1.5 s.
+1. ~~Confirm `LampCrypto.encryptOp` nonce derivation.~~ **Resolved**: package:cryptography's AesGcm uses random nonce per call. See B.8.
+2. Generate CHAR_COMMIT UUID. Add to `software/lamp-app-flutter/lib/core/ble/uuids.dart` and the firmware service-init code in sync.
+3. Verify `firmwareReceiver.isInProgress()` is callable from the loop drain context (Core 1). Should be — it's read in nearby drain blocks today.
+4. ~~Confirm debounce window.~~ **Resolved**: 1500 ms documented with rationale (A.3).
+5. Verify `NimBLEDevice::setDeviceName` change is picked up by the existing advertisement-rebuild path, or whether `applyLampLocal` must explicitly trigger an advert refresh. Read `bt.tickAdvertising()` and adjacent advertisement code.
+6. Inventory the call sites of today's `Config::persistConfig()` (currently 2 — one in expressionOp drain from earlier today, the dispositions path doesn't use it). All must update to pass the new `via` parameter in the same commit as the signature change.
+7. Verify `_isExpressionsDirty` deletion doesn't break expression editor's dirty-pill (the editor screen has its own draft-vs-saved tracking separate from `controlNotifier.isDirty`; that draft state is independent of `_isExpressionsDirty`, but worth grepping `_isExpressionsDirty` callers before deletion).
+8. Confirm extraction location for `applyXxxToConfig` / `applyBrightnessImmediate` — proposed `software/lamp-os/src/components/apply/` — fits the existing component layout. If a more idiomatic location exists, use that.
 
 ## Acceptance criteria
 
@@ -393,9 +438,16 @@ Phase A:
 - Bench test #1, #2, #11, #12 pass (old-app compat, OTA interlock, cascade contamination)
 - Fleet OTA from existing firmware to Phase A firmware completes cleanly on two-lamp bench
 
-Phase B:
+Phase B (B.9.1 main PR):
 - `flutter analyze` clean
-- Flutter tests: ~340 - deletions + new = ~342 green
-- Bench tests #3-#10 pass
+- Flutter tests: ~340 - rewrites + new = ~342 green
+- Bench tests #3-#10 pass on lamps running Phase A firmware
+- Bench test #2 still passes for any pre-Phase-A lamp on the bench (old Save-pill path works)
 - Both lamps survive an hour of mixed-edit workload (rename + brightness drags + color edits + expression toggles) with no stuck state
+- `controlNotifier.commit()` and `writeSettingsBlob` exist with full per-pane wiring
+- `_SaveAction` pill renders ONLY for lamps where `hasCommitChar == false`
+
+Phase B.9.2 follow-up (deletion PR, after fleet fully on Phase A):
 - No `isDirty`/`_original`/`save()`/`_SaveAction`/`lampSaveStatusProvider` references remain in the lib tree (grep clean)
+- `flutter analyze` clean
+- Flutter tests: full ~342 green (the pre-Phase-A path tests are deleted alongside the code they exercise)
