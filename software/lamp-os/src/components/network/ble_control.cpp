@@ -50,6 +50,12 @@ void postPendingApplyEffectiveBrightness();
 // onDisconnect posts this flag; the loop drain on Core 1 force-flushes
 // dispositions so a phone walk-off still persists the user's slider value.
 void postPendingFlushDispositions();
+// CHAR_COMMIT volatile state — defined in standard_lamp.cpp (Core 1 owner),
+// read/written from Core 0 BLE callbacks in ble_control.cpp. Declared here
+// at file scope (outside ble_control namespace) so the extern resolves to
+// the global-namespace symbol, not ble_control::*.
+extern volatile bool g_pendingCommit;
+extern volatile bool g_forceCommitFlush;
 
 // Override globals defined in standard_lamp.cpp. The EditSessionCallback
 // flips their per-surface `operatorEditing_` bool from Core 0 (BLE host
@@ -419,6 +425,11 @@ class ControlServerCallbacks : public NimBLEServerCallbacks {
     // dirty (the common case for disconnects unrelated to social tab).
     // The flush runs on Core 1 from the loop drain; we just post a flag.
     postPendingFlushDispositions();
+    // Force-flush a pending commit on disconnect so a quick edit-then-
+    // disconnect doesn't lose the user's last change. The loop drain
+    // sees g_forceCommitFlush and flushes immediately (skips the idle
+    // window).
+    g_forceCommitFlush = true;
 
 #ifdef LAMP_DEBUG
     Serial.printf("[ble_control] Client disconnected, handle=%u reason=%d\n", handle, reason);
@@ -1173,6 +1184,20 @@ void start(lamp::Config* config, Preferences* prefs) {
       ->setCallbacks((new WriteRouter(
           MAX_PENDING_JSON, postPendingBaseColorsJson, isAuthed))
               ->setDebugTag("baseColors"));
+  // CHAR_COMMIT — parameterless commit signal. Plaintext WriteRouter; auth
+  // is the existing isAuthed() gate. allowEmpty=true so the app can send
+  // a single sentinel byte OR an empty payload — both are treated as the
+  // commit signal (the bytes are ignored, the arrival IS the signal).
+  //
+  // Properties = NIMBLE_PROPERTY::WRITE (with-response, NOT the WRITE_NR
+  // pair used for live-preview chars). With-response is load-bearing: a
+  // BLE disconnect during a commit write must be a recoverable error on
+  // the app side, not silently dropped.
+  s_service->createCharacteristic(CHAR_COMMIT_UUID, NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks((new WriteRouter(
+          /*maxSize=*/4, postPendingCommit, isAuthed))
+              ->setDebugTag("commit")
+              ->setAllowEmpty(true));
   s_service->createCharacteristic(CHAR_BASE_KNOCKOUT, LIVE_WRITE_PROPS)
       ->setCallbacks(new BaseKnockoutCallback());
   // Home-mode focus: app signals whether the user is on the Home Mode
@@ -1328,4 +1353,15 @@ void setFirmwareReceiver(lamp::FirmwareReceiver* receiver) {
   }
 }
 
+}  // namespace ble_control
+
+// postPendingCommit is defined outside the ble_control namespace so the
+// linker resolves it to the global-scope g_pendingCommit defined in
+// standard_lamp.cpp. Signature matches WriteRouter::PostFn; data/len are
+// semantically ignored — the arrival of the write IS the commit signal.
+namespace ble_control {
+void postPendingCommit(const char* /*data*/, size_t /*len*/) {
+  // Single-bool naturally atomic on Xtensa — no portMUX.
+  g_pendingCommit = true;
+}
 }  // namespace ble_control

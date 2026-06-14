@@ -79,4 +79,10 @@ abstract class BleUuids {
   // a DeclineBusy notification.
   static const fwControl = '5f64f4e7-d6d9-4a44-9b3f-3a8d6f7e6b40';
   static const fwChunk   = '5f64f4e8-d6d9-4a44-9b3f-3a8d6f7e6b40';
+
+  /// Phase A commit signal (CHAR_COMMIT). 0/1-byte payload (ignored);
+  /// firmware persists the current in-memory config to NVS on receipt,
+  /// debounced + OTA-gated. Used as the "save now" fence for drag-style
+  /// flows (slider release, color-editor Update tap).
+  static const commit = '48537d49-11a7-4f54-a69a-9425b9288c50';
 }

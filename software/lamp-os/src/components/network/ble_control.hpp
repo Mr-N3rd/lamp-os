@@ -122,6 +122,11 @@ constexpr const char* CHAR_FW_CHUNK        = "5f64f4e8-d6d9-4a44-9b3f-3a8d6f7e6b
 // Multiple-surface picker sessions are handled by sending one frame
 // per surface. Cleared on BLE disconnect as a defensive sweep.
 constexpr const char* CHAR_EDIT_SESSION    = "5f64f4e9-d6d9-4a44-9b3f-3a8d6f7e6b40";
+// CHAR_COMMIT (write-with-response, auth-gated): parameterless commit
+// signal. Payload bytes are semantically ignored — the arrival of the
+// write IS the signal. Firmware persists the current in-memory config
+// to NVS, debounced 1500ms, OTA-gated, FNV-1a hash-deduped.
+inline constexpr const char* CHAR_COMMIT_UUID = "48537d49-11a7-4f54-a69a-9425b9288c50";
 
 /**
  * @brief Start the BLE GATT control service.
@@ -200,6 +205,12 @@ bool isScanPaused();
  *        get out of the way of.
  */
 void markActivity();
+
+// Posts a commit signal from the BLE callback (Core 0) to the loop
+// task (Core 1). Loop drain debounces and calls config.persistConfig.
+// Signature matches WriteRouter::PostFn — the data/len bytes are
+// semantically ignored (the arrival of the write IS the signal).
+void postPendingCommit(const char* data, size_t len);
 
 }  // namespace ble_control
 

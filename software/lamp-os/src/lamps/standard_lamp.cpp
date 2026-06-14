@@ -152,6 +152,29 @@ volatile bool pendingApplyEffectiveBrightness = false;
 // window elapses. Core 1 drain calls config.flushDispositionsNow().
 // Audit finding #5 (NVS write amplification) — see config.hpp.
 volatile bool pendingFlushDispositionsRequested = false;
+// CHAR_COMMIT signal — set by ble_control::postPendingCommit on Core 0,
+// drained on Core 1 after the per-section live-preview drains. The
+// drain debounces by 1500 ms (idle window) and skips identical commits
+// via hash-dedup.
+volatile bool g_pendingCommit = false;
+volatile bool g_forceCommitFlush = false;
+
+namespace {
+  bool      commitDirty = false;
+  uint32_t  lastCommitSignalMs = 0;
+  uint32_t  lastPersistedHash = 0;  // FNV-1a of last successfully persisted serialized JSON
+  constexpr uint32_t kCommitFlushIdleMs = 1500;
+
+  uint32_t fnv1aHash(const String& s) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < s.length(); ++i) {
+      h ^= static_cast<uint8_t>(s[i]);
+      h *= 16777619u;
+    }
+    return h;
+  }
+}  // namespace
+
 lamp::PendingJsonSlot<MAX_PENDING_JSON> pendingBaseColorsJson;
 lamp::PendingJsonSlot<MAX_PENDING_JSON> pendingShadeColorsJson;
 PendingKnockoutUpdate pendingKnockout;
@@ -1454,6 +1477,54 @@ void loop() {
     // ~4 BLE writes/sec and we don't want one NVS write per drag tick.)
     if (applied) {
       config.persistConfig("expressionOp");
+    }
+  }
+
+  // CHAR_COMMIT drain. The per-section live-preview drains above have
+  // already mutated config.* in RAM; persistConfig serializes the
+  // canonical snapshot. Debounced 1500ms after the last commit signal
+  // arrival to coalesce rapid Update-tap sequences. Gated on
+  // !firmwareReceiver.isInProgress() to avoid contending with OTA
+  // chunk-writes. Hash-dedup skips no-op commits. BLE-disconnect
+  // force-flush bypasses the idle window so a quick edit-then-
+  // disconnect doesn't lose the user's last change.
+  if (g_pendingCommit) {
+    g_pendingCommit = false;
+    commitDirty = true;
+    lastCommitSignalMs = millis();
+  }
+  if (commitDirty &&
+      (g_forceCommitFlush ||
+       (millis() - lastCommitSignalMs) >= kCommitFlushIdleMs)) {
+    g_forceCommitFlush = false;
+    if (firmwareReceiver.isInProgress()) {
+      // Defer — recheck next tick. Don't clear commitDirty.
+#ifdef LAMP_DEBUG
+      Serial.println("[loop] commit drain: OTA in progress, deferred");
+#endif
+    } else {
+      JsonDocument doc = config.asJsonDocument();
+      String serialized;
+      serializeJson(doc, serialized);
+      uint32_t hash = fnv1aHash(serialized);
+      if (hash == lastPersistedHash) {
+#ifdef LAMP_DEBUG
+        Serial.println("[loop] commit drain: hash-dedup skip");
+#endif
+        commitDirty = false;
+      } else {
+        bool persisted = config.persistConfig("commit");
+        if (persisted) {
+          lastPersistedHash = hash;
+          config.invalidateAllSections();
+          ble_control::notifyStateChange();
+          commitDirty = false;
+        } else {
+          // Persist failed; surface to app for re-read, leave commitDirty
+          // set so the next tick retries.
+          ble_control::notifyStateChange();
+        }
+      }
     }
   }
 
