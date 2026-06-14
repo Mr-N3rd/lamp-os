@@ -60,21 +60,28 @@ Within Phase B.9.1:
 
 Detect whether the lamp at `deviceId` exposes CHAR_COMMIT in its GATT characteristic list. Cache the result so the per-pane mutators can read it synchronously.
 
+**IMPORTANT findings from the implementability review:**
+- `InMemoryBleClient` is a class inside `lib/core/ble/ble_client.dart` (NOT in `test/test_support/`). Test imports use `package:lamp_app/core/ble/ble_client.dart`.
+- The existing `InMemoryBleClient` has NO `setDiscoveredChars` or `writesTo` helpers — they must be added in Step 2 before the tests will compile.
+- `InventoryLamp` is a Freezed class. Adding `hasCommitChar` requires running `dart run build_runner build --delete-conflicting-outputs` to regenerate `inventory_lamp.freezed.dart` and `inventory_lamp.g.dart`. The new field MUST be `bool? hasCommitChar` with a `?? false` default at read sites — old SharedPreferences entries don't have the key.
+
 **Files:**
-- Modify: `lib/core/ble/ble_client.dart` — abstract method addition
+- Modify: `lib/core/ble/ble_client.dart` — abstract method addition + `InMemoryBleClient` helpers
 - Modify: `lib/core/ble/fbp_ble_client.dart` — concrete probe via flutter_blue_plus's discovered characteristics (grep `class FbpBleClient` / `BluetoothDevice.discoverServices` to find the exact location)
-- Modify: `lib/features/inventory/application/inventory_notifier.dart` (or `lib/features/nearby/application/nearby_lamps_notifier.dart` — whichever holds the per-lamp connection state — grep for `_connectionState` / `LampConnection` / `isConnected` to identify) — add a `Map<String, bool> _hasCommitCharByLamp` cache, populate post-connect
+- Modify: `lib/features/inventory/domain/inventory_lamp.dart` (Freezed class) — add `bool? hasCommitChar` field
+- Run: `dart run build_runner build --delete-conflicting-outputs` (regenerate `inventory_lamp.freezed.dart` + `inventory_lamp.g.dart`)
+- Modify: `lib/features/inventory/application/inventory_notifier.dart` — populate `hasCommitChar` post-connect; expose `hasCommitChar(deviceId) -> bool` synchronous getter on the inventory entry (or notifier)
 - Test: `test/core/ble/probe_has_commit_char_test.dart`
 
-- [ ] **Step 1: Find the BleClient concrete impl + per-lamp connection state holder**
+- [ ] **Step 1: Find the BleClient concrete impl + per-lamp inventory entry**
 
 ```bash
 cd /Users/jerrett/projects/lamp-os/software/lamp-app-flutter
 grep -rn "implements BleClient\|class FbpBleClient\|extends BleClient" lib/core/ble/ | head -3
-grep -rn "class InventoryNotifier\|class NearbyLampsNotifier" lib/features/inventory lib/features/nearby 2>/dev/null | head -3
+grep -rn "class InventoryLamp\|class InventoryNotifier" lib/features/inventory 2>/dev/null | head -5
 ```
 
-Note the file paths returned. Substitute them in subsequent steps where this task says `lib/core/ble/fbp_ble_client.dart` or `lib/features/inventory/application/inventory_notifier.dart`.
+Note the file paths returned. Substitute them in subsequent steps where this task says `lib/core/ble/fbp_ble_client.dart` or `lib/features/inventory/...`.
 
 - [ ] **Step 2: Add abstract method to `lib/core/ble/ble_client.dart`**
 
@@ -104,7 +111,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lamp_os/core/ble/ble_client.dart';
 import 'package:lamp_os/core/ble/uuids.dart';
 
-import '../../test_support/in_memory_ble_client.dart'; // adjust if path differs
+import 'package:lamp_app/core/ble/ble_client.dart'; // InMemoryBleClient is a class inside this file
 
 void main() {
   group('probeHasCommitChar', () {
@@ -139,14 +146,32 @@ flutter test test/core/ble/probe_has_commit_char_test.dart
 
 Expected: compile error or 3 test failures because the abstract method isn't implemented in the test double yet.
 
-- [ ] **Step 5: Implement `probeHasCommitChar` in the test double**
+- [ ] **Step 5: Implement `probeHasCommitChar` + add test helpers in `InMemoryBleClient`**
 
-In `test/test_support/in_memory_ble_client.dart` (find via grep), add:
+`InMemoryBleClient` is defined inside `lib/core/ble/ble_client.dart` (find the `class InMemoryBleClient implements BleClient` block — search for it). Add THREE things:
+
+(a) The `_discoveredChars` map + `setDiscoveredChars` helper for test injection.
+(b) `probeHasCommitChar` override.
+(c) A `writesTo(deviceId, charUuid)` helper that returns the list of write payloads matching a `(deviceId, charUuid)` pair across any service UUID. The existing `_values` map keys by `_key(d, s, c)` so writes need a separate `_writeLog` list to preserve write history.
 
 ```dart
+  // Test injection: GATT-discovered characteristic UUIDs per device.
   final Map<String, List<String>> _discoveredChars = {};
   void setDiscoveredChars(String deviceId, List<String> chars) {
-    _discoveredChars[deviceId] = chars;
+    _discoveredChars[deviceId] = List.of(chars);
+  }
+
+  // Write log — captures every write call so tests can assert what
+  // landed on a given (deviceId, charUuid) pair. Append on every
+  // `write(...)` call; tests query via `writesTo`.
+  final List<({String deviceId, String charUuid, Uint8List value})>
+      _writeLog = [];
+
+  List<Uint8List> writesTo(String deviceId, String charUuid) {
+    return _writeLog
+        .where((w) => w.deviceId == deviceId && w.charUuid == charUuid)
+        .map((w) => w.value)
+        .toList();
   }
 
   @override
@@ -154,6 +179,29 @@ In `test/test_support/in_memory_ble_client.dart` (find via grep), add:
     final chars = _discoveredChars[deviceId];
     if (chars == null) return false;
     return chars.contains(BleUuids.commit);
+  }
+```
+
+ALSO modify the existing `write(...)` method body in `InMemoryBleClient` to append to `_writeLog`:
+
+```dart
+  @override
+  Future<void> write(
+    String deviceId,
+    String serviceUuid,
+    String charUuid,
+    Uint8List value, {
+    bool withoutResponse = false,
+    bool allowLongWrite = false,
+  }) async {
+    // existing _values store (preserve whatever was there)
+    _values[_key(deviceId, serviceUuid, charUuid)] = value;
+    // NEW: write log for tests
+    _writeLog.add((
+      deviceId: deviceId,
+      charUuid: charUuid,
+      value: Uint8List.fromList(value),
+    ));
   }
 ```
 
@@ -195,22 +243,55 @@ flutter test test/core/ble/probe_has_commit_char_test.dart
 
 Expected: 3/3 PASS.
 
-- [ ] **Step 8: Wire the per-device cache**
+- [ ] **Step 8: Add `hasCommitChar` field to `InventoryLamp` Freezed class**
 
-In the connection-state notifier (e.g. `inventory_notifier.dart` or `nearby_lamps_notifier.dart` — identified in Step 1), find the post-connect handler. After `await ble.connect(deviceId)` resolves and before any UI-visible state transition, add:
+Find `InventoryLamp` (probably `lib/features/inventory/domain/inventory_lamp.dart`). Add a new field to the `@freezed` class definition:
+
+```dart
+@freezed
+class InventoryLamp with _$InventoryLamp {
+  const factory InventoryLamp({
+    required String id,
+    required String name,
+    // ... existing fields ...
+    // NEW: GATT-discovered presence of CHAR_COMMIT. null when not yet
+    // probed (pre-existing inventory entries, mid-connect window).
+    // Read sites default to false via `?? false`.
+    bool? hasCommitChar,
+  }) = _InventoryLamp;
+
+  factory InventoryLamp.fromJson(Map<String, dynamic> json) =>
+      _$InventoryLampFromJson(json);
+}
+```
+
+The field is intentionally **nullable** so old SharedPreferences entries (which won't have this key) parse cleanly — Freezed's `fromJson` returns null for missing keys.
+
+- [ ] **Step 9: Regenerate Freezed/JSON code**
+
+```bash
+cd /Users/jerrett/projects/lamp-os/software/lamp-app-flutter
+dart run build_runner build --delete-conflicting-outputs
+```
+
+Expected: `inventory_lamp.freezed.dart` and `inventory_lamp.g.dart` are regenerated. No errors. Skipping this step makes the entire app fail to compile.
+
+- [ ] **Step 10: Populate `hasCommitChar` post-connect in the inventory notifier**
+
+Find the post-connect handler in `inventory_notifier.dart` (search for `await ble.connect(` or `_ble.connect`). After the connection settles and AFTER services are discovered (the probe needs the GATT cache primed), add:
 
 ```dart
 final hasCommit = await ble.probeHasCommitChar(deviceId);
-// Cache in whatever map your notifier uses for per-lamp connection state.
-state = state.copyWith(
-  hasCommitCharByLamp: {
-    ...state.hasCommitCharByLamp,
-    deviceId: hasCommit,
-  },
-);
+final updatedLamps = state.value!.map((l) {
+  return l.id == deviceId ? l.copyWith(hasCommitChar: hasCommit) : l;
+}).toList();
+state = AsyncData(updatedLamps);
+// Persist if your inventory persists changes to SharedPreferences.
+await _persist(updatedLamps);  // adjust to whatever the existing persist
+                                // method is — grep `prefs.setString` to find
 ```
 
-Add the `hasCommitCharByLamp` field to the `ConnectionState` (or equivalent) class. Default empty map. Expose a synchronous getter `bool hasCommitChar(String deviceId)` that returns `_hasCommitCharByLamp[deviceId] ?? false`.
+Read sites use `entry.hasCommitChar ?? false` to default `null` to legacy behavior (Save-pill flow) until the probe lands.
 
 - [ ] **Step 9: Run the full BLE test suite**
 
@@ -281,7 +362,7 @@ import 'package:lamp_os/core/ble/uuids.dart';
 import 'package:lamp_os/features/control/application/commit_section.dart';
 import 'package:lamp_os/features/control/application/control_notifier.dart';
 
-import '../../test_support/in_memory_ble_client.dart';
+import 'package:lamp_app/core/ble/ble_client.dart'; // InMemoryBleClient is a class inside this file
 
 void main() {
   group('controlNotifier.commit(section)', () {
@@ -354,10 +435,22 @@ Find a place near the top of the class body (or near `save()` at line 555 — gr
       (l) => l.id == _deviceId,
       orElse: () => throw StateError('lamp $_deviceId not in inventory'),
     );
-    // Adjust the next line to whatever your inventory notifier exposes for
-    // the per-lamp hasCommitChar cache. If it lives on the connection
-    // state notifier instead, read it from there.
-    if (!entry.hasCommitChar) return; // pre-Phase-A — Save pill owns persistence
+    //
+    // DESIGN DEVIATION FROM SPEC B.3: the spec describes a fallback that
+    // synthesizes a partial settings_blob from state.value when
+    // hasCommitChar==false. This plan takes a simpler interpretation —
+    // pre-Phase-A lamps fall through to the legacy Save-pill flow (the
+    // pill is still visible on those lamps per Task 12). No fallback
+    // synthesis. Rationale: the synthesized blob would trigger a reboot
+    // on pre-Phase-A firmware (which ignores the reboot:false flag),
+    // which is exactly the UX the user said they don't want for slider
+    // releases / picker accepts. Save-pill behavior on pre-Phase-A
+    // lamps is identical to today; users on those lamps tap Save when
+    // they're ready.
+    //
+    // The `?? false` default treats null (not-yet-probed) as pre-Phase-A
+    // — safe default; the probe will populate within ~100ms of connect.
+    if (!(entry.hasCommitChar ?? false)) return;
 
     final ble = ref.read(bleClientProvider);
     try {
@@ -440,7 +533,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lamp_os/core/ble/uuids.dart';
 import 'package:lamp_os/features/control/application/control_notifier.dart';
 
-import '../../test_support/in_memory_ble_client.dart';
+import 'package:lamp_app/core/ble/ble_client.dart'; // InMemoryBleClient is a class inside this file
 
 void main() {
   group('controlNotifier.writeSettingsBlob', () {
@@ -451,10 +544,8 @@ void main() {
       final notifier = container.read(controlNotifierProvider('lamp-a').notifier);
       await notifier.writeSettingsBlob({'lamp': {'name': 'foo'}}, reboot: false);
 
-      final write = container
-        .read(bleClientProvider)
-        .let((b) => (b as InMemoryBleClient).writesTo('lamp-a', BleUuids.settingsBlob))
-        .first;
+      final inMem = container.read(bleClientProvider) as InMemoryBleClient;
+      final write = inMem.writesTo('lamp-a', BleUuids.settingsBlob).first;
       // Decode (no-password path = magicPlaintext + json) to verify the flag:
       final json = jsonDecode(utf8.decode(write.sublist(1)));
       expect(json['reboot'], false);
@@ -547,16 +638,71 @@ Place near `save()` (line 555 area). Use the existing `LampCrypto.encryptOp` + `
 flutter test test/features/control/write_settings_blob_test.dart
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Add the nonce-non-reuse regression test (B.8 spec requirement)**
+
+Create `test/features/control/nonce_nonreuse_test.dart`:
+
+```dart
+import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lamp_os/core/ble/uuids.dart';
+
+import 'package:lamp_app/core/ble/ble_client.dart'; // InMemoryBleClient is a class inside this file
+
+void main() {
+  group('writeSettingsBlob nonce-non-reuse (B.8 regression guard)', () {
+    test('two near-simultaneous discrete edits produce distinct ciphertexts', () async {
+      // Setup: lamp with a password set so the encrypted path is taken.
+      final ble = InMemoryBleClient();
+      // ... wire up an authed lamp 'lamp-a' with hasCommitChar=true ...
+      final container = ProviderContainer(overrides: [
+        bleClientProvider.overrideWithValue(ble),
+      ]);
+      addTearDown(container.dispose);
+      final notifier = container.read(controlNotifierProvider('lamp-a').notifier);
+
+      // Fire two writeSettingsBlob calls back-to-back (small payloads,
+      // realistic real-world: user mashes Save on rename then immediately
+      // taps personality).
+      await Future.wait([
+        notifier.writeSettingsBlob({'lamp': {'name': 'A'}}, reboot: false),
+        notifier.writeSettingsBlob({'lamp': {'socialMode': 1}}, reboot: false),
+      ]);
+
+      final writes = ble.writesTo('lamp-a', BleUuids.settingsBlob);
+      expect(writes.length, 2);
+      // Distinct ciphertext bytes — if package:cryptography ever
+      // switches to deterministic nonces this fails loudly.
+      expect(writes[0], isNot(equals(writes[1])));
+    });
+  });
+}
+```
+
+- [ ] **Step 7: Run the new test**
 
 ```bash
-git add lib/features/control/application/control_notifier.dart test/features/control/write_settings_blob_test.dart
+flutter test test/features/control/nonce_nonreuse_test.dart
+```
+
+Expected: 1/1 PASS. The current `package:cryptography` AesGcm implementation uses a random nonce per call (verified during spec writing), so the test should pass without any code change.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add lib/features/control/application/control_notifier.dart test/features/control/write_settings_blob_test.dart test/features/control/nonce_nonreuse_test.dart
 git commit -m "$(cat <<'EOF'
-feat(control): writeSettingsBlob(Map, {reboot}) helper
+feat(control): writeSettingsBlob(Map, {reboot}) helper + nonce-non-reuse test
 
 Extracts the encryption + write pattern previously inlined in
 setLampPassword / factoryReset. Discrete Phase B mutators pass
 reboot:false; advanced LED + factoryReset pass reboot:true.
+
+nonce_nonreuse_test asserts the B.8 invariant: two near-simultaneous
+writeSettingsBlob calls produce distinct ciphertexts. Current
+AesGcm uses random nonce per call so this passes by construction —
+the test is a forward-defense guard against any future change to
+nonce derivation.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -573,41 +719,61 @@ Centralizes the optimistic-update + on-failure-revert pattern across ~24 mutator
 - Modify: `lib/features/control/application/control_notifier.dart`
 - Test: `test/features/control/mutate_helper_test.dart`
 
-- [ ] **Step 1: Write the failing test**
+**NOTE on test sequencing**: this Task's tests use `setLampName` to exercise `_mutate` — but `setLampName` doesn't call `_mutate` until Task 9 lands the rewrite. Two options:
 
-Create `test/features/control/mutate_helper_test.dart`:
+(a) Write Tasks 4 and 9 together as one merge (defer this Task's tests to after Task 9's setLampName rewrite is in).
+(b) Add a `@visibleForTesting` test-only mutator in this Task that exercises `_mutate` directly.
+
+Option (a) is simpler — the order in this plan already puts Task 9 close enough that combining them is fine. **Skip the test code for now in this Task; Task 9 Step 4 already has phase-aware tests that incidentally cover `_mutate`'s revert path.** Add the actual `_mutate` test then.
+
+If you want option (b) for stronger isolation, add this `@visibleForTesting` helper:
+
+```dart
+  @visibleForTesting
+  Future<void> mutateForTest(
+    ControlState Function(ControlState) transform,
+    Future<void> Function() commit,
+  ) => _mutate(transform, commit);
+```
+
+And write the test against `mutateForTest(...)` directly.
+
+- [ ] **Step 1: (Optional with option b) Write the failing test**
+
+If you took option (a), skip this step. If you took option (b), create `test/features/control/mutate_helper_test.dart`:
 
 ```dart
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:lamp_os/features/control/application/control_notifier.dart';
-// import the ControlState type from your domain — adjust the path
+import 'package:lamp_app/features/control/application/control_notifier.dart';
 
 void main() {
-  group('controlNotifier._mutate', () {
+  group('controlNotifier._mutate (via mutateForTest)', () {
     test('applies the transform optimistically', () async {
       final container = ProviderContainer(/* ... */);
       addTearDown(container.dispose);
       final notifier = container.read(controlNotifierProvider('lamp-a').notifier);
 
-      // call a mutator that internally uses _mutate and a no-op commit
-      await notifier.setLampNameInternal('newname');
-      // (use whichever mutator the test infrastructure supports)
+      await notifier.mutateForTest(
+        (s) => s.copyWith(/* trivial change */),
+        () async {},  // no-op commit
+      );
 
-      expect(container.read(controlNotifierProvider('lamp-a')).value!.lamp.name, 'newname');
+      // assert state reflects the transform
     });
 
-    test('reverts state on BLE write failure', () async {
-      final ble = ThrowingBleClient(); // a test double that always throws on write
-      final container = ProviderContainer(overrides: [
-        bleClientProvider.overrideWithValue(ble),
-      ]);
-      addTearDown(container.dispose);
+    test('reverts state on commit failure', () async {
+      // ... setup ...
       final notifier = container.read(controlNotifierProvider('lamp-a').notifier);
-      final originalName = container.read(controlNotifierProvider('lamp-a')).value!.lamp.name;
-
-      await expectLater(() => notifier.setLampName('boom'), throwsA(isA<Exception>()));
-      expect(container.read(controlNotifierProvider('lamp-a')).value!.lamp.name, originalName);
+      final originalState = container.read(controlNotifierProvider('lamp-a')).value;
+      await expectLater(
+        () => notifier.mutateForTest(
+          (s) => s.copyWith(/* trivial change */),
+          () async => throw Exception('boom'),
+        ),
+        throwsA(isA<Exception>()),
+      );
+      expect(container.read(controlNotifierProvider('lamp-a')).value, originalState);
     });
   });
 }
@@ -761,22 +927,26 @@ In the notifier's `build()` (or wherever the existing `ref.onDispose` is — gre
     });
 ```
 
-- [ ] **Step 5: Wire AppLifecycleListener**
+- [ ] **Step 5: Wire lifecycle pause via the existing `appLifecycleStateProvider`**
 
-Find where `WidgetsBinding.instance.addObserver` is used in the app (grep `AppLifecycleListener\|didChangeAppLifecycleState` in `lib/`). If a central observer exists, hook into it. If not, the cleanest pattern is to register an `AppLifecycleListener` in the notifier's `build()`:
+The project ALREADY has a central lifecycle notifier at `lib/core/lifecycle/app_lifecycle.dart` exposed via `appLifecycleStateProvider`. `controlNotifier` already uses `ref.listen(appLifecycleStateProvider, ...)` around line 402 — verify by:
+
+```bash
+grep -nE "appLifecycleStateProvider|AppLifecycleState\\.paused" lib/features/control/application/control_notifier.dart
+```
+
+Add the force-flush hook to the existing `ref.listen` (or add a new listen if needed). Pattern:
 
 ```dart
-    final lifecycleListener = AppLifecycleListener(
-      onPause: () {
+    ref.listen(appLifecycleStateProvider, (prev, next) {
+      // existing handlers...
+      if (next == AppLifecycleState.paused) {
         _flushPendingCommit();
-      },
-    );
-    ref.onDispose(() {
-      lifecycleListener.dispose();
-      _commitDebounceTimer?.cancel();
-      _flushPendingCommit();
+      }
     });
 ```
+
+Do NOT instantiate a raw `AppLifecycleListener` — that diverges from the project's convention and would double-subscribe.
 
 - [ ] **Step 6: Write the test**
 
@@ -946,6 +1116,107 @@ EOF
 
 ---
 
+### Task 6.5: Knockout pane — debounced commit + force-flush on screen back
+
+The audit identified knockout as a live-preview-only persistence gap (per-pixel writes go to CHAR_BASE_KNOCKOUT today; nothing persists them on Phase A). Add a debounced commit after each `setKnockoutPixel` call and a `PopScope` hook on the knockout screen so back-nav force-flushes pending work even if the notifier's `ref.onDispose` doesn't fire at route-pop (depends on provider scope, which may be app-level).
+
+**Files:**
+- Modify: `lib/features/control/presentation/knockout_screen.dart` — wrap body in `PopScope`; force-flush on pop
+- Modify: `lib/features/control/application/control_notifier.dart` — `setKnockoutPixel` schedules debounced commit
+
+- [ ] **Step 1: Find the knockout mutator + screen**
+
+```bash
+cd /Users/jerrett/projects/lamp-os/software/lamp-app-flutter
+grep -nE "setKnockoutPixel|clearKnockout|knockout_screen" lib/features/control 2>/dev/null | head -10
+```
+
+Note the line numbers for `setKnockoutPixel` (and `clearKnockout`) in `control_notifier.dart`, and locate `knockout_screen.dart`.
+
+- [ ] **Step 2: Add `scheduleKnockoutCommit` public helper**
+
+In `control_notifier.dart`, near `scheduleBrightnessCommit` (Task 6):
+
+```dart
+  /// Called from the knockout screen after each per-pixel edit (and on
+  /// screen-back force-flush) to schedule a debounced commit. Same
+  /// debounce window as brightness.
+  void scheduleKnockoutCommit() {
+    _scheduleCommitDebounced(CommitSection.baseKnockout);
+  }
+
+  /// Synchronous force-flush exposed for the knockout screen's
+  /// PopScope hook. The debounce timer may not have fired yet and the
+  /// notifier's onDispose may not fire at route-pop if the notifier
+  /// is app-scoped.
+  void flushKnockoutCommit() {
+    _flushPendingCommit();
+  }
+```
+
+- [ ] **Step 3: Schedule commit on each pixel edit**
+
+Find `setKnockoutPixel` in `control_notifier.dart`. The mutator currently writes CHAR_BASE_KNOCKOUT via the live-preview path and updates state. Append a call to `_scheduleCommitDebounced` at the end:
+
+```dart
+  Future<void> setKnockoutPixel(int pixel, int brightness) async {
+    // ... existing live-preview write + state update ...
+    _scheduleCommitDebounced(CommitSection.baseKnockout);
+  }
+```
+
+(Match the existing method shape — don't rewrite the body, just add the schedule call at the end.)
+
+- [ ] **Step 4: Wrap the knockout screen in PopScope**
+
+In `knockout_screen.dart`, find the top-level `Scaffold` (or whatever returns the screen body). Wrap it:
+
+```dart
+@override
+Widget build(BuildContext context) {
+  return PopScope(
+    canPop: true,
+    onPopInvoked: (didPop) {
+      if (didPop) {
+        ref.read(controlNotifierProvider(widget.lampId).notifier).flushKnockoutCommit();
+      }
+    },
+    child: Scaffold(
+      // existing body
+    ),
+  );
+}
+```
+
+(`PopScope` is the Flutter 3.13+ replacement for `WillPopScope`. If the project uses an older Flutter version, fall back to `WillPopScope` with `onWillPop`.)
+
+- [ ] **Step 5: Analyze + test**
+
+```bash
+flutter analyze lib/features/control/presentation/knockout_screen.dart lib/features/control/application/control_notifier.dart
+flutter test test/features/control/
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add lib/features/control/presentation/knockout_screen.dart lib/features/control/application/control_notifier.dart
+git commit -m "$(cat <<'EOF'
+feat(knockout): debounced commit after each pixel edit + back-nav flush
+
+setKnockoutPixel now schedules a debounced commit (500ms idle,
+matches brightness). PopScope on the knockout screen force-flushes
+on back-nav so a quick edit-then-back doesn't lose pending work
+even if the controlNotifier's ref.onDispose doesn't fire at route-pop
+(controlNotifier is app-scoped).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
 ### Task 7: Shade editor sheet — Update → commit; Cancel → snap-back
 
 Add a captured-colors snapshot on sheet open, Cancel writes them back via the existing live-preview char to revert the lamp visually, Update fires the commit and pops.
@@ -1069,13 +1340,20 @@ void initState() {
 }
 ```
 
-- [ ] **Step 3: Wire Cancel → snap-back colors + ac**
+- [ ] **Step 3: Wire Cancel → snap-back colors; restore ac in state-only**
 
 ```dart
 onPressed: () {
   final notifier = ref.read(controlNotifierProvider(widget.lampId).notifier);
+  // Colors revert visually via live-preview char.
   notifier.setBaseColors(_capturedColors!);
-  // ac doesn't have a live-preview char; just restore in state.
+  // ac has NO live-preview char — restoring it in app state is enough
+  // for the next visible render. The lamp's current ac may still be
+  // whatever the user picked mid-edit (since ac changes during the
+  // edit session aren't pushed to the lamp until Update fires the
+  // settings_blob). On Cancel, the local state matches captured-at-
+  // open and the lamp keeps whatever it had — which is fine because
+  // ac only affects the next paint cycle the user triggers.
   notifier.setBaseAc(_capturedAc!);
   Navigator.of(context).pop();
 },
@@ -1144,6 +1422,10 @@ The rename mutator additionally updates the inventory cache immediately (B.7 spe
 **Files:**
 - Modify: `lib/features/control/application/control_notifier.dart` — `setLampName` (line 905), `setLampAdvancedEnabled` (line 920), `setLampSocialMode` (line 938)
 
+**NOTE on `copyWith`**: `LampSection`, `BaseSection`, `ShadeSection`, `HomeModeSection` are plain Dart classes WITHOUT `copyWith` methods (only `ControlState` and `ExpressionConfig` are Freezed). The existing mutators rebuild sections field-by-field — keep that pattern. `ControlState.copyWith` IS available because `ControlState` IS Freezed. Use it for the top-level state wrap.
+
+**NOTE on `hasCommitChar`**: read sites must default `null` → `false`. The pattern is `entry.hasCommitChar ?? false`.
+
 - [ ] **Step 1: Rewrite `setLampName` (line 905)**
 
 ```dart
@@ -1165,14 +1447,11 @@ The rename mutator additionally updates the inventory cache immediately (B.7 spe
           (l) => l.id == _deviceId,
           orElse: () => throw StateError('lamp $_deviceId not in inventory'),
         );
-        if (entry.hasCommitChar) {
+        if (entry.hasCommitChar ?? false) {
           await writeSettingsBlob({'lamp': {'name': name}}, reboot: false);
         }
         // Inventory cache update fires for BOTH paths so the AppBar
         // LampChip title is correct without waiting for a reload.
-        // On pre-Phase-A lamps, the next Save-pill reboot triggers a
-        // reload anyway, which would also update the inventory — but
-        // the user expects the new name immediately on the chip.
         await ref
             .read(inventoryNotifierProvider.notifier)
             .updateName(_deviceId, name);
@@ -1202,7 +1481,7 @@ The rename mutator additionally updates the inventory cache immediately (B.7 spe
           (l) => l.id == _deviceId,
           orElse: () => throw StateError('lamp $_deviceId not in inventory'),
         );
-        if (entry.hasCommitChar) {
+        if (entry.hasCommitChar ?? false) {
           await writeSettingsBlob({'lamp': {'advancedEnabled': v}}, reboot: false);
         }
       },
@@ -1231,7 +1510,7 @@ The rename mutator additionally updates the inventory cache immediately (B.7 spe
           (l) => l.id == _deviceId,
           orElse: () => throw StateError('lamp $_deviceId not in inventory'),
         );
-        if (entry.hasCommitChar) {
+        if (entry.hasCommitChar ?? false) {
           await writeSettingsBlob({'lamp': {'socialMode': mode.wire}}, reboot: false);
         }
       },
@@ -1248,7 +1527,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lamp_os/core/ble/uuids.dart';
 
-import '../../test_support/in_memory_ble_client.dart';
+import 'package:lamp_app/core/ble/ble_client.dart'; // InMemoryBleClient is a class inside this file
 
 void main() {
   group('setLampName phase-aware behavior', () {
@@ -1315,16 +1594,24 @@ Same shape as Task 9 for the discrete fields (toggle, SSID, forget). The brightn
 - Modify: `lib/features/control/application/control_notifier.dart` — `setHomeSsid` (1158), `setHomeBrightness` (1170), `setHomeEnabled` (1191)
 - Modify: `lib/features/lamp_shell/presentation/home_mode_screen.dart` — wire `onChangeEnd` on the brightness slider
 
+**NOTE on `HomeModeSection`**: like the other section classes, `HomeModeSection` has NO `copyWith`. Rebuild field-by-field. (`ControlState.copyWith` works as before for the wrap.) Find the existing setHomeEnabled at line 1191 to see the exact constructor field set.
+
 - [ ] **Step 1: Rewrite `setHomeEnabled` (line 1191)**
 
 ```dart
   Future<void> setHomeEnabled(bool enabled) async {
     await _mutate(
-      (s) => s.copyWith(home: s.home.copyWith(enabled: enabled)),
+      (s) => s.copyWith(
+        home: HomeModeSection(
+          ssid: s.home.ssid,
+          brightness: s.home.brightness,
+          enabled: enabled,
+        ),
+      ),
       () async {
         final inv = await ref.read(inventoryNotifierProvider.future);
         final entry = inv.firstWhere((l) => l.id == _deviceId);
-        if (entry.hasCommitChar) {
+        if (entry.hasCommitChar ?? false) {
           await writeSettingsBlob({'homeMode': {'enabled': enabled}}, reboot: false);
         }
       },
@@ -1332,22 +1619,32 @@ Same shape as Task 9 for the discrete fields (toggle, SSID, forget). The brightn
   }
 ```
 
+(Adjust constructor fields to whatever the existing `HomeModeSection` accepts — grep its definition before writing.)
+
 - [ ] **Step 2: Rewrite `setHomeSsid` (line 1158)**
 
 ```dart
   Future<void> setHomeSsid(String ssid) async {
     await _mutate(
-      (s) => s.copyWith(home: s.home.copyWith(ssid: ssid)),
+      (s) => s.copyWith(
+        home: HomeModeSection(
+          ssid: ssid,
+          brightness: s.home.brightness,
+          enabled: s.home.enabled,
+        ),
+      ),
       () async {
         final inv = await ref.read(inventoryNotifierProvider.future);
         final entry = inv.firstWhere((l) => l.id == _deviceId);
-        if (entry.hasCommitChar) {
+        if (entry.hasCommitChar ?? false) {
           await writeSettingsBlob({'homeMode': {'ssid': ssid}}, reboot: false);
         }
       },
     );
   }
 ```
+
+**Note on password field**: an earlier draft of this plan / spec mentioned shipping `{ssid: s, password: p}` together. Phase A's `apply_home_mode.hpp` deliberately omitted the `password` field because `HomeModeSettings` has no `password` field — the lamp never associates to the AP and stores no credential (verified during Phase A Task 9). Shipping a `password` key would be silently dropped by the firmware. Single-field `{ssid: ssid}` is the correct shape. The Forget action (Step 5) ships `{ssid: ""}` for the same reason.
 
 - [ ] **Step 3: Rewrite `setHomeBrightness` (line 1170) — schedules debounced commit**
 
@@ -1435,13 +1732,25 @@ Note the encrypted write + the `_awaitReconnectAndReload` call chain. The new me
 
 - [ ] **Step 2: Add `applyAdvancedLedsAndReboot` to controlNotifier**
 
+**API NOTE**: `_awaitReconnectAndReload` returns `Future<void>` and delivers the fresh state via a `postReload` callback (NOT via return value). Existing signature:
+```dart
+Future<void> _awaitReconnectAndReload({
+  required BleClient ble,
+  required String password,
+  required Future<void> Function(ControlState fresh) postReload,
+  // ... possibly other args; grep for the full signature in control_notifier.dart
+});
+```
+
+`applyAdvancedLedsAndReboot` captures the diff inside the postReload callback and returns the mismatch list to its own caller:
+
 ```dart
   /// Apply Advanced LED settings (px, byteOrder, bpp, ac) by writing
-  /// settings_blob with reboot:true. Existing setLampPassword pattern
-  /// runs the fade-out-reboot + reconnect ladder. After reconnect,
-  /// diff the freshly-read base/shade sections against what was shipped
-  /// — if they don't match, surface a "save didn't take — retry?" UX
-  /// via a Future that resolves to the mismatch (caller shows the snackbar).
+  /// settings_blob with reboot:true. _awaitReconnectAndReload runs the
+  /// existing reconnect ladder. After reload, diffs the freshly-read
+  /// base/shade sections against what was shipped — if they don't
+  /// match, returns a list of field names. Caller (the screen) shows a
+  /// "save didn't take — retry?" snackbar on non-empty mismatches.
   Future<List<String>> applyAdvancedLedsAndReboot({
     required BaseSection base,
     required ShadeSection shade,
@@ -1462,21 +1771,34 @@ Note the encrypted write + the `_awaitReconnectAndReload` call chain. The new me
       },
     };
     await writeSettingsBlob(shipped, reboot: true);
-    // The lamp fade-out-reboots; reconnect + reload sections.
-    final fresh = await _awaitReconnectAndReload();
-    if (fresh == null) {
-      return ['lamp did not reconnect after Advanced LED save'];
-    }
+
+    // Capture the diff inside the postReload callback (the method
+    // resolves AFTER postReload runs).
     final mismatches = <String>[];
-    if (fresh.base.px != base.px) mismatches.add('base.px');
-    if (fresh.base.byteOrder != base.byteOrder) mismatches.add('base.byteOrder');
-    if (fresh.base.bpp != base.bpp) mismatches.add('base.bpp');
-    if (fresh.shade.px != shade.px) mismatches.add('shade.px');
-    if (fresh.shade.byteOrder != shade.byteOrder) mismatches.add('shade.byteOrder');
-    if (fresh.shade.bpp != shade.bpp) mismatches.add('shade.bpp');
+    final ble = ref.read(bleClientProvider);
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final lamp = inv.firstWhere((l) => l.id == _deviceId);
+    try {
+      await _awaitReconnectAndReload(
+        ble: ble,
+        password: lamp.controlPassword ?? '',
+        postReload: (fresh) async {
+          if (fresh.base.px != base.px) mismatches.add('base.px');
+          if (fresh.base.byteOrder != base.byteOrder) mismatches.add('base.byteOrder');
+          if (fresh.base.bpp != base.bpp) mismatches.add('base.bpp');
+          if (fresh.shade.px != shade.px) mismatches.add('shade.px');
+          if (fresh.shade.byteOrder != shade.byteOrder) mismatches.add('shade.byteOrder');
+          if (fresh.shade.bpp != shade.bpp) mismatches.add('shade.bpp');
+        },
+      );
+    } catch (e) {
+      mismatches.add('lamp did not reconnect after Advanced LED save: $e');
+    }
     return mismatches;
   }
 ```
+
+(Verify the exact `_awaitReconnectAndReload` signature in `control_notifier.dart` before implementing — there may be additional required args beyond `ble`/`password`/`postReload`.)
 
 - [ ] **Step 3: Wire the Update button in advanced_leds_screen.dart**
 
@@ -1735,13 +2057,13 @@ EOF
 
 **Spec coverage:**
 - B.1 `_mutate` helper → Task 4 ✓
-- B.2 per-pane mutator changes → Tasks 6 (brightness), 7 (shade), 8 (base), 9 (setup mutators), 10 (home mode), 11 (advanced LED) ✓
-- B.3 GATT-discovery fallback → Tasks 1 + 2 ✓ (probe + commit() branch)
+- B.2 per-pane mutator changes → Tasks 6 (brightness), 6.5 (knockout), 7 (shade), 8 (base), 9 (setup mutators), 10 (home mode), 11 (advanced LED) ✓
+- B.3 GATT-discovery fallback → Tasks 1 + 2 ✓ (probe + commit() branch — pre-Phase-A intentionally no-ops rather than synthesizing partial blob; rationale in Task 2 comment)
 - B.4 `{reboot:true}` post-reconnect verify → Task 11 ✓
 - B.5 debounce dispose + lifecycle flush → Task 5 ✓
 - B.6 live-preview snap-back on Cancel → Tasks 7 + 8 ✓
 - B.7 inventory cache immediate update on rename → Task 9 ✓
-- B.8 nonce-reuse → no code change needed (verified during plan-writing); documented in spec ✓
+- B.8 nonce-reuse regression test → Task 3 Step 6 (test/features/control/nonce_nonreuse_test.dart) ✓
 - B.9.1 deletions preserved behind hasCommitChar flag → Task 12 ✓
 - B.10 tests → spread across Tasks 1-11; consolidated check in Task 13 ✓
 
