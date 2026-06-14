@@ -9,6 +9,7 @@
 #include <cstring>
 #include <string>
 
+#include "components/apply/apply_brightness.hpp"
 #include "components/firmware/firmware_receiver.hpp"
 #include "components/firmware/firmware_distributor.hpp"
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
@@ -92,7 +93,8 @@ static bool     s_userBrightnessSeeded = false;
 
 // Compute the current interpolated brightness for the live user-write fade.
 // Returns target once the fade window has elapsed.
-static uint8_t computeUserBrightnessNow(uint32_t nowMs) {
+namespace lamp {
+uint8_t computeUserBrightnessNow(uint32_t nowMs) {
   if (s_userBrightnessSource == s_userBrightnessTarget) {
     return s_userBrightnessTarget;
   }
@@ -107,6 +109,32 @@ static uint8_t computeUserBrightnessNow(uint32_t nowMs) {
       (span * static_cast<int32_t>(elapsed)) /
           static_cast<int32_t>(kUserBrightnessFadeMs));
 }
+
+// Accessors for src/components/apply/apply_brightness.hpp — exposed
+// here so the apply module can drive the micro-fade triple without
+// re-exposing it globally.
+uint8_t  brightnessFadeSource()    { return s_userBrightnessSource; }
+uint8_t  brightnessFadeTarget()    { return s_userBrightnessTarget; }
+uint32_t brightnessFadeStartMs()   { return s_userBrightnessFadeStartMs; }
+bool     brightnessFadeSeeded()    { return s_userBrightnessSeeded; }
+
+void setBrightnessFade(uint8_t source, uint8_t target, uint32_t startMs) {
+  s_userBrightnessSource      = source;
+  s_userBrightnessTarget      = target;
+  s_userBrightnessFadeStartMs = startMs;
+  s_userBrightnessSeeded      = true;
+}
+
+void clearBrightnessFadeSeed() {
+  s_userBrightnessSeeded = false;
+}
+
+}  // namespace lamp
+// Bring apply_brightness helpers into file scope so existing unqualified
+// call sites (applyEffectiveBrightness, computeUserBrightnessNow) continue
+// to resolve without touching every call site individually.
+using lamp::applyEffectiveBrightness;
+using lamp::computeUserBrightnessNow;
 // Flag set from Core 0 (BLE callbacks) when the home-mode preview state
 // changes — either the flag itself flipped, or homeMode.brightness was
 // updated via CHAR_HOME_PREVIEW cmd 0x02. The loop task on Core 1 drains
@@ -285,6 +313,18 @@ lamp::SocialBehavior shadeSocialBehavior;
 lamp::PersonalityBehavior shadePersonalityBehavior;
 lamp::ConfiguratorBehavior shadeConfiguratorBehavior;
 lamp::ConfiguratorBehavior baseConfiguratorBehavior;
+
+// stampConfiguratorActivity defined here (after shadeConfiguratorBehavior /
+// baseConfiguratorBehavior) so the function body can reference them without
+// a forward-declared extern. Declared in apply_brightness.hpp as
+// lamp::stampConfiguratorActivity.
+namespace lamp {
+void stampConfiguratorActivity(uint32_t nowMs) {
+  shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = nowMs;
+  baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = nowMs;
+}
+}  // namespace lamp
+
 lamp::FadeOutBehavior shadeFadeOutBehavior;
 lamp::FadeOutBehavior baseFadeOutBehavior;
 lamp::KnockoutBehavior baseKnockoutBehavior;
@@ -672,7 +712,7 @@ static bool calculateEffectiveHomeMode();
 // Forward decl — same reasoning. The Phase C BrightnessOverride callback
 // wired in initBehaviors needs to reach the same brightness applier the
 // rest of the lamp uses. Defined below alongside effectiveBrightness.
-static void applyEffectiveBrightness();
+namespace lamp { void applyEffectiveBrightness(); }
 static uint8_t effectiveBrightness();
 
 void initBehaviors() {
@@ -1003,7 +1043,8 @@ static uint8_t effectiveBrightness() {
   return static_cast<uint8_t>((static_cast<uint16_t>(afterSalty) * pulseMul) / 100);
 }
 
-static void applyEffectiveBrightness() {
+namespace lamp {
+void applyEffectiveBrightness() {
   // Phase C: when a BrightnessOverride is active, its interpolated value
   // takes precedence over the user's baseline. When inactive,
   // effective(baseline) just returns baseline so this is a no-op tax.
@@ -1016,6 +1057,7 @@ static void applyEffectiveBrightness() {
   if (shadeStrip) shadeStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
   if (baseStrip) baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
 }
+}  // namespace lamp
 
 // Two regimes:
 //   1. BT client connected (the app is the "configurator"): home mode is
