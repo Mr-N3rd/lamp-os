@@ -533,7 +533,14 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
 
   if (strcmp(ch, "brightness") == 0) {
     int level = doc["value"] | -1;
-    if (level >= 0 && level <= 100) postPendingBrightness(static_cast<int8_t>(level));
+    if (level >= 0 && level <= 100) {
+      // Cascade-relayed brightness goes directly through ToRender —
+      // skips the pendingBrightness slot (we're already on Core 1)
+      // AND skips config mutation so a subsequent CHAR_COMMIT doesn't
+      // persist the cascade transient. The split is the Phase A.1
+      // prerequisite for CHAR_COMMIT.
+      lamp::apply::brightnessToRender(static_cast<uint8_t>(level), false);
+    }
 
   } else if (strcmp(ch, "shadeColors") == 0) {
     // Direct path: applyRemoteOpLocal runs on Core 1, so call the local
@@ -1266,37 +1273,7 @@ void loop() {
                   (unsigned)level, (unsigned long)micros(),
                   (int)ble_control::isHomeModePageActive());
 #endif
-    // Route the write to home.brightness vs lamp.brightness based on
-    // which page the app is on. When the user is configuring home mode
-    // we want the slider to set the home value; otherwise it sets the
-    // regular lamp brightness.
-    if (ble_control::isHomeModePageActive()) {
-      config.homeMode.brightness = level;
-    } else {
-      config.lamp.brightness = level;
-    }
-    shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
-    // Stamp a new micro-fade triple instead of writing the strip
-    // directly. The loop-tick interpolation below smooths each ~60-100 ms
-    // BLE write into a continuous transition, eliminating the visibly
-    // stepped brightness drag the user used to see. See the comment on
-    // s_userBrightnessSource above for the why.
-    const uint32_t fadeNow = millis();
-    const uint8_t  source = s_userBrightnessSeeded
-                                ? computeUserBrightnessNow(fadeNow)
-                                : level;
-    s_userBrightnessSource     = source;
-    s_userBrightnessTarget     = level;
-    s_userBrightnessFadeStartMs = fadeNow;
-    s_userBrightnessSeeded     = true;
-    // Apply the initial sample on this drain cycle so the strip starts
-    // moving immediately rather than waiting for the next compositor
-    // tick.
-    if (shadeStrip) shadeStrip->setBrightness(
-        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, source));
-    if (baseStrip)  baseStrip->setBrightness(
-        lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, source));
+    lamp::apply::brightnessToConfig(level, ble_control::isHomeModePageActive());
     // ARCHITECTURAL INVARIANT for section cache:
     //   `*SectionJsonCached()` represents the PERSISTED config snapshot
     //   (last NVS write or boot-load), NOT the live in-memory config.
