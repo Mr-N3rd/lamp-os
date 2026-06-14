@@ -12,6 +12,7 @@
 #include "components/apply/apply_brightness.hpp"
 #include "components/apply/apply_shade_colors.hpp"
 #include "components/apply/apply_base_colors.hpp"
+#include "components/apply/apply_expressions.hpp"
 #include "components/firmware/firmware_receiver.hpp"
 #include "components/firmware/firmware_distributor.hpp"
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
@@ -443,11 +444,14 @@ void renderBaseColors(JsonArray arr) {
 }
 }  // namespace lamp
 
-// Apply an expressionOp upsert/remove locally. `doc` carries `op` plus the
-// op-specific payload (`entry` for upsert, `type`+`target` for remove).
-// Mirrors the manager state into config.expressions so the next
-// settings_blob save persists the runtime edit.
-static void applyExpressionOpLocal(JsonObject doc) {
+namespace lamp {
+// Internal helper for the apply_expressions.hpp split. mutateConfig=true is
+// the user-source path (BLE expressionOp drain) — drives expressionManager
+// AND mirrors into config.expressions so persistConfig() captures it.
+// mutateConfig=false is the remote-source path (applyRemoteOpLocal for a
+// cascade-relayed CONTROL_OP) — drives expressionManager only so the
+// cascade's transient state never becomes persistable.
+void runExpressionOp(JsonObject doc, bool mutateConfig) {
   if (doc.isNull()) return;
   const char* op = doc["op"].as<const char*>();
   if (op && strcmp(op, "upsert") == 0 && doc["entry"].is<JsonObject>()) {
@@ -480,39 +484,44 @@ static void applyExpressionOpLocal(JsonObject doc) {
       cfg.colors.push_back(lamp::hexStringToColor(cv));
     }
     if (!cfg.type.empty()) {
-      expressionManager.upsertExpression(cfg, &compositor);
-      // Mirror into config.expressions so the next settings_blob save
-      // persists the user's latest edits. expressionManager is the runtime
-      // animator; config is what gets serialized to NVS.
-      auto& exprs = config.expressions.expressions;
-      bool found = false;
-      for (auto& e : exprs) {
-        if (e.type == cfg.type && e.target == cfg.target) {
-          e = cfg;
-          found = true;
-          break;
+      ::expressionManager.upsertExpression(cfg, &::compositor);
+      if (mutateConfig) {
+        // Mirror into config.expressions so the next settings_blob save
+        // persists the user's latest edits. expressionManager is the runtime
+        // animator; config is what gets serialized to NVS.
+        auto& exprs = ::config.expressions.expressions;
+        bool found = false;
+        for (auto& e : exprs) {
+          if (e.type == cfg.type && e.target == cfg.target) {
+            e = cfg;
+            found = true;
+            break;
+          }
         }
+        if (!found) exprs.push_back(cfg);
       }
-      if (!found) exprs.push_back(cfg);
     }
   } else if (op && strcmp(op, "remove") == 0) {
     const char* type = doc["type"].as<const char*>();
     int tgt = doc["target"] | 0;
     if (type && tgt >= 1 && tgt <= 3) {
-      expressionManager.removeExpression(type, static_cast<lamp::ExpressionTarget>(tgt), &compositor);
-      // Mirror removal into config.expressions.
-      auto& exprs = config.expressions.expressions;
-      exprs.erase(std::remove_if(exprs.begin(), exprs.end(),
-                    [&](const lamp::ExpressionConfig& e) {
-                      return e.type == type && e.target == tgt;
-                    }),
-                  exprs.end());
+      ::expressionManager.removeExpression(type, static_cast<lamp::ExpressionTarget>(tgt), &::compositor);
+      if (mutateConfig) {
+        // Mirror removal into config.expressions.
+        auto& exprs = ::config.expressions.expressions;
+        exprs.erase(std::remove_if(exprs.begin(), exprs.end(),
+                      [&](const lamp::ExpressionConfig& e) {
+                        return e.type == type && e.target == tgt;
+                      }),
+                    exprs.end());
+      }
     }
   }
   // NOTE: callers invalidate the expressions section themselves so that the
   // drain block preserves its prior behavior of always marking dirty (even
   // on parse failure where nothing actually changed).
 }
+}  // namespace lamp
 
 // Apply a remote-op payload locally (either from BLE remoteOp drain when
 // targetMac==self/broadcast, or from an incoming ESP-NOW MSG_CONTROL_OP).
@@ -579,7 +588,9 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     // JsonObject. The drain shape expects the `char` key gone, but the
     // applier just looks at `op`/`entry`/`type`/`target`, so leaving `char`
     // is harmless. Skips serialize → drain → re-parse.
-    applyExpressionOpLocal(doc.as<JsonObject>());
+    // Cascade-source: ToRender only — no config mutation; cascade transients
+    // must not contaminate a subsequent CHAR_COMMIT persistence sweep.
+    lamp::apply::expressionOpToRender(doc.as<JsonObject>());
     // Match the drain's unconditional invalidate semantics.
     config.invalidateExpressionsSection();
 
@@ -1384,7 +1395,7 @@ void loop() {
     JsonDocument doc;
     bool applied = false;
     if (deserializeJson(doc, buf) == DeserializationError::Ok) {
-      applyExpressionOpLocal(doc.as<JsonObject>());
+      lamp::apply::expressionOpToConfig(doc.as<JsonObject>());
       applied = true;
     }
     config.invalidateExpressionsSection();
@@ -1394,7 +1405,7 @@ void loop() {
     // ("live-preview drains do NOT write NVS — only settings_blob does")
     // because the expression editor UX has no global Save step: the user
     // taps Update/Add/Delete and expects the change to survive a reboot,
-    // matching the setup-service UX. applyExpressionOpLocal has already
+    // matching the setup-service UX. expressionOpToConfig has already
     // mirrored the change into config.expressions, so config.asJsonDocument()
     // serializes the new authoritative state — no merge needed, no reboot
     // needed. (If we later extend this pattern to baseColors/shadeColors/
