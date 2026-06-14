@@ -10,6 +10,8 @@
 #include <string>
 
 #include "components/apply/apply_brightness.hpp"
+#include "components/apply/apply_shade_colors.hpp"
+#include "components/apply/apply_base_colors.hpp"
 #include "components/firmware/firmware_receiver.hpp"
 #include "components/firmware/firmware_distributor.hpp"
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
@@ -395,13 +397,13 @@ static std::vector<lamp::Color> jsonArrayToColors(JsonArray arr) {
   return colors;
 }
 
-// Apply a shadeColors update locally. Used by both the pendingShadeColorsJson
-// drain (Core 1) and applyRemoteOpLocal (also Core 1). `arr` must be a
-// non-empty JSON array of hex color strings. Callers handle the bookkeeping
-// (configurator timestamps + section invalidate) themselves so the drain
-// can preserve its prior unconditional behavior on parse-failure / empty-
-// array inputs without this helper having to guess at it.
-static void applyShadeColorsLocal(JsonArray arr) {
+// renderShadeColors / renderBaseColors — the render-only core of the former
+// applyShadeColorsLocal / applyBaseColorsLocal helpers. Exposed in
+// namespace lamp so apply_shade_colors.hpp and apply_base_colors.hpp can
+// call them without pulling in the rest of this file. Callers handle the
+// bookkeeping (configurator timestamps + section invalidate).
+namespace lamp {
+void renderShadeColors(JsonArray arr) {
   if (arr.isNull() || arr.size() == 0) return;
   std::vector<lamp::Color> colors = jsonArrayToColors(arr);
   std::vector<lamp::Color> gradient =
@@ -421,14 +423,14 @@ static void applyShadeColorsLocal(JsonArray arr) {
   bt.setAdvertisedColors(config.base.colors[config.base.ac], colors[0]);
 }
 
-// Apply a baseColors update locally. Counterpart to applyShadeColorsLocal.
+// renderBaseColors — counterpart to renderShadeColors.
 // See the bookkeeping note above — callers handle timestamps + invalidate.
-static void applyBaseColorsLocal(JsonArray arr) {
+void renderBaseColors(JsonArray arr) {
   if (arr.isNull() || arr.size() == 0) return;
   std::vector<lamp::Color> colors = jsonArrayToColors(arr);
   std::vector<lamp::Color> gradient =
       lamp::buildGradientWithStops(base.pixelCount, colors);
-  // See applyShadeColorsLocal: the fade-snapshot-from-buffer flicker on
+  // See renderShadeColors: the fade-snapshot-from-buffer flicker on
   // knockout pixels is now handled at the ConfiguratorBehavior::beginFade
   // call site itself (snapshots from `colors` / in-progress lerp, not
   // fb->buffer). No mid-fade guard needed here.
@@ -439,6 +441,7 @@ static void applyBaseColorsLocal(JsonArray arr) {
   // first stop is what bt.begin used initially).
   bt.setAdvertisedColors(colors[0], config.shade.colors[0]);
 }
+}  // namespace lamp
 
 // Apply an expressionOp upsert/remove locally. `doc` carries `op` plus the
 // op-specific payload (`entry` for upsert, `type`+`target` for remove).
@@ -546,7 +549,9 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     // Direct path: applyRemoteOpLocal runs on Core 1, so call the local
     // applier with the JsonArray we already have. Skips the slot round-trip
     // (audit: was serializeJson → std::string → memcpy → drain → re-parse).
-    applyShadeColorsLocal(doc["colors"].as<JsonArray>());
+    // Cascade-source: ToRender only — no config mutation; cascade transients
+    // must not contaminate a subsequent CHAR_COMMIT persistence sweep.
+    lamp::apply::shadeColorsToRender(doc["colors"].as<JsonArray>());
     // Match the drain's unconditional bookkeeping.
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
@@ -555,7 +560,8 @@ static void applyRemoteOpLocal(const char* payloadJson, size_t len,
     // preview must not poison the persisted-snapshot section cache.
 
   } else if (strcmp(ch, "baseColors") == 0) {
-    applyBaseColorsLocal(doc["colors"].as<JsonArray>());
+    // Cascade-source: ToRender only — no config mutation.
+    lamp::apply::baseColorsToRender(doc["colors"].as<JsonArray>());
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     // Same as shadeColors above — live preview must not poison the
@@ -1312,7 +1318,9 @@ void loop() {
 
     JsonDocument doc;
     if (deserializeJson(doc, buf) == DeserializationError::Ok) {
-      applyShadeColorsLocal(doc.as<JsonArray>());
+      // User-source: ToConfig mutates config.shade.colors so a subsequent
+      // CHAR_COMMIT can persist the user's color choice.
+      lamp::apply::shadeColorsToConfig(doc.as<JsonArray>());
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
@@ -1333,7 +1341,9 @@ void loop() {
 
     JsonDocument doc;
     if (deserializeJson(doc, buf) == DeserializationError::Ok) {
-      applyBaseColorsLocal(doc.as<JsonArray>());
+      // User-source: ToConfig mutates config.base.colors so a subsequent
+      // CHAR_COMMIT can persist the user's color choice.
+      lamp::apply::baseColorsToConfig(doc.as<JsonArray>());
     }
     shadeConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
     baseConfiguratorBehavior.lastWebSocketUpdateTimeMs = millis();
