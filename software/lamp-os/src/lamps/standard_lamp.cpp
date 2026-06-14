@@ -1115,6 +1115,21 @@ void updateAdvertisedDeviceName(const char* newName) {
 }  // namespace lamp
 #endif  // defined(ARDUINO) || defined(ESP_PLATFORM)
 
+namespace lamp {
+
+void applyKnockoutPixel(uint8_t pixel, uint8_t brightness) {
+  if (pixel < ::config.base.px && brightness <= 100) {
+    ::baseKnockoutBehavior.knockoutPixels[pixel] = brightness;
+    ::config.base.knockoutPixels[pixel] = brightness;
+    // Live per-pixel knockout — does NOT invalidate the base section
+    // cache. See the architectural invariant comment at the brightness
+    // drain. (Phase A keeps that invariant — CHAR_COMMIT is what
+    // invalidates the cache, not per-pixel knockout writes.)
+  }
+}
+
+}  // namespace lamp
+
 // Two regimes:
 //   1. BT client connected (the app is the "configurator"): home mode is
 //      forced OFF unless the user is on the Home Mode page, in which case
@@ -1404,14 +1419,7 @@ void loop() {
 #ifdef LAMP_DEBUG
     Serial.printf("[loop] drain knockout pixel=%u brightness=%u\n", pixel, brightness);
 #endif
-    if (pixel < config.base.px && brightness <= 100) {
-      baseKnockoutBehavior.knockoutPixels[pixel] = brightness;
-      config.base.knockoutPixels[pixel] = brightness;
-      // Live per-pixel knockout — does NOT invalidate the base section
-      // cache. See the architectural invariant comment at the brightness
-      // drain. Knockout map is persisted via the settingsBlob path on
-      // the next save (knockoutPixels is included in base section JSON).
-    }
+    lamp::applyKnockoutPixel(pixel, brightness);
   }
 
   if (pendingExpressionOpJson.valid) {
