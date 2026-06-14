@@ -1493,6 +1493,12 @@ void loop() {
     commitDirty = true;
     lastCommitSignalMs = millis();
   }
+  // If a disconnect set g_forceCommitFlush but no commit was pending,
+  // discard the stale flag so the next commit's debounce window isn't
+  // bypassed by leftover state from a previous BLE session.
+  if (!commitDirty) {
+    g_forceCommitFlush = false;
+  }
   if (commitDirty &&
       (g_forceCommitFlush ||
        (millis() - lastCommitSignalMs) >= kCommitFlushIdleMs)) {

@@ -1353,15 +1353,12 @@ void setFirmwareReceiver(lamp::FirmwareReceiver* receiver) {
   }
 }
 
-}  // namespace ble_control
-
-// postPendingCommit is defined outside the ble_control namespace so the
-// linker resolves it to the global-scope g_pendingCommit defined in
-// standard_lamp.cpp. Signature matches WriteRouter::PostFn; data/len are
-// semantically ignored — the arrival of the write IS the commit signal.
-namespace ble_control {
+// Signature matches WriteRouter::PostFn; data/len are semantically ignored —
+// the arrival of the write IS the commit signal. ::g_pendingCommit is the
+// file-scope extern declared above the namespace (standard_lamp.cpp owns it).
 void postPendingCommit(const char* /*data*/, size_t /*len*/) {
   // Single-bool naturally atomic on Xtensa — no portMUX.
-  g_pendingCommit = true;
+  ::g_pendingCommit = true;
 }
+
 }  // namespace ble_control
