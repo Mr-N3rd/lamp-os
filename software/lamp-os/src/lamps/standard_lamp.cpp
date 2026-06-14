@@ -14,6 +14,7 @@
 #include "components/apply/apply_base_colors.hpp"
 #include "components/apply/apply_expressions.hpp"
 #include "components/apply/apply_lamp.hpp"
+#include "components/apply/apply_settings_blob.hpp"
 #include "components/firmware/firmware_receiver.hpp"
 #include "components/firmware/firmware_distributor.hpp"
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
@@ -1457,11 +1458,11 @@ void loop() {
   }
 
   // settings_blob drain — runs AFTER expressionOp drain so that any
-  // just-arrived expression edits are already mirrored into
-  // config.expressions before we serialize and persist. Uses
-  // config.asJsonDocument() as the base (current canonical state) and
-  // overlays the incoming partial-blob's top-level keys; anything the
-  // app omits is preserved from current state.
+  // just-arrived expression edits are already mirrored into config.* before
+  // we dispatch. Uses apply::settingsBlobLocal for per-section in-place
+  // dispatch; reboot is opt-in via incomingDoc["reboot"] (default true for
+  // backward compat). OTA-in-progress guard discards the write rather than
+  // competing with OTA chunk-writes.
   if (pendingSettingsBlobJson.valid) {
     char buf[MAX_PENDING_OP_JSON + 1];
     uint16_t len = pendingSettingsBlobJson.drain(pendingMux, buf);
@@ -1476,20 +1477,20 @@ void loop() {
       Serial.printf("[loop] settingsBlob: incoming JSON parse failed\n");
 #endif
     } else if (incomingDoc["factoryReset"].as<bool>()) {
-      // Factory reset sentinel — wipe the lamp's NVS namespace entirely
-      // (clears both `cfg` AND `dispositions` keys) and reboot. Comes up
-      // with empty NVS → Config defaults → awaiting adoption. App
-      // auth-gates this write when a password is set; an unprovisioned
-      // lamp accepts it but has nothing to lose by being wiped.
+      // Factory reset sentinel — wipe NVS + reboot, bypass the apply
+      // orchestrator entirely.
+      // The co-shipping warning is UNCONDITIONAL (not LAMP_DEBUG-gated):
+      // this is forward defense against an app that accidentally bundles
+      // factoryReset with other fields. The app guard makes it impossible
+      // in normal flow, but fleet logs must surface the unexpected case.
+      if (incomingDoc.as<JsonObject>().size() > 1) {
+        Serial.println(
+            "[loop] settingsBlob WARNING: factoryReset co-shipped with "
+            "other keys — those keys will be silently dropped.");
+      }
 #ifdef LAMP_DEBUG
       Serial.println("[loop] settingsBlob: factoryReset sentinel, wiping NVS");
 #endif
-      // Audit fix: guard both prefs.begin AND prefs.clear. If begin returns
-      // false (NVS full / partition corrupt) we must NOT putString/clear
-      // against an unopened handle, and we must NOT flag a reboot — leaving
-      // the lamp running with its previous state is better than rebooting
-      // into an unknown half-cleared state. Same for a clear() that returns
-      // false: skip the reboot, keep current state, log and move on.
       if (!prefs.begin("lamp", false)) {
 #ifdef LAMP_DEBUG
         Serial.println("[nvs] prefs.begin failed (factory reset)");
@@ -1500,73 +1501,31 @@ void loop() {
         if (cleared) {
           ble_control::notifyStateChange();
           lamp::fadeOutRebootRequested = true;
-        } else {
-#ifdef LAMP_DEBUG
-          Serial.println("[nvs] prefs.clear failed; skipping reboot flag");
-#endif
         }
       }
+    } else if (firmwareReceiver.isInProgress()) {
+      // OTA in progress — a NVS write here would compete with the OTA
+      // chunk-write subsystem. Discard the blob; app will re-issue
+      // when OTA finishes.
+#ifdef LAMP_DEBUG
+      Serial.println(
+          "[loop] settingsBlob: OTA in progress, discarding write");
+#endif
     } else {
-      JsonDocument fullDoc = config.asJsonDocument();
-      JsonObject full = fullDoc.as<JsonObject>();
-      // One-level-deep nested merge for object-valued top-level keys:
-      // when the app ships a partial section (e.g. `base` with colors
-      // but no knockout, because knockout is too big for the BLE ATT
-      // cap), preserve the fields it didn't ship by overlaying the
-      // incoming fields onto the existing section object rather than
-      // wholesale-replacing it. Without this, `config.base.knockout`
-      // gets clobbered on every save and pixel-knockout doesn't
-      // survive a power cycle. Arrays + scalars still replace.
-      for (JsonPair kv : incomingDoc.as<JsonObject>()) {
-        if (kv.value().is<JsonObject>() && full[kv.key()].is<JsonObject>()) {
-          JsonObject dst = full[kv.key()].as<JsonObject>();
-          for (JsonPair inner : kv.value().as<JsonObject>()) {
-            dst[inner.key()] = inner.value();
-          }
-        } else {
-          full[kv.key()] = kv.value();
-        }
-      }
-      String mergedJson;
-      serializeJson(fullDoc, mergedJson);
-
-      // Audit fix: capture prefs.begin() — if it returns false (NVS full or
-      // partition corrupt) putString writes silently to nothing. Skip the
-      // putString and do NOT flag a reboot; the user's settings stay in
-      // RAM and the next save attempt may succeed.
-      if (!prefs.begin("lamp", false)) {
+      bool wantsReboot = lamp::apply::settingsBlobLocal(incomingDoc.as<JsonObject>());
+      bool persisted = config.persistConfig("settings_blob");
+      config.invalidateAllSections();
+      ble_control::notifyStateChange();
+      if (wantsReboot && persisted) {
+        lamp::fadeOutRebootRequested = true;
+      } else if (wantsReboot && !persisted) {
 #ifdef LAMP_DEBUG
-        Serial.println("[nvs] prefs.begin failed (settings_blob persist)");
+        Serial.println(
+            "[loop] settingsBlob: persist failed; skipping reboot to avoid "
+            "rebooting into a half-applied config");
 #endif
-      } else {
-        size_t written = prefs.putString("cfg", mergedJson.c_str());
-        prefs.end();
-
-        if (written > 0) {
-#ifdef LAMP_DEBUG
-          // Log the in-memory config snapshot post-merge — this is what
-          // the next boot reads back from NVS, so the next BLE section
-          // read should match these values. Diagnostic for "save+reload
-          // didn't actually persist" reports.
-          Serial.printf("[loop] settingsBlob: persisted %u bytes, lamp.brightness=%u name='%s' socialMode=%u, fading for reboot\n",
-                        (unsigned)written,
-                        (unsigned)config.lamp.brightness,
-                        config.lamp.name.c_str(),
-                        (unsigned)config.lamp.socialMode);
-#endif
-          ble_control::notifyStateChange();
-          lamp::fadeOutRebootRequested = true;
-        } else {
-#ifdef LAMP_DEBUG
-          Serial.printf("[loop] settingsBlob: putString failed\n");
-#endif
-        }
       }
     }
-    // settings_blob can rewrite any subset of sections; cheapest correct
-    // path is to invalidate all and let ble_control::tick() rebuild only
-    // what gets actually read on the next BLE round trip.
-    config.invalidateAllSections();
   }
 
   // Disposition map writes — drained AFTER settings_blob so both writers
