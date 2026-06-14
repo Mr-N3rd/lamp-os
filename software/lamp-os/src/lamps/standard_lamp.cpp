@@ -13,9 +13,11 @@
 #include "components/apply/apply_shade_colors.hpp"
 #include "components/apply/apply_base_colors.hpp"
 #include "components/apply/apply_expressions.hpp"
+#include "components/apply/apply_lamp.hpp"
 #include "components/firmware/firmware_receiver.hpp"
 #include "components/firmware/firmware_distributor.hpp"
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
+#include <NimBLEDevice.h>
 #include <esp_ota_ops.h>
 #endif
 #include "components/network/bluetooth.hpp"
@@ -1082,6 +1084,36 @@ void applyEffectiveBrightness() {
   if (baseStrip) baseStrip->setBrightness(lamp::calculateBrightnessLevel(LAMP_MAX_BRIGHTNESS, level));
 }
 }  // namespace lamp
+
+#if defined(ARDUINO) || defined(ESP_PLATFORM)
+namespace lamp {
+
+void updateAdvertisedDeviceName(const char* newName) {
+  // Update the GAP device name. NimBLE picks it up for subsequent
+  // *new* advertisement payloads; an active advertisement frame
+  // already in flight does not get rewritten.
+  NimBLEDevice::setDeviceName(newName);
+  // bluetooth.cpp's tickAdvertising() rebuilds the COLOR portion of
+  // the advert on color change but does NOT rebuild the device-name
+  // portion — the name was set once at `bt.begin()` and re-applied
+  // only via `applyAdvertisementPayload` when colors change. So
+  // setDeviceName() alone may not surface the new name to a phone
+  // already mid-scan.
+  //
+  // IMPLEMENTER-ACTION (bench-verified during Task 16 step 2):
+  //   - Flash this build to jacko, set a name via settings_blob.
+  //   - From the Pixel app, force-stop and re-scan. Does the new name
+  //     appear?
+  //   - If yes — leave this helper as-is, document the "must rescan"
+  //     behavior in the rename UX.
+  //   - If no — add an explicit advert-payload rebuild here, e.g.:
+  //       NimBLEDevice::getAdvertising()->stop(); ->start();
+  //
+  // Do NOT proceed past Task 16 step 2 without confirming this behavior.
+}
+
+}  // namespace lamp
+#endif  // defined(ARDUINO) || defined(ESP_PLATFORM)
 
 // Two regimes:
 //   1. BT client connected (the app is the "configurator"): home mode is
