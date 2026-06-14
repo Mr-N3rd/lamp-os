@@ -269,7 +269,7 @@ void Config::loadDispositionsFromPrefs_() {
   dispositions_.erase(last, dispositions_.end());
 }
 
-bool Config::persistConfig() {
+bool Config::persistConfig(const char* via) {
   if (!prefs) return false;
   JsonDocument doc = asJsonDocument();
   String out;
@@ -291,7 +291,8 @@ bool Config::persistConfig() {
   if (written == 0) {
     Serial.println("[nvs] persistConfig putString wrote 0 bytes");
   } else {
-    Serial.printf("[nvs] persistConfig wrote %u bytes\n", (unsigned)written);
+    Serial.printf("[nvs] persistConfig via=%s wrote %u bytes\n",
+                  via, (unsigned)written);
   }
 #endif
   return written > 0;

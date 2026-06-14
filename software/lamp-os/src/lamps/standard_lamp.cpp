@@ -1372,7 +1372,7 @@ void loop() {
     // brightness, those will need a debounce because slider drags can fire
     // ~4 BLE writes/sec and we don't want one NVS write per drag tick.)
     if (applied) {
-      config.persistConfig();
+      config.persistConfig("expressionOp");
     }
   }
 

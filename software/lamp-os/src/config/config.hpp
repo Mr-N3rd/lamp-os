@@ -99,7 +99,10 @@ class Config {
    * bytes. On failure the in-memory state is unchanged — the next call
    * may succeed.
    */
-  bool persistConfig();
+  // `via` is a short tag like "commit" / "settings_blob" / "expressionOp"
+  // included in the success log so fleet debugging can disambiguate
+  // which path triggered the write. Pass a constant string literal.
+  bool persistConfig(const char* via);
 
   // Per-section serializers — each returns a String of just the JSON for
   // that section. Used by the split CHAR_*_SECTION characteristics so each
