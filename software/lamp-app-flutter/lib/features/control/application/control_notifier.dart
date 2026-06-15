@@ -1595,6 +1595,67 @@ class ControlNotifier extends _$ControlNotifier {
     ));
   }
 
+  /// Apply Advanced LED settings (px, byteOrder, bpp, ac) via
+  /// settings_blob with reboot:true. Mirrors the setLampPassword pattern:
+  /// write → firmware reboots (drops link) → reconnect ladder →
+  /// reload sections. After reload, diffs the freshly-read base/shade
+  /// sections against what was shipped. Returns a list of field names
+  /// that didn't round-trip (empty on full success). Caller shows a
+  /// "save didn't take — retry?" snackbar on non-empty mismatches.
+  Future<List<String>> applyAdvancedLedsAndReboot({
+    required BaseSection base,
+    required ShadeSection shade,
+  }) async {
+    final shipped = <String, dynamic>{
+      'base': {
+        'px': base.px,
+        'byteOrder': base.byteOrder,
+        'bpp': base.bpp,
+        'ac': base.ac,
+        'colors': base.colors.map((c) => c.toHex()).toList(),
+      },
+      'shade': {
+        'px': shade.px,
+        'byteOrder': shade.byteOrder,
+        'bpp': shade.bpp,
+        'colors': shade.colors.map((c) => c.toHex()).toList(),
+      },
+    };
+    await writeSettingsBlob(shipped, reboot: true);
+
+    final mismatches = <String>[];
+    final ble = ref.read(bleClientProvider);
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final lamp = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () => throw StateError('lamp $_deviceId not in inventory'),
+    );
+
+    ref.read(lampSaveStatusProvider(_deviceId).notifier).start();
+    state = const AsyncLoading<ControlState>();
+    try {
+      await _awaitReconnectAndReload(
+        ble: ble,
+        password: lamp.controlPassword ?? '',
+        postReload: (fresh) async {
+          if (fresh.base.px != base.px) mismatches.add('base.px');
+          if (fresh.base.byteOrder != base.byteOrder) {
+            mismatches.add('base.byteOrder');
+          }
+          if (fresh.base.bpp != base.bpp) mismatches.add('base.bpp');
+          if (fresh.shade.px != shade.px) mismatches.add('shade.px');
+          if (fresh.shade.byteOrder != shade.byteOrder) {
+            mismatches.add('shade.byteOrder');
+          }
+          if (fresh.shade.bpp != shade.bpp) mismatches.add('shade.bpp');
+        },
+      );
+    } catch (e) {
+      mismatches.add('lamp did not reconnect after Advanced LED save: $e');
+    }
+    return mismatches;
+  }
+
   static String _normalizeByteOrder(String order) {
     final up = order.toUpperCase();
     // Keep the strict allow-list small. Adafruit_NeoPixel supports more

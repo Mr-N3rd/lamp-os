@@ -171,11 +171,33 @@ class _AdvancedLedsScreenState extends ConsumerState<AdvancedLedsScreen> {
                       FilledButton.icon(
                         icon: const Icon(Icons.check, size: 18),
                         label: const Text('Update'),
-                        // Just pops — the global Save Changes pill on the
-                        // control screen is what actually triggers the
-                        // settings_blob write + reboot that makes byte
-                        // order / pixel count take effect on the strip.
-                        onPressed: () => Navigator.of(context).pop(),
+                        onPressed: () async {
+                          try {
+                            final mismatches =
+                                await notifier.applyAdvancedLedsAndReboot(
+                              base: state.base,
+                              shade: state.shade,
+                            );
+                            if (!context.mounted) return;
+                            if (mismatches.isEmpty) {
+                              Navigator.of(context).pop();
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    "Save didn't take: ${mismatches.join(', ')}",
+                                  ),
+                                  duration: const Duration(seconds: 6),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Save failed: $e')),
+                            );
+                          }
+                        },
                       ),
                     ],
                   ),
