@@ -164,7 +164,10 @@ void main() {
     // past that, still well left of mid-screen.
     final tapPosition = box.localToGlobal(const Offset(60, 8));
     await tester.tapAt(tapPosition);
-    await tester.pump(const Duration(milliseconds: 50));
+    // Drain the 30ms knockout-write debounce AND the 500ms commit debounce
+    // that setKnockoutPixel now schedules. Without the full drain, the
+    // pending timer causes an assertion failure on widget-tree dispose.
+    await tester.pump(const Duration(milliseconds: 550));
 
     final knockout = c
         .read(controlNotifierProvider(_devId))
@@ -200,7 +203,9 @@ void main() {
     await gesture.moveBy(const Offset(0, 28));
     await tester.pump();
     await gesture.up();
-    await tester.pump(const Duration(milliseconds: 50));
+    // Drain the 30ms knockout-write debounce AND the 500ms commit debounce
+    // that setKnockoutPixel now schedules (one timer per pixel touched).
+    await tester.pump(const Duration(milliseconds: 550));
 
     final knockout = c
         .read(controlNotifierProvider(_devId))

@@ -999,6 +999,21 @@ class ControlNotifier extends _$ControlNotifier {
     _scheduleCommitDebounced(CommitSection.lamp);
   }
 
+  /// Called from the knockout screen after each per-pixel edit (and on
+  /// screen-back force-flush) to schedule a debounced commit. Same
+  /// debounce window as brightness.
+  void scheduleKnockoutCommit() {
+    _scheduleCommitDebounced(CommitSection.baseKnockout);
+  }
+
+  /// Synchronous force-flush exposed for the knockout screen's
+  /// PopScope hook. The debounce timer may not have fired yet and the
+  /// notifier's onDispose may not fire at route-pop if the notifier
+  /// is app-scoped.
+  void flushKnockoutCommit() {
+    _flushPendingCommit();
+  }
+
   Future<void> setShadeColor(LampColor color) async {
     // Single-color convenience: wraps the color in a 1-element list and
     // routes through `setShadeColors`. Existing callers (expression
@@ -1088,6 +1103,9 @@ class ControlNotifier extends _$ControlNotifier {
       ),
     ));
     _scheduleKnockoutWrite(index, clamped);
+    // NEW: schedule a debounced commit so the change persists on
+    // Phase A lamps. No-op on pre-Phase-A (commit() returns early).
+    _scheduleCommitDebounced(CommitSection.baseKnockout);
   }
 
   void _scheduleKnockoutWrite(int index, int brightness) {
@@ -1156,6 +1174,8 @@ class ControlNotifier extends _$ControlNotifier {
         await _safeWriteKnockout(ble, i, 100);
       }
     }());
+    // Schedule a debounced commit so the clear persists on Phase A lamps.
+    _scheduleCommitDebounced(CommitSection.baseKnockout);
   }
 
   // ---------------------------------------------------------------------------
