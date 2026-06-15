@@ -178,6 +178,8 @@ class _HomeModeScreenState extends ConsumerState<HomeModeScreen> {
                       divisions: 100,
                       onChanged: (v) =>
                           notifier.setHomeBrightness(v.round()),
+                      onChangeEnd: (v) =>
+                          notifier.setHomeBrightness(v.round()),
                     ),
                   ),
                   SizedBox(

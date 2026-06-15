@@ -1469,15 +1469,22 @@ class ControlNotifier extends _$ControlNotifier {
   }
 
   Future<void> setHomeSsid(String ssid) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      home: HomeSection(
-        ssid: ssid,
-        brightness: cur.home.brightness,
-        enabled: cur.home.enabled,
+    await _mutate(
+      (s) => s.copyWith(
+        home: HomeSection(
+          ssid: ssid,
+          brightness: s.home.brightness,
+          enabled: s.home.enabled,
+        ),
       ),
-    ));
+      () async {
+        final inv = await ref.read(inventoryNotifierProvider.future);
+        final entry = inv.firstWhere((l) => l.id == _deviceId);
+        if (entry.hasCommitChar ?? false) {
+          await writeSettingsBlob({'homeMode': {'ssid': ssid}}, reboot: false);
+        }
+      },
+    );
   }
 
   Future<void> setHomeBrightness(int brightness) async {
@@ -1499,18 +1506,29 @@ class ControlNotifier extends _$ControlNotifier {
     // wires this mutator into the Home Mode slider, so that path is
     // structurally avoided.
     _brightnessWriter?.schedule(Uint8List.fromList([clamped]));
+    // Phase B: schedule debounced commit so the value persists without
+    // the Save pill on Phase A lamps.
+    _scheduleCommitDebounced(CommitSection.homeMode);
   }
 
   Future<void> setHomeEnabled(bool enabled) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      home: HomeSection(
-        ssid: cur.home.ssid,
-        brightness: cur.home.brightness,
-        enabled: enabled,
+    await _mutate(
+      (s) => s.copyWith(
+        home: HomeSection(
+          ssid: s.home.ssid,
+          brightness: s.home.brightness,
+          enabled: enabled,
+        ),
       ),
-    ));
+      () async {
+        final inv = await ref.read(inventoryNotifierProvider.future);
+        final entry = inv.firstWhere((l) => l.id == _deviceId);
+        if (entry.hasCommitChar ?? false) {
+          await writeSettingsBlob(
+              {'homeMode': {'enabled': enabled}}, reboot: false);
+        }
+      },
+    );
   }
 
   /// Pick the wire byte order for the base strip. Recognized values:
