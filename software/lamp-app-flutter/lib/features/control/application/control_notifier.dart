@@ -17,6 +17,7 @@ import '../domain/sections.dart';
 import '../../social/domain/social_mode.dart';
 import 'advanced_session.dart';
 import 'auth_client.dart';
+import 'commit_section.dart';
 import 'control_state.dart';
 import 'lamp_auth_required_exception.dart';
 import 'lamp_save_status.dart';
@@ -703,6 +704,51 @@ class ControlNotifier extends _$ControlNotifier {
         await _inv.updateName(_deviceId, fresh.lamp.name);
       },
     ));
+  }
+
+  /// Phase B.9.1 commit fence. On lamps running Phase A firmware
+  /// (hasCommitChar==true) writes a single byte to CHAR_COMMIT — the
+  /// firmware persists current RAM state to NVS. On pre-Phase-A lamps
+  /// (hasCommitChar==false) this is a no-op; the Save pill remains the
+  /// persistence trigger.
+  ///
+  /// The [section] argument is local knowledge for the caller (so each
+  /// per-pane site declares what it just edited). It is NOT serialized
+  /// to the wire — CHAR_COMMIT is parameterless. Reserved for the
+  /// (rare) per-pane fallback that calls `writeSettingsBlob` directly
+  /// when the caller explicitly wants partial-blob semantics on a
+  /// pre-Phase-A lamp.
+  ///
+  /// DESIGN DEVIATION FROM SPEC B.3: the spec describes a fallback that
+  /// synthesizes a partial settings_blob from state.value when
+  /// hasCommitChar==false. This implementation takes a simpler
+  /// interpretation — pre-Phase-A lamps fall through to the legacy
+  /// Save-pill flow (the pill is still visible on those lamps per
+  /// Task 12). No fallback synthesis. The synthesized blob would
+  /// trigger a reboot on pre-Phase-A firmware (which ignores
+  /// reboot:false), which is exactly the UX the user said they don't
+  /// want for slider releases / picker accepts.
+  Future<void> commit(CommitSection section) async {
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final entry = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () => throw StateError('lamp $_deviceId not in inventory'),
+    );
+    // `?? false` defaults null (not-yet-probed) to legacy behavior.
+    if (!(entry.hasCommitChar ?? false)) return;
+
+    final ble = ref.read(bleClientProvider);
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.commit,
+        Uint8List.fromList([0x01]),
+      );
+    } catch (e, st) {
+      debugPrint('controlNotifier.commit(${section.name}) failed: $e\n$st');
+      rethrow;
+    }
   }
 
   /// Signal to the lamp that the operator is actively editing colours
