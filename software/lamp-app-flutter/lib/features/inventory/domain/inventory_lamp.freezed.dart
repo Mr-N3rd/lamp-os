@@ -36,7 +36,14 @@ mixin _$InventoryLamp {
 /// ConnectingView forever. Nullable for legacy inventory entries
 /// written before this field existed — resolvers default to
 /// "assume mesh-capable" for those, mirroring the pre-fix behavior.
- bool? get lastKnownIsMesh;
+ bool? get lastKnownIsMesh;/// GATT-discovered presence of CHAR_COMMIT (Phase A firmware).
+/// Populated post-connect by `inventory_notifier.updateHasCommitChar`.
+/// Null when not yet probed (pre-existing inventory entries, or the
+/// mid-connect window before the probe resolves). Read sites MUST
+/// default null to false via `?? false` — null means "unknown", and
+/// unknown should fall back to the legacy Save-pill flow rather than
+/// incorrectly enabling Phase A behavior.
+ bool? get hasCommitChar;
 /// Create a copy of InventoryLamp
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -49,16 +56,16 @@ $InventoryLampCopyWith<InventoryLamp> get copyWith => _$InventoryLampCopyWithImp
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is InventoryLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.controlPassword, controlPassword) || other.controlPassword == controlPassword)&&(identical(other.critterIndex, critterIndex) || other.critterIndex == critterIndex)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs)&&const DeepCollectionEquality().equals(other.lastShadeColor, lastShadeColor)&&const DeepCollectionEquality().equals(other.lastBaseColor, lastBaseColor)&&(identical(other.lastKnownIsMesh, lastKnownIsMesh) || other.lastKnownIsMesh == lastKnownIsMesh));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is InventoryLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.controlPassword, controlPassword) || other.controlPassword == controlPassword)&&(identical(other.critterIndex, critterIndex) || other.critterIndex == critterIndex)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs)&&const DeepCollectionEquality().equals(other.lastShadeColor, lastShadeColor)&&const DeepCollectionEquality().equals(other.lastBaseColor, lastBaseColor)&&(identical(other.lastKnownIsMesh, lastKnownIsMesh) || other.lastKnownIsMesh == lastKnownIsMesh)&&(identical(other.hasCommitChar, hasCommitChar) || other.hasCommitChar == hasCommitChar));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,name,controlPassword,critterIndex,lastSeenEpochMs,const DeepCollectionEquality().hash(lastShadeColor),const DeepCollectionEquality().hash(lastBaseColor),lastKnownIsMesh);
+int get hashCode => Object.hash(runtimeType,id,name,controlPassword,critterIndex,lastSeenEpochMs,const DeepCollectionEquality().hash(lastShadeColor),const DeepCollectionEquality().hash(lastBaseColor),lastKnownIsMesh,hasCommitChar);
 
 @override
 String toString() {
-  return 'InventoryLamp(id: $id, name: $name, controlPassword: $controlPassword, critterIndex: $critterIndex, lastSeenEpochMs: $lastSeenEpochMs, lastShadeColor: $lastShadeColor, lastBaseColor: $lastBaseColor, lastKnownIsMesh: $lastKnownIsMesh)';
+  return 'InventoryLamp(id: $id, name: $name, controlPassword: $controlPassword, critterIndex: $critterIndex, lastSeenEpochMs: $lastSeenEpochMs, lastShadeColor: $lastShadeColor, lastBaseColor: $lastBaseColor, lastKnownIsMesh: $lastKnownIsMesh, hasCommitChar: $hasCommitChar)';
 }
 
 
@@ -69,7 +76,7 @@ abstract mixin class $InventoryLampCopyWith<$Res>  {
   factory $InventoryLampCopyWith(InventoryLamp value, $Res Function(InventoryLamp) _then) = _$InventoryLampCopyWithImpl;
 @useResult
 $Res call({
- String id, String name, String? controlPassword, int? critterIndex, int? lastSeenEpochMs, List<int>? lastShadeColor, List<int>? lastBaseColor, bool? lastKnownIsMesh
+ String id, String name, String? controlPassword, int? critterIndex, int? lastSeenEpochMs, List<int>? lastShadeColor, List<int>? lastBaseColor, bool? lastKnownIsMesh, bool? hasCommitChar
 });
 
 
@@ -86,7 +93,7 @@ class _$InventoryLampCopyWithImpl<$Res>
 
 /// Create a copy of InventoryLamp
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? controlPassword = freezed,Object? critterIndex = freezed,Object? lastSeenEpochMs = freezed,Object? lastShadeColor = freezed,Object? lastBaseColor = freezed,Object? lastKnownIsMesh = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? controlPassword = freezed,Object? critterIndex = freezed,Object? lastSeenEpochMs = freezed,Object? lastShadeColor = freezed,Object? lastBaseColor = freezed,Object? lastKnownIsMesh = freezed,Object? hasCommitChar = freezed,}) {
   return _then(_self.copyWith(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
@@ -96,6 +103,7 @@ as int?,lastSeenEpochMs: freezed == lastSeenEpochMs ? _self.lastSeenEpochMs : la
 as int?,lastShadeColor: freezed == lastShadeColor ? _self.lastShadeColor : lastShadeColor // ignore: cast_nullable_to_non_nullable
 as List<int>?,lastBaseColor: freezed == lastBaseColor ? _self.lastBaseColor : lastBaseColor // ignore: cast_nullable_to_non_nullable
 as List<int>?,lastKnownIsMesh: freezed == lastKnownIsMesh ? _self.lastKnownIsMesh : lastKnownIsMesh // ignore: cast_nullable_to_non_nullable
+as bool?,hasCommitChar: freezed == hasCommitChar ? _self.hasCommitChar : hasCommitChar // ignore: cast_nullable_to_non_nullable
 as bool?,
   ));
 }
@@ -181,10 +189,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String name,  String? controlPassword,  int? critterIndex,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor,  bool? lastKnownIsMesh)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String name,  String? controlPassword,  int? critterIndex,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor,  bool? lastKnownIsMesh,  bool? hasCommitChar)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _InventoryLamp() when $default != null:
-return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor,_that.lastKnownIsMesh);case _:
+return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor,_that.lastKnownIsMesh,_that.hasCommitChar);case _:
   return orElse();
 
 }
@@ -202,10 +210,10 @@ return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String name,  String? controlPassword,  int? critterIndex,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor,  bool? lastKnownIsMesh)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String name,  String? controlPassword,  int? critterIndex,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor,  bool? lastKnownIsMesh,  bool? hasCommitChar)  $default,) {final _that = this;
 switch (_that) {
 case _InventoryLamp():
-return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor,_that.lastKnownIsMesh);case _:
+return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor,_that.lastKnownIsMesh,_that.hasCommitChar);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -222,10 +230,10 @@ return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String name,  String? controlPassword,  int? critterIndex,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor,  bool? lastKnownIsMesh)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String name,  String? controlPassword,  int? critterIndex,  int? lastSeenEpochMs,  List<int>? lastShadeColor,  List<int>? lastBaseColor,  bool? lastKnownIsMesh,  bool? hasCommitChar)?  $default,) {final _that = this;
 switch (_that) {
 case _InventoryLamp() when $default != null:
-return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor,_that.lastKnownIsMesh);case _:
+return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_that.lastSeenEpochMs,_that.lastShadeColor,_that.lastBaseColor,_that.lastKnownIsMesh,_that.hasCommitChar);case _:
   return null;
 
 }
@@ -237,7 +245,7 @@ return $default(_that.id,_that.name,_that.controlPassword,_that.critterIndex,_th
 @JsonSerializable()
 
 class _InventoryLamp implements InventoryLamp {
-  const _InventoryLamp({required this.id, required this.name, this.controlPassword, this.critterIndex, this.lastSeenEpochMs, final  List<int>? lastShadeColor, final  List<int>? lastBaseColor, this.lastKnownIsMesh}): _lastShadeColor = lastShadeColor,_lastBaseColor = lastBaseColor;
+  const _InventoryLamp({required this.id, required this.name, this.controlPassword, this.critterIndex, this.lastSeenEpochMs, final  List<int>? lastShadeColor, final  List<int>? lastBaseColor, this.lastKnownIsMesh, this.hasCommitChar}): _lastShadeColor = lastShadeColor,_lastBaseColor = lastBaseColor;
   factory _InventoryLamp.fromJson(Map<String, dynamic> json) => _$InventoryLampFromJson(json);
 
 @override final  String id;
@@ -293,6 +301,14 @@ class _InventoryLamp implements InventoryLamp {
 /// written before this field existed — resolvers default to
 /// "assume mesh-capable" for those, mirroring the pre-fix behavior.
 @override final  bool? lastKnownIsMesh;
+/// GATT-discovered presence of CHAR_COMMIT (Phase A firmware).
+/// Populated post-connect by `inventory_notifier.updateHasCommitChar`.
+/// Null when not yet probed (pre-existing inventory entries, or the
+/// mid-connect window before the probe resolves). Read sites MUST
+/// default null to false via `?? false` — null means "unknown", and
+/// unknown should fall back to the legacy Save-pill flow rather than
+/// incorrectly enabling Phase A behavior.
+@override final  bool? hasCommitChar;
 
 /// Create a copy of InventoryLamp
 /// with the given fields replaced by the non-null parameter values.
@@ -307,16 +323,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _InventoryLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.controlPassword, controlPassword) || other.controlPassword == controlPassword)&&(identical(other.critterIndex, critterIndex) || other.critterIndex == critterIndex)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs)&&const DeepCollectionEquality().equals(other._lastShadeColor, _lastShadeColor)&&const DeepCollectionEquality().equals(other._lastBaseColor, _lastBaseColor)&&(identical(other.lastKnownIsMesh, lastKnownIsMesh) || other.lastKnownIsMesh == lastKnownIsMesh));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _InventoryLamp&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.controlPassword, controlPassword) || other.controlPassword == controlPassword)&&(identical(other.critterIndex, critterIndex) || other.critterIndex == critterIndex)&&(identical(other.lastSeenEpochMs, lastSeenEpochMs) || other.lastSeenEpochMs == lastSeenEpochMs)&&const DeepCollectionEquality().equals(other._lastShadeColor, _lastShadeColor)&&const DeepCollectionEquality().equals(other._lastBaseColor, _lastBaseColor)&&(identical(other.lastKnownIsMesh, lastKnownIsMesh) || other.lastKnownIsMesh == lastKnownIsMesh)&&(identical(other.hasCommitChar, hasCommitChar) || other.hasCommitChar == hasCommitChar));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,name,controlPassword,critterIndex,lastSeenEpochMs,const DeepCollectionEquality().hash(_lastShadeColor),const DeepCollectionEquality().hash(_lastBaseColor),lastKnownIsMesh);
+int get hashCode => Object.hash(runtimeType,id,name,controlPassword,critterIndex,lastSeenEpochMs,const DeepCollectionEquality().hash(_lastShadeColor),const DeepCollectionEquality().hash(_lastBaseColor),lastKnownIsMesh,hasCommitChar);
 
 @override
 String toString() {
-  return 'InventoryLamp(id: $id, name: $name, controlPassword: $controlPassword, critterIndex: $critterIndex, lastSeenEpochMs: $lastSeenEpochMs, lastShadeColor: $lastShadeColor, lastBaseColor: $lastBaseColor, lastKnownIsMesh: $lastKnownIsMesh)';
+  return 'InventoryLamp(id: $id, name: $name, controlPassword: $controlPassword, critterIndex: $critterIndex, lastSeenEpochMs: $lastSeenEpochMs, lastShadeColor: $lastShadeColor, lastBaseColor: $lastBaseColor, lastKnownIsMesh: $lastKnownIsMesh, hasCommitChar: $hasCommitChar)';
 }
 
 
@@ -327,7 +343,7 @@ abstract mixin class _$InventoryLampCopyWith<$Res> implements $InventoryLampCopy
   factory _$InventoryLampCopyWith(_InventoryLamp value, $Res Function(_InventoryLamp) _then) = __$InventoryLampCopyWithImpl;
 @override @useResult
 $Res call({
- String id, String name, String? controlPassword, int? critterIndex, int? lastSeenEpochMs, List<int>? lastShadeColor, List<int>? lastBaseColor, bool? lastKnownIsMesh
+ String id, String name, String? controlPassword, int? critterIndex, int? lastSeenEpochMs, List<int>? lastShadeColor, List<int>? lastBaseColor, bool? lastKnownIsMesh, bool? hasCommitChar
 });
 
 
@@ -344,7 +360,7 @@ class __$InventoryLampCopyWithImpl<$Res>
 
 /// Create a copy of InventoryLamp
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? controlPassword = freezed,Object? critterIndex = freezed,Object? lastSeenEpochMs = freezed,Object? lastShadeColor = freezed,Object? lastBaseColor = freezed,Object? lastKnownIsMesh = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? controlPassword = freezed,Object? critterIndex = freezed,Object? lastSeenEpochMs = freezed,Object? lastShadeColor = freezed,Object? lastBaseColor = freezed,Object? lastKnownIsMesh = freezed,Object? hasCommitChar = freezed,}) {
   return _then(_InventoryLamp(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
@@ -354,6 +370,7 @@ as int?,lastSeenEpochMs: freezed == lastSeenEpochMs ? _self.lastSeenEpochMs : la
 as int?,lastShadeColor: freezed == lastShadeColor ? _self._lastShadeColor : lastShadeColor // ignore: cast_nullable_to_non_nullable
 as List<int>?,lastBaseColor: freezed == lastBaseColor ? _self._lastBaseColor : lastBaseColor // ignore: cast_nullable_to_non_nullable
 as List<int>?,lastKnownIsMesh: freezed == lastKnownIsMesh ? _self.lastKnownIsMesh : lastKnownIsMesh // ignore: cast_nullable_to_non_nullable
+as bool?,hasCommitChar: freezed == hasCommitChar ? _self.hasCommitChar : hasCommitChar // ignore: cast_nullable_to_non_nullable
 as bool?,
   ));
 }

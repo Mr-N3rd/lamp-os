@@ -35,6 +35,14 @@ abstract class InventoryLamp with _$InventoryLamp {
     /// written before this field existed — resolvers default to
     /// "assume mesh-capable" for those, mirroring the pre-fix behavior.
     bool? lastKnownIsMesh,
+    /// GATT-discovered presence of CHAR_COMMIT (Phase A firmware).
+    /// Populated post-connect by `inventory_notifier.updateHasCommitChar`.
+    /// Null when not yet probed (pre-existing inventory entries, or the
+    /// mid-connect window before the probe resolves). Read sites MUST
+    /// default null to false via `?? false` — null means "unknown", and
+    /// unknown should fall back to the legacy Save-pill flow rather than
+    /// incorrectly enabling Phase A behavior.
+    bool? hasCommitChar,
   }) = _InventoryLamp;
 
   factory InventoryLamp.fromJson(Map<String, dynamic> json) =>

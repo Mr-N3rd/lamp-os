@@ -299,6 +299,17 @@ class ControlNotifier extends _$ControlNotifier {
       throw const LampAuthRequiredException();
     }
 
+    // Probe for Phase A firmware capability. GATT services are already
+    // discovered by this point (authenticate() drives the first I/O),
+    // so this re-uses the _serviceCache and costs no extra radio round-
+    // trip. Returns false on any error — safe fallback to legacy flow.
+    // Does NOT persist to SharedPreferences: hasCommitChar is a
+    // session-local capability flag that must be re-probed on every
+    // connect (firmware can be updated between sessions). Null entries
+    // in existing inventory parse cleanly; read sites use `?? false`.
+    final hasCommit = await ble.probeHasCommitChar(deviceId);
+    await _inv.updateHasCommitChar(deviceId, hasCommitChar: hasCommit);
+
     final fresh = await _readSections(ble);
 
     // Live-preview writes are fire-and-forget. Swallow errors here so a

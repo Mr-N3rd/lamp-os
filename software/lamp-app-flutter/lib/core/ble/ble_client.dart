@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'uuids.dart';
+
 class BleNotFound implements Exception {
   const BleNotFound(this.message);
   final String message;
@@ -175,6 +177,19 @@ abstract class BleClient {
   /// swallow Tier-3 escalation, hiding a regression where the ladder
   /// never actually cycles the slot. Implementations must override.
   Future<void> cycleAdapter(String deviceId);
+
+  /// Probes the lamp's GATT characteristic list to determine whether
+  /// the CHAR_COMMIT characteristic ([BleUuids.commit]) is exposed.
+  ///
+  /// `true` means the lamp is running Phase A firmware: per-pane edits
+  /// commit immediately via CHAR_COMMIT and the Save pill is hidden.
+  /// `false` means pre-Phase-A firmware: keep the legacy Save-pill flow.
+  ///
+  /// Must be called AFTER the connection is established + services are
+  /// discovered (typically right after [connect] resolves). Returns
+  /// false on any read/discovery error — defaulting to legacy behavior
+  /// is the safer fallback than assuming Phase A.
+  Future<bool> probeHasCommitChar(String deviceId);
 }
 
 /// Per-chunk payload size on the BLE page protocol. Pinned to ATT_MTU
@@ -201,6 +216,16 @@ class InMemoryBleClient implements BleClient {
   // matching the production helper's caller-visible behavior.
   final Map<String, Uint8List> _sectionValues = {};
 
+  // Test injection: GATT-discovered characteristic UUIDs per device.
+  final Map<String, List<String>> _discoveredChars = {};
+
+  // Write log — captures every write call so tests can assert what
+  // landed on a given (deviceId, charUuid) pair. The existing _values
+  // map keys by (deviceId, serviceUuid, charUuid) and stores only the
+  // LATEST value; the log preserves order + history.
+  final List<({String deviceId, String charUuid, Uint8List value})>
+      _writeLog = [];
+
   String _key(String d, String s, String c) => '$d|$s|$c';
 
   StreamController<bool> _ensureConnStream(String deviceId) {
@@ -222,6 +247,24 @@ class InMemoryBleClient implements BleClient {
   /// Used by `seedControlBle` and tests that drive the per-section sweep.
   void seedSection(String deviceId, String name, Uint8List bytes) {
     _sectionValues['$deviceId|$name'] = bytes;
+  }
+
+  /// Test injection: set the list of GATT characteristic UUIDs that
+  /// [probeHasCommitChar] sees for [deviceId]. Call this before the probe
+  /// to simulate Phase A or pre-Phase-A firmware.
+  void setDiscoveredChars(String deviceId, List<String> chars) {
+    _discoveredChars[deviceId] = List.of(chars);
+  }
+
+  /// Returns all values written to [charUuid] for [deviceId], in order.
+  /// Unlike [_values] (which stores only the latest value per key),
+  /// this log preserves every write call — useful for asserting write
+  /// counts and payloads in order-sensitive tests.
+  List<Uint8List> writesTo(String deviceId, String charUuid) {
+    return _writeLog
+        .where((w) => w.deviceId == deviceId && w.charUuid == charUuid)
+        .map((w) => w.value)
+        .toList();
   }
 
   @override
@@ -291,6 +334,12 @@ class InMemoryBleClient implements BleClient {
     // while breaking on real hardware. Audit cq-C1. Tests that want to
     // observe writes use `simulateNotify` (see notifyable_ble_client
     // patterns in firmware_ota_pusher_test).
+    // Append to write log so tests can query full write history.
+    _writeLog.add((
+      deviceId: d,
+      charUuid: c,
+      value: Uint8List.fromList(v),
+    ));
   }
 
   /// Test-only: inject `value` into the (d, s, c) notification stream
@@ -327,6 +376,13 @@ class InMemoryBleClient implements BleClient {
       _ensureConnStream(deviceId).add(false);
       _connected.remove(deviceId);
     }
+  }
+
+  @override
+  Future<bool> probeHasCommitChar(String deviceId) async {
+    final chars = _discoveredChars[deviceId];
+    if (chars == null) return false;
+    return chars.contains(BleUuids.commit);
   }
 
   @override

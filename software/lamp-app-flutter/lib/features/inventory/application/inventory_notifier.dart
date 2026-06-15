@@ -181,6 +181,32 @@ class InventoryNotifier extends _$InventoryNotifier {
     return rgbw[0] == r && rgbw[1] == g && rgbw[2] == b;
   }
 
+  /// Cache the GATT-probed Phase A capability flag for this lamp.
+  /// Called by ControlNotifier immediately after connect + auth succeeds.
+  /// Does NOT persist to SharedPreferences — this is session-local
+  /// because firmware can be updated between sessions. Pre-existing
+  /// inventory entries without this key parse as null; read sites use
+  /// `?? false` to default null to the legacy Save-pill flow.
+  ///
+  /// No-op when the value matches the cached one (the common case on a
+  /// reconnect to the same firmware) — avoids a spurious state rebuild.
+  Future<void> updateHasCommitChar(
+    String id, {
+    required bool hasCommitChar,
+  }) async {
+    final current = state.value ?? const [];
+    final idx = current.indexWhere((l) => l.id == id);
+    if (idx < 0) return;
+    if (current[idx].hasCommitChar == hasCommitChar) return;
+    final updated = [...current];
+    updated[idx] = current[idx].copyWith(hasCommitChar: hasCommitChar);
+    // In-memory only — do NOT call _persist here. hasCommitChar is a
+    // session capability flag, not a user preference. Persisting it
+    // would cause a pre-Phase-A lamp that had been upgraded to Phase A
+    // (or vice-versa) to show the wrong pill until the next connect.
+    state = AsyncData(updated);
+  }
+
   /// Set the auth password the app uses to authenticate with this lamp.
   /// Called by ControlNotifier.setLampPassword right before pushing the
   /// new password to the firmware, so the post-reboot reconnect uses the

@@ -20,6 +20,7 @@ _InventoryLamp _$InventoryLampFromJson(Map<String, dynamic> json) =>
           ?.map((e) => (e as num).toInt())
           .toList(),
       lastKnownIsMesh: json['lastKnownIsMesh'] as bool?,
+      hasCommitChar: json['hasCommitChar'] as bool?,
     );
 
 Map<String, dynamic> _$InventoryLampToJson(_InventoryLamp instance) =>
@@ -32,4 +33,5 @@ Map<String, dynamic> _$InventoryLampToJson(_InventoryLamp instance) =>
       'lastShadeColor': instance.lastShadeColor,
       'lastBaseColor': instance.lastBaseColor,
       'lastKnownIsMesh': instance.lastKnownIsMesh,
+      'hasCommitChar': instance.hasCommitChar,
     };

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 
 import 'ble_client.dart';
@@ -297,5 +298,39 @@ class FbpBleClient implements BleClient {
     // tends to hit the same dead slot; 1.5s is the smallest delay
     // that reliably clears in the field.
     await Future<void>.delayed(const Duration(milliseconds: 1500));
+  }
+
+  @override
+  Future<bool> probeHasCommitChar(String deviceId) async {
+    try {
+      // Re-use the cached services when available (populated by
+      // _resolve() or prewarm()). If the cache is cold, drive a fresh
+      // discoverServices() and populate it — so the very first I/O after
+      // a connect() pays only one discovery round-trip regardless of
+      // call order.
+      final device = fbp.FlutterBluePlus.connectedDevices.firstWhere(
+        (d) => d.remoteId.str == deviceId,
+        orElse: () => throw BleNotFound('device $deviceId not connected'),
+      );
+      final services =
+          _serviceCache[deviceId] ??= await device.discoverServices();
+      for (final svc in services) {
+        if (svc.uuid.str128.toLowerCase() !=
+            BleUuids.controlService.toLowerCase()) {
+          continue;
+        }
+        for (final char in svc.characteristics) {
+          if (char.uuid.str128.toLowerCase() ==
+              BleUuids.commit.toLowerCase()) {
+            return true;
+          }
+        }
+      }
+      return false;
+    } catch (e, st) {
+      debugPrint(
+          'FbpBleClient.probeHasCommitChar($deviceId) failed: $e\n$st');
+      return false;
+    }
   }
 }

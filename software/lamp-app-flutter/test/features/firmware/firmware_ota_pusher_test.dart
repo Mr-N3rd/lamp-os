@@ -88,6 +88,9 @@ class NotifyableBle implements BleClient {
 
   @override
   Future<void> cycleAdapter(String deviceId) async {}
+
+  @override
+  Future<bool> probeHasCommitChar(String deviceId) async => false;
 }
 
 // Hand-build a synthetic ACCEPT frame.

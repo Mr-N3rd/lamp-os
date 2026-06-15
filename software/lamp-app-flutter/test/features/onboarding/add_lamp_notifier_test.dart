@@ -328,4 +328,7 @@ class _HangingBleClient implements BleClient {
   Future<void> cycleAdapter(String deviceId) async {
     _connected.remove(deviceId);
   }
+
+  @override
+  Future<bool> probeHasCommitChar(String deviceId) async => false;
 }
