@@ -90,7 +90,11 @@ class BrightnessCard extends ConsumerWidget {
               value: value.toDouble(),
               onChanged: (v) => notifier.setBrightness(v.toInt()),
               onChangeStart: (_) => onEditSessionChanged?.call(true),
-              onChangeEnd: (_) => onEditSessionChanged?.call(false),
+              onChangeEnd: (v) {
+                notifier.setBrightness(v.toInt()); // fence: land the final value
+                notifier.scheduleBrightnessCommit();
+                onEditSessionChanged?.call(false);
+              },
             ),
           ),
         ],

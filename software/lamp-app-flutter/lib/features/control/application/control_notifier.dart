@@ -992,6 +992,13 @@ class ControlNotifier extends _$ControlNotifier {
     _brightnessWriter?.schedule(Uint8List.fromList([v]));
   }
 
+  /// Called from the brightness slider's `onChangeEnd` to schedule a
+  /// debounced commit. Public wrapper around the private debounce
+  /// so the widget layer doesn't need access to CommitSection.
+  void scheduleBrightnessCommit() {
+    _scheduleCommitDebounced(CommitSection.lamp);
+  }
+
   Future<void> setShadeColor(LampColor color) async {
     // Single-color convenience: wraps the color in a 1-element list and
     // routes through `setShadeColors`. Existing callers (expression
