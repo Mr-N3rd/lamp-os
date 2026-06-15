@@ -1179,55 +1179,88 @@ class ControlNotifier extends _$ControlNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // Setup-screen mutators (state-only; ride the global Save via settingsBlob)
+  // Setup-screen mutators — Phase A: immediate writeSettingsBlob commit;
+  // pre-Phase-A: state-only, ride the global Save → settingsBlob path.
   // ---------------------------------------------------------------------------
 
   Future<void> setLampName(String name) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      lamp: LampSection(
-        name: name,
-        brightness: cur.lamp.brightness,
-        advancedEnabled: cur.lamp.advancedEnabled,
-        socialMode: cur.lamp.socialMode,
-        fwVersion: cur.lamp.fwVersion,
-        fwChannel: cur.lamp.fwChannel,
+    await _mutate(
+      (s) => s.copyWith(
+        lamp: LampSection(
+          name: name,
+          brightness: s.lamp.brightness,
+          advancedEnabled: s.lamp.advancedEnabled,
+          socialMode: s.lamp.socialMode,
+          fwVersion: s.lamp.fwVersion,
+          fwChannel: s.lamp.fwChannel,
+        ),
       ),
-    ));
+      () async {
+        final inv = await ref.read(inventoryNotifierProvider.future);
+        final entry = inv.firstWhere(
+          (l) => l.id == _deviceId,
+          orElse: () => throw StateError('lamp $_deviceId not in inventory'),
+        );
+        if (entry.hasCommitChar ?? false) {
+          await writeSettingsBlob({'lamp': {'name': name}}, reboot: false);
+        }
+        // Inventory cache update fires for BOTH paths so the AppBar
+        // LampChip title is correct without waiting for a reload.
+        await ref
+            .read(inventoryNotifierProvider.notifier)
+            .updateName(_deviceId, name);
+      },
+    );
   }
 
   Future<void> setLampAdvancedEnabled(bool v) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      lamp: LampSection(
-        name: cur.lamp.name,
-        brightness: cur.lamp.brightness,
-        advancedEnabled: v,
-        socialMode: cur.lamp.socialMode,
-        fwVersion: cur.lamp.fwVersion,
-        fwChannel: cur.lamp.fwChannel,
+    await _mutate(
+      (s) => s.copyWith(
+        lamp: LampSection(
+          name: s.lamp.name,
+          brightness: s.lamp.brightness,
+          advancedEnabled: v,
+          socialMode: s.lamp.socialMode,
+          fwVersion: s.lamp.fwVersion,
+          fwChannel: s.lamp.fwChannel,
+        ),
       ),
-    ));
+      () async {
+        final inv = await ref.read(inventoryNotifierProvider.future);
+        final entry = inv.firstWhere((l) => l.id == _deviceId);
+        if (entry.hasCommitChar ?? false) {
+          await writeSettingsBlob(
+              {'lamp': {'advancedEnabled': v}}, reboot: false);
+        }
+      },
+    );
   }
 
-  /// Personality. State-only; rides the global Save → settings_blob path
-  /// (mirrors setLampName / setLampAdvancedEnabled). The lamp picks up
-  /// the new mode after the post-save reboot.
+  /// Personality pill. On Phase A lamps, commits immediately via
+  /// writeSettingsBlob (reboot: false). On pre-Phase-A lamps, state-only
+  /// — rides the global Save → settings_blob path. The lamp picks up the
+  /// new mode after the post-save reboot.
   Future<void> setLampSocialMode(SocialMode mode) async {
-    final cur = state.value;
-    if (cur == null) return;
-    state = AsyncData(cur.copyWith(
-      lamp: LampSection(
-        name: cur.lamp.name,
-        brightness: cur.lamp.brightness,
-        advancedEnabled: cur.lamp.advancedEnabled,
-        socialMode: mode,
-        fwVersion: cur.lamp.fwVersion,
-        fwChannel: cur.lamp.fwChannel,
+    await _mutate(
+      (s) => s.copyWith(
+        lamp: LampSection(
+          name: s.lamp.name,
+          brightness: s.lamp.brightness,
+          advancedEnabled: s.lamp.advancedEnabled,
+          socialMode: mode,
+          fwVersion: s.lamp.fwVersion,
+          fwChannel: s.lamp.fwChannel,
+        ),
       ),
-    ));
+      () async {
+        final inv = await ref.read(inventoryNotifierProvider.future);
+        final entry = inv.firstWhere((l) => l.id == _deviceId);
+        if (entry.hasCommitChar ?? false) {
+          await writeSettingsBlob(
+              {'lamp': {'socialMode': mode.wire}}, reboot: false);
+        }
+      },
+    );
   }
 
   /// Wipe the lamp back to factory defaults. Writes the
