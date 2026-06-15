@@ -751,6 +751,38 @@ class ControlNotifier extends _$ControlNotifier {
     }
   }
 
+  /// Optimistic-update wrapper. Captures the current state, applies
+  /// the [transform] immediately so the UI feels instant, then awaits
+  /// the [commit] callback that does the BLE write(s). On exception,
+  /// restores the captured state and rethrows.
+  ///
+  /// Per-pane mutators wrap their work in this helper to inherit
+  /// snackbar-friendly failure semantics without each call site
+  /// duplicating the try/catch dance.
+  Future<void> _mutate(
+    ControlState Function(ControlState) transform,
+    Future<void> Function() commit,
+  ) async {
+    final prev = state.value;
+    if (prev == null) return;
+    state = AsyncData(transform(prev));
+    try {
+      await commit();
+    } catch (e) {
+      state = AsyncData(prev);
+      rethrow;
+    }
+  }
+
+  /// Test-only access to [_mutate] so unit tests can exercise the
+  /// revert path without going through a public mutator.
+  @visibleForTesting
+  Future<void> mutateForTest(
+    ControlState Function(ControlState) transform,
+    Future<void> Function() commit,
+  ) =>
+      _mutate(transform, commit);
+
   /// Writes an arbitrary settings_blob JSON map to the lamp.
   ///
   /// The `reboot` flag is merged into the map before encryption.
