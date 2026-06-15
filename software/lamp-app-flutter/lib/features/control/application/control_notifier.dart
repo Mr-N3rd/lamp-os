@@ -115,6 +115,22 @@ class ControlNotifier extends _$ControlNotifier {
   LampColor? _pendingSeenBase;
   static const _seenFlushDelay = Duration(milliseconds: 500);
 
+  // Commit debouncer. Scheduled after user fences (slider release, picker
+  // accept). Trailing-edge: each new call cancels the previous timer so
+  // rapid calls collapse to one BLE write. Flushed synchronously on
+  // notifier dispose and on AppLifecycleState.paused.
+  /// Debounce window after the last user fence (slider release, picker
+  /// accept) before commit fires. 500ms matches the spec — feels instant
+  /// after release, generous enough that incremental taps collapse to
+  /// one commit.
+  static const Duration _commitDebounce = Duration(milliseconds: 500);
+  Timer? _commitDebounceTimer;
+  CommitSection? _pendingCommitSection;
+  // Cached from the probe result in build(). Lets _flushPendingCommit
+  // check Phase A capability without touching `ref` (which is forbidden
+  // inside ref.onDispose callbacks).
+  bool _hasCommitChar = false;
+
   // Snapshot of the state as loaded from the lamp. Used for isDirty checks.
   late ControlState _original;
 
@@ -285,7 +301,15 @@ class ControlNotifier extends _$ControlNotifier {
     // earlier would crash dispose on platforms where the BLE client can't
     // run (e.g. flutter_blue_plus in unit tests). If auth or section reads
     // throw below, this still fires on container teardown.
-    ref.onDispose(() => ble.disconnect(deviceId));
+    //
+    // The commit flush is bundled here (before the ble.disconnect call)
+    // so that _flushPendingCommit fires while the link is still open.
+    // ref.onDispose callbacks are called FIFO; if flush were registered
+    // later it would race with the disconnect.
+    ref.onDispose(() {
+      _flushPendingCommit();
+      ble.disconnect(deviceId);
+    });
     await AuthClient(ble: ble)
         .authenticate(deviceId: deviceId, password: lamp.controlPassword);
 
@@ -309,6 +333,7 @@ class ControlNotifier extends _$ControlNotifier {
     // connect (firmware can be updated between sessions). Null entries
     // in existing inventory parse cleanly; read sites use `?? false`.
     final hasCommit = await ble.probeHasCommitChar(deviceId);
+    _hasCommitChar = hasCommit; // cached for dispose-safe _flushPendingCommit
     await _inv.updateHasCommitChar(deviceId, hasCommitChar: hasCommit);
 
     final fresh = await _readSections(ble);
@@ -389,6 +414,11 @@ class ControlNotifier extends _$ControlNotifier {
         _seenFlushTimer!.cancel();
         unawaited(_flushSeen());
       }
+      // Cancel the debounce timer — the commit flush itself is handled in
+      // the earlier onDispose (bundled with disconnect) so it fires while
+      // the BLE link is still open. Cancelling here just stops a dangling
+      // timer from firing after disconnect.
+      _commitDebounceTimer?.cancel();
       // disconnect is handled by the earlier onDispose registered right after
       // connect(), ensuring it always runs even if build() throws mid-way.
     });
@@ -414,6 +444,9 @@ class ControlNotifier extends _$ControlNotifier {
     ref.listen<AppLifecycleState>(appLifecycleStateProvider, (prev, next) {
       if (next == AppLifecycleState.resumed && prev != next) {
         _probeLink();
+      }
+      if (next == AppLifecycleState.paused) {
+        _flushPendingCommit();
       }
     });
 
@@ -782,6 +815,69 @@ class ControlNotifier extends _$ControlNotifier {
     Future<void> Function() commit,
   ) =>
       _mutate(transform, commit);
+
+  /// Schedule a debounced commit. If called again before the window
+  /// expires, the timer is cancelled and rescheduled (trailing-edge
+  /// behavior). The [section] is purely local-knowledge metadata; see
+  /// [commit].
+  void _scheduleCommitDebounced(CommitSection section) {
+    _commitDebounceTimer?.cancel();
+    _pendingCommitSection = section;
+    _commitDebounceTimer = Timer(_commitDebounce, () async {
+      _commitDebounceTimer = null;
+      final s = _pendingCommitSection;
+      _pendingCommitSection = null;
+      if (s == null) return;
+      try {
+        await commit(s);
+      } catch (e, st) {
+        debugPrint('controlNotifier._scheduleCommitDebounced failed: $e\n$st');
+        // No UI surface here — the user has already moved on; the
+        // next commit attempt will retry. (The Save pill / isDirty
+        // machinery still covers the persistence gap during
+        // transition.)
+      }
+    });
+  }
+
+  /// Synchronously force-flush a pending debounced commit. Called from
+  /// dispose + AppLifecycleState.paused so a quick edit-then-leave
+  /// doesn't lose the user's last change.
+  ///
+  /// IMPORTANT: This method MUST NOT call `ref.read(...)` or access any
+  /// Riverpod notifier `.state` — it runs from `ref.onDispose` where
+  /// Riverpod forbids ref access. Uses cached `_ble` and `_hasCommitChar`
+  /// fields instead (same pattern as `_flushSeen` → `_updateSeen` → `_inv`).
+  void _flushPendingCommit() {
+    final s = _pendingCommitSection;
+    if (s == null) return;
+    _commitDebounceTimer?.cancel();
+    _commitDebounceTimer = null;
+    _pendingCommitSection = null;
+
+    // Guard: pre-Phase-A lamps don't have CHAR_COMMIT; no-op mirrors
+    // commit()'s own hasCommitChar check.
+    if (!_hasCommitChar) return;
+
+    // Fire-and-forget — caller can't await us, but the BLE write
+    // itself is async. If the link is gone, the commit fails and the
+    // user sees the snackbar on next page load.
+    unawaited(_ble.write(
+      _deviceId,
+      BleUuids.controlService,
+      BleUuids.commit,
+      Uint8List.fromList([0x01]),
+    ).catchError((e, st) {
+      debugPrint('controlNotifier._flushPendingCommit failed: $e\n$st');
+    }));
+  }
+
+  /// Public alias for tests that want to drive the debounce machinery
+  /// without going through a per-pane mutator (which won't exist until
+  /// Task 6+).
+  @visibleForTesting
+  void scheduleCommitDebouncedForTest(CommitSection s) =>
+      _scheduleCommitDebounced(s);
 
   /// Writes an arbitrary settings_blob JSON map to the lamp.
   ///
