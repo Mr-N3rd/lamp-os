@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../application/commit_section.dart';
 import '../../application/control_notifier.dart';
 import '../../domain/lamp_color.dart';
 import 'color_picker_sheet.dart';
@@ -229,11 +230,37 @@ class _BaseEditorSheetState extends ConsumerState<BaseEditorSheet> {
                 FilledButton.icon(
                   icon: const Icon(Icons.check, size: 18),
                   label: const Text('Update'),
-                  // Update just closes — every in-session edit already went
-                  // through the controlNotifier's live-preview path, so the
-                  // global draft is already up-to-date. Persistence still
-                  // requires the AppBar's Save Changes (settings_blob).
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () async {
+                    final notifier = ref.read(
+                      controlNotifierProvider(widget.lampId).notifier,
+                    );
+                    final cur = ref
+                        .read(controlNotifierProvider(widget.lampId))
+                        .value!;
+                    try {
+                      // ac has no live-preview char — if it changed during
+                      // the edit session, ship it now via settings_blob so
+                      // the lamp picks it up on the next paint cycle.
+                      if (_originalAc != null &&
+                          cur.base.ac != _originalAc) {
+                        await notifier.writeSettingsBlob(
+                          {'base': {'ac': cur.base.ac}},
+                          reboot: false,
+                        );
+                      }
+                      await notifier.commit(CommitSection.base);
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Couldn't save — disconnected"),
+                        ),
+                      );
+                      return;
+                    }
+                    if (!context.mounted) return;
+                    Navigator.of(context).pop();
+                  },
                 ),
               ],
             ),
