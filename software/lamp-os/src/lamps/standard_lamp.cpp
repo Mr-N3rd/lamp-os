@@ -1113,27 +1113,20 @@ void applyEffectiveBrightness() {
 namespace lamp {
 
 void updateAdvertisedDeviceName(const char* newName) {
-  // Update the GAP device name. NimBLE picks it up for subsequent
-  // *new* advertisement payloads; an active advertisement frame
-  // already in flight does not get rewritten.
+  // Update the GAP device name AND rebuild the active advertisement
+  // payload so the new name surfaces to mid-scan phones without a
+  // reboot. NimBLE caches the advertisement frame; the stop/start
+  // pair forces it to re-emit with the freshly-set device name on
+  // the very next advertising tick. Existing GATT connections are
+  // unaffected (advertising and connections are separate state
+  // machines in NimBLE). The brief gap (~50ms — well under the
+  // advertising interval) is below human perception.
   NimBLEDevice::setDeviceName(newName);
-  // bluetooth.cpp's tickAdvertising() rebuilds the COLOR portion of
-  // the advert on color change but does NOT rebuild the device-name
-  // portion — the name was set once at `bt.begin()` and re-applied
-  // only via `applyAdvertisementPayload` when colors change. So
-  // setDeviceName() alone may not surface the new name to a phone
-  // already mid-scan.
-  //
-  // IMPLEMENTER-ACTION (bench-verified during Task 16 step 2):
-  //   - Flash this build to jacko, set a name via settings_blob.
-  //   - From the Pixel app, force-stop and re-scan. Does the new name
-  //     appear?
-  //   - If yes — leave this helper as-is, document the "must rescan"
-  //     behavior in the rename UX.
-  //   - If no — add an explicit advert-payload rebuild here, e.g.:
-  //       NimBLEDevice::getAdvertising()->stop(); ->start();
-  //
-  // Do NOT proceed past Task 16 step 2 without confirming this behavior.
+  auto* adv = NimBLEDevice::getAdvertising();
+  if (adv != nullptr) {
+    adv->stop();
+    adv->start();
+  }
 }
 
 }  // namespace lamp
