@@ -751,6 +751,74 @@ class ControlNotifier extends _$ControlNotifier {
     }
   }
 
+  /// Writes an arbitrary settings_blob JSON map to the lamp.
+  ///
+  /// The `reboot` flag is merged into the map before encryption.
+  /// Phase A firmware reads the flag and skips its reboot cycle when
+  /// `reboot == false`; pre-Phase-A firmware always reboots and simply
+  /// ignores the unknown key.
+  ///
+  /// Use `reboot: false` for discrete Phase B mutators (rename,
+  /// personality, home toggle) where only CHAR_COMMIT follows.
+  /// Use `reboot: true` (the default) for Advanced LED changes and
+  /// factory-reset-adjacent writes that must trigger a full reboot.
+  ///
+  /// When `reboot == true` the expected BleDisconnectedException
+  /// (firmware drops the link during its reboot cycle) is swallowed.
+  /// When `reboot == false` a disconnect is a real error and is
+  /// rethrown so the caller can surface it.
+  ///
+  /// Throws on BLE write failure (caller wraps + snackbars).
+  Future<void> writeSettingsBlob(
+    Map<String, dynamic> blob, {
+    bool reboot = true,
+  }) async {
+    final ble = ref.read(bleClientProvider);
+    final inv = await ref.read(inventoryNotifierProvider.future);
+    final lamp = inv.firstWhere(
+      (l) => l.id == _deviceId,
+      orElse: () => throw StateError('lamp $_deviceId not in inventory'),
+    );
+    final pw = lamp.controlPassword ?? '';
+
+    final payloadBlob = <String, dynamic>{
+      ...blob,
+      'reboot': reboot,
+    };
+    final blobJson = jsonEncode(payloadBlob);
+
+    final payload = pw.isEmpty
+        ? Uint8List.fromList([
+            LampCrypto.magicPlaintext,
+            ...utf8.encode(blobJson),
+          ])
+        : await LampCrypto.encryptOp(
+            op: payloadBlob,
+            password: pw,
+            saltUuid16: uuidSaltLE16(BleUuids.settingsBlob),
+            charShortName: 'settingsBlob',
+          );
+
+    try {
+      await ble.write(
+        _deviceId,
+        BleUuids.controlService,
+        BleUuids.settingsBlob,
+        payload,
+        allowLongWrite: true,
+      );
+    } on BleDisconnectedException {
+      // Expected when reboot==true — firmware drops the link mid-write.
+      // For reboot==false this is a real disconnect: rethrow so the
+      // caller can surface it.
+      if (!reboot) rethrow;
+    } catch (e) {
+      if (!isBleDisconnectError(e)) rethrow;
+      // Generic disconnect wrapper (non-typed path): same semantics.
+      if (!reboot) rethrow;
+    }
+  }
+
   /// Signal to the lamp that the operator is actively editing colours
   /// (or brightness) for [surface]. The lamp uses this to drop
   /// wisp-sourced overrides on that surface for the duration of the
