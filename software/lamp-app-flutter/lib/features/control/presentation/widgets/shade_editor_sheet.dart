@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/brand_colors.dart';
+import '../../application/commit_section.dart';
 import '../../application/control_notifier.dart';
 import '../../domain/lamp_color.dart';
 import 'color_picker_sheet.dart';
@@ -205,10 +206,24 @@ class _ShadeEditorSheetState extends ConsumerState<ShadeEditorSheet> {
                 FilledButton.icon(
                   icon: const Icon(Icons.check, size: 18),
                   label: const Text('Update'),
-                  // Closes — every in-session edit already went through
-                  // the controlNotifier's live-preview path. Persistence
-                  // requires the AppBar's Save Changes.
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () async {
+                    final notifier = ref.read(
+                      controlNotifierProvider(widget.lampId).notifier,
+                    );
+                    try {
+                      await notifier.commit(CommitSection.shade);
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Couldn't save — disconnected"),
+                        ),
+                      );
+                      return;
+                    }
+                    if (!context.mounted) return;
+                    Navigator.of(context).pop();
+                  },
                 ),
               ],
             ),
