@@ -118,7 +118,11 @@ class _LampShellState extends ConsumerState<LampShell> {
           // bottom-nav tab is gone entirely; the dedicated wisp config
           // screen (pushed via the 5-tap-orbs gesture) is its own
           // route with its own AppBar.
-          if (_tab != LampTab.info) _SaveAction(lampId: widget.lampId),
+          // Phase B.9.1: ALSO hidden on lamps running Phase A firmware
+          // (hasCommitChar==true) because every per-pane edit commits
+          // at its natural fence — nothing dirty to save.
+          if (_tab != LampTab.info && !_hasCommitChar(ref, widget.lampId))
+            _SaveAction(lampId: widget.lampId),
         ],
       ),
       body: body,
@@ -186,6 +190,20 @@ class _LampShellState extends ConsumerState<LampShell> {
         ),
       ),
     );
+  }
+}
+
+/// Reads the per-lamp hasCommitChar flag from the inventory.
+/// Returns false if the inventory hasn't loaded yet OR if the lamp
+/// hasn't been probed yet — both default to legacy pill behavior.
+bool _hasCommitChar(WidgetRef ref, String lampId) {
+  final inv = ref.watch(inventoryNotifierProvider).value;
+  if (inv == null) return false;
+  try {
+    final entry = inv.firstWhere((l) => l.id == lampId);
+    return entry.hasCommitChar ?? false;
+  } catch (_) {
+    return false;
   }
 }
 
