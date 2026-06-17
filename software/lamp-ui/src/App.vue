@@ -39,6 +39,9 @@ const maxReconnectAttempts = 60
 const reconnectInterval = 2500
 const websocketDebounceInterval = 10
 const maxLedsBase = 50
+const maxLampNameLength = 12
+const maxFriends = 20
+const defaultSocialCooldownMs = 30000
 
 // state ======================
 
@@ -170,7 +173,12 @@ const getKnockoutBrightness = (ledIndex: number): number => {
 // Social friends list helpers
 const ensureSocialSettings = () => {
   if (!settings.value.social) {
-    settings.value.social = { enabled: true, friendsOnly: false, friends: [], cooldownMs: 30000 }
+    settings.value.social = {
+      enabled: true,
+      friendsOnly: false,
+      friends: [],
+      cooldownMs: defaultSocialCooldownMs,
+    }
   }
   if (!settings.value.social.friends) {
     settings.value.social.friends = []
@@ -510,7 +518,9 @@ onUnmounted(() => {
 
               <FormField label="Reaction Cooldown (seconds)" id="socialCooldown">
                 <NumberInput
-                  :model-value="Math.round((settings.social?.cooldownMs ?? 30000) / 1000)"
+                  :model-value="
+                    Math.round((settings.social?.cooldownMs ?? defaultSocialCooldownMs) / 1000)
+                  "
                   @update:model-value="(value) => updateSetting('social.cooldownMs', value * 1000)"
                   :min="5"
                   :max="3600"
@@ -542,7 +552,7 @@ onUnmounted(() => {
                         @update:model-value="(value) => updateFriendName(index, value)"
                         placeholder="Lamp name (e.g. moss)"
                         :disabled="disabled"
-                        :max-length="12"
+                        :max-length="maxLampNameLength"
                         pattern="[a-z0-9]+"
                         transform="lowercase"
                       />
@@ -560,7 +570,7 @@ onUnmounted(() => {
                 <button
                   class="social-add-button"
                   @click="addFriend"
-                  :disabled="disabled || (settings.social?.friends ?? []).length >= 20"
+                  :disabled="disabled || (settings.social?.friends ?? []).length >= maxFriends"
                 >
                   + Add Friend Lamp
                 </button>
