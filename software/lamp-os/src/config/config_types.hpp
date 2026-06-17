@@ -107,5 +107,33 @@ class ExpressionSettings {
   std::vector<ExpressionConfig> expressions;
 };
 
+/**
+ * @brief Social mode settings controlling lamp-to-lamp interaction via Bluetooth
+ *
+ * These settings are designed to be extended as the social feature set grows.
+ * Currently implemented:
+ *   - enabled: master switch for social behavior (greeting reactions)
+ *   - friendsOnly: when true, only react to lamps whose names appear in the
+ *                  friends list; when false, react to any nearby lamp
+ *   - friends: list of friend lamp names/IDs to react to (friendsOnly mode)
+ *   - cooldownMs: minimum milliseconds between social reactions to avoid
+ *                 rapid-fire greetings
+ *
+ * Future-facing (not yet implemented):
+ *   - community presets, group channels, event-mode overrides, etc.
+ *
+ * @property enabled    - whether social reactions are active at all
+ * @property friendsOnly - if true, react only to lamps in the friends list
+ * @property friends    - list of friend lamp names accepted for reactions
+ * @property cooldownMs - minimum delay between reactions in milliseconds
+ */
+class SocialSettings {
+ public:
+  bool enabled = true;
+  bool friendsOnly = false;
+  std::vector<std::string> friends;
+  uint32_t cooldownMs = 30000;  // default: 30 seconds
+};
+
 }  // namespace lamp
 #endif

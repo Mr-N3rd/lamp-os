@@ -54,6 +54,7 @@ const activeTab = ref('home')
 const tabs = [
   { id: 'home', label: 'Home' },
   { id: 'expressions', label: 'Expressions' },
+  { id: 'social', label: 'Social' },
   { id: 'lamp-setup', label: 'Setup' },
   { id: 'info', label: 'Info' },
 ]
@@ -164,6 +165,31 @@ const getKnockoutBrightness = (ledIndex: number): number => {
   if (!settings.value.base?.knockout) return 100
   const knockout = settings.value.base.knockout.find((kp) => kp.p === ledIndex)
   return knockout ? knockout.b : 100
+}
+
+// Social friends list helpers
+const ensureSocialSettings = () => {
+  if (!settings.value.social) {
+    settings.value.social = { enabled: true, friendsOnly: false, friends: [], cooldownMs: 30000 }
+  }
+  if (!settings.value.social.friends) {
+    settings.value.social.friends = []
+  }
+}
+
+const addFriend = () => {
+  ensureSocialSettings()
+  settings.value.social!.friends!.push('')
+}
+
+const removeFriend = (index: number) => {
+  ensureSocialSettings()
+  settings.value.social!.friends!.splice(index, 1)
+}
+
+const updateFriendName = (index: number, value: string) => {
+  ensureSocialSettings()
+  settings.value.social!.friends![index] = value
 }
 
 const saveSettings = async () => {
@@ -445,6 +471,101 @@ onUnmounted(() => {
               :reset-unsaved-changes="resetUnsavedChanges"
               :disabled="disabled"
             />
+          </section>
+
+          <!-- Social Tab -->
+          <section v-if="activeTab === 'social'" class="tab-panel" aria-label="Social settings">
+            <div class="expressions-instructions">
+              <p>
+                Social mode lets your lamp greet and react to nearby lamps via Bluetooth. Configure
+                who your lamp responds to and how often.
+              </p>
+            </div>
+
+            <h1 class="gold">Social Mode</h1>
+            <FormField label="Enable Social Mode" id="socialEnabled">
+              <BooleanInput
+                :model-value="settings.social?.enabled ?? true"
+                @update:model-value="(value) => updateSetting('social.enabled', value)"
+                :disabled="disabled"
+              />
+              <div class="info-text">
+                When enabled, your lamp will briefly greet nearby lamps by blending to their color.
+              </div>
+            </FormField>
+
+            <template v-if="settings.social?.enabled ?? true">
+              <h1 class="yellow">Reaction Settings</h1>
+              <FormField label="Friends Only" id="socialFriendsOnly">
+                <BooleanInput
+                  :model-value="settings.social?.friendsOnly ?? false"
+                  @update:model-value="(value) => updateSetting('social.friendsOnly', value)"
+                  :disabled="disabled"
+                />
+                <div class="info-text">
+                  When enabled, your lamp will only react to lamps listed in your friends list
+                  below.
+                </div>
+              </FormField>
+
+              <FormField label="Reaction Cooldown (seconds)" id="socialCooldown">
+                <NumberInput
+                  :model-value="Math.round((settings.social?.cooldownMs ?? 30000) / 1000)"
+                  @update:model-value="(value) => updateSetting('social.cooldownMs', value * 1000)"
+                  :min="5"
+                  :max="3600"
+                  placeholder="Seconds between reactions"
+                  :disabled="disabled"
+                />
+                <div class="info-text">
+                  Minimum time in seconds between social reactions to the same or any nearby lamp.
+                </div>
+              </FormField>
+
+              <h1 class="lime">Friends List</h1>
+              <div class="social-friends-description">
+                <p>
+                  Add lamp names here. When Friends Only mode is on, your lamp will only react to
+                  lamps whose names appear in this list.
+                </p>
+              </div>
+              <div class="social-friends-list">
+                <div
+                  v-for="(friend, index) in settings.social?.friends ?? []"
+                  :key="index"
+                  class="social-friend-row"
+                >
+                  <FormField :label="`Friend ${index + 1}`" :id="`socialFriend-${index}`">
+                    <div class="social-friend-input-row">
+                      <TextInput
+                        :model-value="friend"
+                        @update:model-value="(value) => updateFriendName(index, value)"
+                        placeholder="Lamp name (e.g. moss)"
+                        :disabled="disabled"
+                        :max-length="12"
+                        pattern="[a-z0-9]+"
+                        transform="lowercase"
+                      />
+                      <button
+                        class="social-remove-button"
+                        @click="removeFriend(index)"
+                        :disabled="disabled"
+                        aria-label="Remove friend"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </FormField>
+                </div>
+                <button
+                  class="social-add-button"
+                  @click="addFriend"
+                  :disabled="disabled || (settings.social?.friends ?? []).length >= 20"
+                >
+                  + Add Friend Lamp
+                </button>
+              </div>
+            </template>
           </section>
 
           <!-- Lamp Setup Tab -->
@@ -1000,5 +1121,97 @@ textarea {
     bottom: 12px;
     right: 12px;
   }
+}
+
+/* Social Tab Styles */
+.social-friends-description {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: rgba(68, 108, 156, 0.06);
+  border-radius: 6px;
+}
+
+.social-friends-description p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--brand-fog-grey);
+}
+
+.social-friends-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.social-friend-row {
+  width: 100%;
+}
+
+.social-friend-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.social-friend-input-row > * {
+  flex: 1;
+}
+
+.social-remove-button {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.social-remove-button:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.social-remove-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.social-add-button {
+  margin-top: 12px;
+  padding: 10px 16px;
+  background: rgba(68, 108, 156, 0.1);
+  color: var(--brand-aurora-blue);
+  border: 1px dashed var(--brand-aurora-blue);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  width: 100%;
+}
+
+.social-add-button:hover:not(:disabled) {
+  background: rgba(68, 108, 156, 0.2);
+}
+
+.social-add-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.info-text {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(68, 108, 156, 0.08);
+  border-left: 2px solid var(--brand-aurora-blue);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--brand-slate-grey);
 }
 </style>

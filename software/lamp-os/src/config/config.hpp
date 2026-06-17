@@ -23,6 +23,7 @@ class Config {
   BaseSettings base;
   ShadeSettings shade;
   ExpressionSettings expressions;
+  SocialSettings social;
 
   Config() {};
 

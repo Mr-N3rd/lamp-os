@@ -22,6 +22,9 @@ void SocialBehavior::draw() {
 };
 
 void SocialBehavior::control() {
+  // Respect the social.enabled flag — skip all greeting logic when disabled
+  if (!socialEnabled) return;
+
   foundLamps = bt->getLamps();
 
   if (animationState == STOPPED && millis() > nextAcknowledgeTimeMs) {
@@ -29,12 +32,28 @@ void SocialBehavior::control() {
              foundLamps->rbegin();
          revIter != foundLamps->rend(); ++revIter) {
       if (!revIter->acknowledged) {
+        // When friends-only mode is on, skip lamps that aren't in the friends list
+        if (socialFriendsOnly && !socialFriends.empty()) {
+          bool isFriend = false;
+          for (const auto& friendName : socialFriends) {
+            if (revIter->name == friendName) {
+              isFriend = true;
+              break;
+            }
+          }
+          if (!isFriend) {
+            revIter->acknowledged = true;  // mark as seen so we don't re-check
+            continue;
+          }
+        }
+
 #ifdef LAMP_DEBUG
         Serial.printf("Acknowledging %s\n", revIter->name.c_str());
 #endif
         revIter->acknowledged = true;
         foundLampColor = revIter->baseColor;
-        nextAcknowledgeTimeMs = millis() + LAMP_TIME_BETWEEN_ACKNOWLEDGEMENT_MS;
+        // Use config-driven cooldown instead of the former compile-time constant
+        nextAcknowledgeTimeMs = millis() + socialCooldownMs;
 
         playOnce();
         break;
@@ -45,5 +64,12 @@ void SocialBehavior::control() {
 
 void SocialBehavior::setBluetoothComponent(BluetoothComponent* inBt) {
   bt = inBt;
+};
+
+void SocialBehavior::configure(const SocialSettings& settings) {
+  socialEnabled = settings.enabled;
+  socialFriendsOnly = settings.friendsOnly;
+  socialFriends = settings.friends;
+  socialCooldownMs = settings.cooldownMs;
 };
 }  // namespace lamp

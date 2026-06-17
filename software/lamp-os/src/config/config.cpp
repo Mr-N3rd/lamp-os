@@ -117,6 +117,21 @@ Config::Config(Preferences* inPrefs) {
       expressions.expressions.push_back(expr);
     }
   }
+
+  // Load social settings
+  JsonObject socialNode = doc["social"];
+  if (!socialNode.isNull()) {
+    social.enabled = socialNode["enabled"] | true;
+    social.friendsOnly = socialNode["friendsOnly"] | false;
+    social.cooldownMs = socialNode["cooldownMs"] | (uint32_t)30000;
+    JsonArray friendsArray = socialNode["friends"];
+    if (friendsArray) {
+      social.friends.clear();
+      for (JsonVariant friendName : friendsArray) {
+        social.friends.push_back(std::string(friendName.as<const char*>()));
+      }
+    }
+  }
 };
 
 JsonDocument Config::asJsonDocument() {
@@ -182,6 +197,16 @@ JsonDocument Config::asJsonDocument() {
     for (const auto& color : expr.colors) {
       colorsNode.add(colorToHexString(color));
     }
+  }
+
+  // Serialize social settings
+  JsonObject socialNode = doc["social"].to<JsonObject>();
+  socialNode["enabled"] = social.enabled;
+  socialNode["friendsOnly"] = social.friendsOnly;
+  socialNode["cooldownMs"] = social.cooldownMs;
+  JsonArray friendsArray = socialNode["friends"].to<JsonArray>();
+  for (const auto& friendName : social.friends) {
+    friendsArray.add(friendName);
   }
 
   return doc;
