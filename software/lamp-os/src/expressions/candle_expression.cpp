@@ -30,7 +30,7 @@ void CandleExpression::configureFromParameters(const std::map<std::string, uint3
 void CandleExpression::buildNextSegment() {
   segmentTargetColors.assign(fb->pixelCount, candleColor);
 
-  for (int i = 0; i < fb->pixelCount; i++) {
+  for (uint16_t i = 0; i < fb->pixelCount; i++) {
     uint32_t baseWarmBlend = 65;
     uint32_t brightness = 100 - std::uniform_int_distribution<uint32_t>(0, flickerAmount)(rng);
     Color warmed = fadeLinear(savedBuffer[i], candleColor, 100, baseWarmBlend);
@@ -65,7 +65,7 @@ void CandleExpression::draw() {
 
   uint32_t localFrame = std::min<uint32_t>(frame - segmentStartFrame, segmentFrames);
 
-  for (int i = 0; i < fb->pixelCount; i++) {
+  for (uint16_t i = 0; i < fb->pixelCount; i++) {
     fb->buffer[i] =
         fadeLinear(segmentStartColors[i], segmentTargetColors[i], segmentFrames, localFrame);
   }

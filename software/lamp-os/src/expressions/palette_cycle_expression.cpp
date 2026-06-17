@@ -75,7 +75,7 @@ void PaletteCycleExpression::draw() {
   std::vector<Color> startGradient = buildGradientWithStops(fb->pixelCount, startStops);
   std::vector<Color> endGradient = buildGradientWithStops(fb->pixelCount, endStops);
 
-  for (int i = 0; i < fb->pixelCount; i++) {
+  for (uint16_t i = 0; i < fb->pixelCount; i++) {
     fb->buffer[i] = fadeLinear(startGradient[i], endGradient[i], phaseFrames, localFrame);
   }
 

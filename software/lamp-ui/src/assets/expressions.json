@@ -199,6 +199,7 @@
       "config": {
         "colors": {
           "type": "color_array",
+          "min": 1,
           "max": 5,
           "default": ["#FFF0C8AA", "#FFD6A5AA", "#FFEAD8AA"],
           "label": "Twinkle Colors",
@@ -244,7 +245,7 @@
         "duration": {
           "type": "range",
           "min": 5,
-          "max": 120,
+          "max": 180,
           "step": 5,
           "default": 30,
           "unit": "s",

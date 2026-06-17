@@ -77,7 +77,7 @@ void CometExpression::draw() {
 
   fb->buffer = savedBuffer;
 
-  for (int i = 0; i < fb->pixelCount; i++) {
+  for (uint16_t i = 0; i < fb->pixelCount; i++) {
     uint32_t blendFactor = calculateBlendFactor(i);
     if (blendFactor > 0) {
       fb->buffer[i] = fadeLinear(savedBuffer[i], cometColor, 100, blendFactor);
