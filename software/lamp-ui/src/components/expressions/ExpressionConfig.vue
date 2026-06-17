@@ -206,6 +206,135 @@
         <span class="duration-value">{{ expression.pulseSpeed || 3 }}s</span>
       </div>
     </FormField>
+
+    <FormField
+      v-if="expression.type === 'palette_cycle'"
+      label="Step Duration"
+      id="expression-step-duration"
+    >
+      <div class="duration-container">
+        <NumberSlider
+          id="step-duration"
+          :model-value="expression.stepDuration || 20"
+          @update:model-value="(value) => updateField('stepDuration', value)"
+          :min="5"
+          :max="120"
+          :step="1"
+          :disabled="disabled"
+          prepend="time"
+        />
+        <span class="duration-value">{{ formatInterval(expression.stepDuration || 20) }}</span>
+      </div>
+    </FormField>
+
+    <FormField
+      v-if="expression.type === 'twinkle'"
+      label="Active Twinkles"
+      id="expression-twinkle-count"
+    >
+      <div class="duration-container">
+        <NumberSlider
+          id="twinkle-count"
+          :model-value="expression.twinkleCount || 3"
+          @update:model-value="(value) => updateField('twinkleCount', value)"
+          :min="1"
+          :max="6"
+          :step="1"
+          :disabled="disabled"
+        />
+        <span class="duration-value">{{ expression.twinkleCount || 3 }}</span>
+      </div>
+    </FormField>
+
+    <FormField
+      v-if="expression.type === 'twinkle'"
+      label="Twinkle Fade"
+      id="expression-twinkle-fade"
+    >
+      <div class="duration-container">
+        <NumberSlider
+          id="twinkle-fade"
+          :model-value="expression.twinkleFade || 3"
+          @update:model-value="(value) => updateField('twinkleFade', value)"
+          :min="1"
+          :max="8"
+          :step="1"
+          :disabled="disabled"
+          prepend="time"
+        />
+        <span class="duration-value">{{ formatInterval(expression.twinkleFade || 3) }}</span>
+      </div>
+    </FormField>
+
+    <FormField
+      v-if="expression.type === 'twinkle' || expression.type === 'candle'"
+      label="Run Time"
+      id="expression-run-duration"
+    >
+      <div class="duration-container">
+        <NumberSlider
+          id="expression-duration-seconds"
+          :model-value="expression.duration || 30"
+          @update:model-value="(value) => updateField('duration', value)"
+          :min="5"
+          :max="180"
+          :step="5"
+          :disabled="disabled"
+          prepend="time"
+        />
+        <span class="duration-value">{{ formatInterval(expression.duration || 30) }}</span>
+      </div>
+    </FormField>
+
+    <FormField v-if="expression.type === 'comet'" label="Travel Time" id="expression-comet-speed">
+      <div class="duration-container">
+        <NumberSlider
+          id="comet-speed"
+          :model-value="expression.cometSpeed || 8"
+          @update:model-value="(value) => updateField('cometSpeed', value)"
+          :min="2"
+          :max="30"
+          :step="1"
+          :disabled="disabled"
+          prepend="time"
+        />
+        <span class="duration-value">{{ formatInterval(expression.cometSpeed || 8) }}</span>
+      </div>
+    </FormField>
+
+    <FormField v-if="expression.type === 'comet'" label="Tail Length" id="expression-comet-tail">
+      <div class="duration-container">
+        <NumberSlider
+          id="comet-tail"
+          :model-value="expression.cometTail || 8"
+          @update:model-value="(value) => updateField('cometTail', value)"
+          :min="2"
+          :max="20"
+          :step="1"
+          :disabled="disabled"
+        />
+        <span class="duration-value">{{ expression.cometTail || 8 }} px</span>
+      </div>
+    </FormField>
+
+    <FormField
+      v-if="expression.type === 'candle'"
+      label="Flicker Amount"
+      id="expression-flicker-amount"
+    >
+      <div class="duration-container">
+        <NumberSlider
+          id="flicker-amount"
+          :model-value="expression.flickerAmount || 18"
+          @update:model-value="(value) => updateField('flickerAmount', value)"
+          :min="5"
+          :max="35"
+          :step="1"
+          :disabled="disabled"
+        />
+        <span class="duration-value">{{ expression.flickerAmount || 18 }}%</span>
+      </div>
+    </FormField>
   </div>
 </template>
 
@@ -225,10 +354,16 @@ interface Expression {
   duration?: number
   durationMin?: number
   durationMax?: number
+  stepDuration?: number
+  twinkleCount?: number
+  twinkleFade?: number
   fadeDuration?: number
   shiftDurationMin?: number
   shiftDurationMax?: number
   pulseSpeed?: number
+  cometSpeed?: number
+  cometTail?: number
+  flickerAmount?: number
 }
 
 type Scalar = null | boolean | number | string

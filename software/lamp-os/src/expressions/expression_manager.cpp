@@ -53,6 +53,11 @@ void ExpressionManager::addExpression(const ExpressionConfig& config) {
       glitchyExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
       glitchyExpr->configureFromParameters(config.parameters);
       expr = std::move(glitchyExpr);
+    } else if (config.type == "palette_cycle") {
+      auto cycleExpr = std::make_unique<PaletteCycleExpression>(buffer, 600);
+      cycleExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
+      cycleExpr->configureFromParameters(config.parameters);
+      expr = std::move(cycleExpr);
     } else if (config.type == "shifty") {
       auto shiftyExpr = std::make_unique<ShiftyExpression>(buffer, 120);
       shiftyExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
@@ -63,6 +68,21 @@ void ExpressionManager::addExpression(const ExpressionConfig& config) {
       pulseExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
       pulseExpr->configureFromParameters(config.parameters);
       expr = std::move(pulseExpr);
+    } else if (config.type == "twinkle") {
+      auto twinkleExpr = std::make_unique<TwinkleExpression>(buffer, 900);
+      twinkleExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
+      twinkleExpr->configureFromParameters(config.parameters);
+      expr = std::move(twinkleExpr);
+    } else if (config.type == "comet") {
+      auto cometExpr = std::make_unique<CometExpression>(buffer, 120);
+      cometExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
+      cometExpr->configureFromParameters(config.parameters);
+      expr = std::move(cometExpr);
+    } else if (config.type == "candle") {
+      auto candleExpr = std::make_unique<CandleExpression>(buffer, 900);
+      candleExpr->configure(config.colors, config.intervalMin, config.intervalMax, target);
+      candleExpr->configureFromParameters(config.parameters);
+      expr = std::move(candleExpr);
     }
 
     return expr;

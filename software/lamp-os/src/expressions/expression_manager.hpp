@@ -6,10 +6,14 @@
 
 #include "../config/config_types.hpp"
 #include "../core/frame_buffer.hpp"
+#include "./candle_expression.hpp"
+#include "./comet_expression.hpp"
 #include "./expression.hpp"
 #include "./glitchy_expression.hpp"
-#include "./shifty_expression.hpp"
+#include "./palette_cycle_expression.hpp"
 #include "./pulse_expression.hpp"
+#include "./shifty_expression.hpp"
+#include "./twinkle_expression.hpp"
 
 namespace lamp {
 
