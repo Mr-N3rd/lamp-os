@@ -260,6 +260,7 @@
       "config": {
         "colors": {
           "type": "color_array",
+          "min": 1,
           "max": 4,
           "default": ["#FFF0D0AA", "#FFB27FAA"],
           "label": "Comet Colors",

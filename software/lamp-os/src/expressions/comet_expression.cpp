@@ -21,8 +21,11 @@ void CometExpression::configureFromParameters(const std::map<std::string, uint32
   uint32_t cometSpeed = std::clamp((speedIt != parameters.end()) ? speedIt->second : 8u, 2u, 30u);
   cometTail = std::clamp((tailIt != parameters.end()) ? tailIt->second : 8u, 2u, 20u);
 
-  uint32_t pixelSpan = fb ? static_cast<uint32_t>(fb->pixelCount + cometTail) : cometTail;
-  pixelSpan = std::max<uint32_t>(pixelSpan, 1);
+  uint32_t pixelSpan = cometTail;
+  if (fb) {
+    pixelSpan += fb->pixelCount;
+  }
+  pixelSpan = std::max<uint32_t>(pixelSpan, 1u);
   pixelTravelMs = std::max<uint32_t>(40, (cometSpeed * 1000) / pixelSpan);
 }
 
