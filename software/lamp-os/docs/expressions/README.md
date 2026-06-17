@@ -56,6 +56,27 @@ Expressions are configured with:
 - **Target** - Which buffer to affect (shade/base/both)
 - **Custom Parameters** - Expression-specific settings
 
+## Included Expressions
+
+LampOS keeps the catalog intentionally small and calm. Current built-in expressions:
+
+| Expression | Style | Home mode | Key parameters |
+| --- | --- | --- | --- |
+| Glitchy | brief disruptive tint glitch | no | duration range |
+| Shifty | slow ambient palette shift | yes | fade duration, shifted hold range |
+| Pulse | one soft wave pass | yes | pulse speed |
+| Palette Cycle | slow rotation through a configured palette | yes | step duration |
+| Twinkle | a few soft sparkles at a time | yes | active twinkles, twinkle fade, run time |
+| Comet | gentle chase with a trailing tail | yes | travel time, tail length |
+| Candle | warm flicker with restrained brightness movement | yes | flicker amount, run time |
+
+### Notes on the lighter effects
+
+- **Palette Cycle** works best with 2-5 colors and long intervals for a slow living-room feel.
+- **Twinkle** is tuned for small LED counts, so only a few pixels light up at once.
+- **Comet** is intentionally softer than a WLED-style chase and defaults to a single relaxed pass.
+- **Candle** is best paired with amber or warm-white palettes, but still respects any chosen expression colors.
+
 ### Triggering
 
 Expressions can be triggered:

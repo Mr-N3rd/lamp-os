@@ -55,18 +55,10 @@
 
     <!-- Expression Action Buttons -->
     <div class="expression-actions-container">
-      <button
-        class="test-button"
-        @click="handleTestExpressions"
-        :disabled="disabled"
-      >
+      <button class="test-button" @click="handleTestExpressions" :disabled="disabled">
         Test Expressions
       </button>
-      <button
-        class="add-button"
-        @click="showAddModal = true"
-        :disabled="disabled"
-      >
+      <button class="add-button" @click="showAddModal = true" :disabled="disabled">
         + Add Expression
       </button>
     </div>
@@ -117,7 +109,10 @@
             <div v-for="(expr, index) in expressions" :key="index" class="test-expression-item">
               <div class="test-expression-info">
                 <span class="test-expression-name">{{ getExpressionName(expr.type) }}</span>
-                <span class="test-expression-status" :class="{ enabled: expr.enabled, disabled: !expr.enabled }">
+                <span
+                  class="test-expression-status"
+                  :class="{ enabled: expr.enabled, disabled: !expr.enabled }"
+                >
                   {{ expr.enabled ? 'Enabled' : 'Disabled' }}
                 </span>
                 <span class="test-expression-target">{{ getTargetLabel(expr.target) }}</span>
@@ -144,7 +139,10 @@
       <div class="modal-container" @click.stop>
         <div class="modal-box">
           <h3>Unsaved Changes</h3>
-          <p class="modal-description">You have unsaved expression changes. Please save and restart first to test with current configuration.</p>
+          <p class="modal-description">
+            You have unsaved expression changes. Please save and restart first to test with current
+            configuration.
+          </p>
 
           <div class="modal-actions">
             <button @click="closeModal" class="cancel-button">Cancel</button>
@@ -169,12 +167,19 @@ interface Expression {
   intervalMin: number
   intervalMax: number
   target: number
+  duration?: number
   durationMin?: number
   durationMax?: number
+  stepDuration?: number
+  twinkleCount?: number
+  twinkleFade?: number
   fadeDuration?: number
   shiftDurationMin?: number
   shiftDurationMax?: number
   pulseSpeed?: number
+  cometSpeed?: number
+  cometTail?: number
+  flickerAmount?: number
 }
 
 const props = defineProps<{
@@ -205,10 +210,10 @@ const expressions = computed({
   set: (value) => {
     hasUnsavedChanges.value = true
     emit('update:modelValue', value)
-  }
+  },
 })
 
-const existingTypes = computed(() => new Set(expressions.value.map(expr => expr.type)))
+const existingTypes = computed(() => new Set(expressions.value.map((expr) => expr.type)))
 
 const availableTypes = computed(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -216,7 +221,7 @@ const availableTypes = computed(() => {
     id,
     name: config.name,
     description: config.description,
-    isAlreadyAdded: existingTypes.value.has(id)
+    isAlreadyAdded: existingTypes.value.has(id),
   }))
 })
 
@@ -227,10 +232,14 @@ const getExpressionName = (type: string): string => {
 
 const getTargetLabel = (target: number): string => {
   switch (target) {
-    case 1: return 'Shade'
-    case 2: return 'Base'
-    case 3: return 'Both'
-    default: return 'Unknown'
+    case 1:
+      return 'Shade'
+    case 2:
+      return 'Base'
+    case 3:
+      return 'Both'
+    default:
+      return 'Unknown'
   }
 }
 
@@ -287,7 +296,7 @@ const addExpression = (type: string) => {
   Object.entries(schema.config).forEach(([key, config]: [string, any]) => {
     if (config.default !== undefined) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (newExpression as any)[key] = config.default
+      ;(newExpression as any)[key] = config.default
     }
   })
 
@@ -324,9 +333,12 @@ const removeExpression = (index: number) => {
 }
 
 // Watch for reset signal from parent component
-watch(() => props.resetUnsavedChanges, () => {
-  hasUnsavedChanges.value = false
-})
+watch(
+  () => props.resetUnsavedChanges,
+  () => {
+    hasUnsavedChanges.value = false
+  },
+)
 </script>
 
 <style scoped>
@@ -706,5 +718,4 @@ watch(() => props.resetUnsavedChanges, () => {
   opacity: 0;
   transform: translateY(-10px);
 }
-
 </style>

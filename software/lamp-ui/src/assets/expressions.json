@@ -150,6 +150,211 @@
           "help": "Time for pulse to travel across lamp in seconds"
         }
       }
+    },
+    "palette_cycle": {
+      "name": "Palette Cycle",
+      "description": "Slowly rotates a small palette for a calm lamp-like drift",
+      "config": {
+        "colors": {
+          "type": "color_array",
+          "min": 2,
+          "max": 5,
+          "default": ["#FF9D42AA", "#FF5F6D55", "#9D6BFFFF"],
+          "label": "Palette Colors",
+          "help": "Colors to rotate slowly across the target LEDs"
+        },
+        "intervalMin": {
+          "type": "range",
+          "min": 60,
+          "max": 3600,
+          "step": 60,
+          "default": 300,
+          "unit": "s",
+          "label": "Min Interval"
+        },
+        "intervalMax": {
+          "type": "range",
+          "min": 60,
+          "max": 3600,
+          "step": 60,
+          "default": 900,
+          "unit": "s",
+          "label": "Max Interval"
+        },
+        "stepDuration": {
+          "type": "range",
+          "min": 5,
+          "max": 120,
+          "step": 1,
+          "default": 20,
+          "unit": "s",
+          "label": "Step Duration",
+          "help": "How long each palette transition should take"
+        }
+      }
+    },
+    "twinkle": {
+      "name": "Soft Twinkle",
+      "description": "A few soft sparkles that work well on small LED counts",
+      "config": {
+        "colors": {
+          "type": "color_array",
+          "min": 1,
+          "max": 5,
+          "default": ["#FFF0C8AA", "#FFD6A5AA", "#FFEAD8AA"],
+          "label": "Twinkle Colors",
+          "help": "Colors used for the sparkle accents"
+        },
+        "intervalMin": {
+          "type": "range",
+          "min": 60,
+          "max": 3600,
+          "step": 60,
+          "default": 240,
+          "unit": "s",
+          "label": "Min Interval"
+        },
+        "intervalMax": {
+          "type": "range",
+          "min": 60,
+          "max": 3600,
+          "step": 60,
+          "default": 900,
+          "unit": "s",
+          "label": "Max Interval"
+        },
+        "twinkleCount": {
+          "type": "range",
+          "min": 1,
+          "max": 6,
+          "step": 1,
+          "default": 3,
+          "label": "Active Twinkles",
+          "help": "How many sparkles can be active at once"
+        },
+        "twinkleFade": {
+          "type": "range",
+          "min": 1,
+          "max": 8,
+          "step": 1,
+          "default": 3,
+          "unit": "s",
+          "label": "Twinkle Fade",
+          "help": "How long each twinkle takes to bloom and disappear"
+        },
+        "duration": {
+          "type": "range",
+          "min": 5,
+          "max": 180,
+          "step": 5,
+          "default": 30,
+          "unit": "s",
+          "label": "Run Time",
+          "help": "Total time a twinkle pass should stay active"
+        }
+      }
+    },
+    "comet": {
+      "name": "Gentle Comet",
+      "description": "A restrained chase with a soft trailing tail",
+      "config": {
+        "colors": {
+          "type": "color_array",
+          "min": 1,
+          "max": 4,
+          "default": ["#FFF0D0AA", "#FFB27FAA"],
+          "label": "Comet Colors",
+          "help": "Accent colors for the comet head"
+        },
+        "intervalMin": {
+          "type": "range",
+          "min": 60,
+          "max": 3600,
+          "step": 60,
+          "default": 180,
+          "unit": "s",
+          "label": "Min Interval"
+        },
+        "intervalMax": {
+          "type": "range",
+          "min": 60,
+          "max": 3600,
+          "step": 60,
+          "default": 600,
+          "unit": "s",
+          "label": "Max Interval"
+        },
+        "cometSpeed": {
+          "type": "range",
+          "min": 2,
+          "max": 30,
+          "step": 1,
+          "default": 8,
+          "unit": "s",
+          "label": "Travel Time",
+          "help": "How long the comet takes to cross the target LEDs"
+        },
+        "cometTail": {
+          "type": "range",
+          "min": 2,
+          "max": 20,
+          "step": 1,
+          "default": 8,
+          "label": "Tail Length",
+          "help": "Approximate length of the comet tail in pixels"
+        }
+      }
+    },
+    "candle": {
+      "name": "Candle",
+      "description": "Warm flicker tuned to feel calmer than a stage effect",
+      "config": {
+        "colors": {
+          "type": "color_array",
+          "max": 3,
+          "default": ["#FF932960", "#FFB34740"],
+          "label": "Candle Colors",
+          "help": "Warm colors for the candle glow"
+        },
+        "intervalMin": {
+          "type": "range",
+          "min": 60,
+          "max": 3600,
+          "step": 60,
+          "default": 300,
+          "unit": "s",
+          "label": "Min Interval"
+        },
+        "intervalMax": {
+          "type": "range",
+          "min": 60,
+          "max": 3600,
+          "step": 60,
+          "default": 1200,
+          "unit": "s",
+          "label": "Max Interval"
+        },
+        "duration": {
+          "type": "range",
+          "min": 5,
+          "max": 180,
+          "step": 5,
+          "default": 30,
+          "unit": "s",
+          "label": "Run Time",
+          "help": "How long the flicker should stay present"
+        },
+        "flickerAmount": {
+          "type": "range",
+          "min": 5,
+          "max": 35,
+          "step": 1,
+          "default": 18,
+          "unit": "%",
+          "label": "Flicker Amount",
+          "help": "How much brightness variation the candle effect uses"
+        }
+      }
     }
   }
 }

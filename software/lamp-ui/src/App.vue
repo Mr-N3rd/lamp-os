@@ -24,6 +24,16 @@ interface Expression {
   duration?: number
   durationMin?: number
   durationMax?: number
+  stepDuration?: number
+  twinkleCount?: number
+  twinkleFade?: number
+  fadeDuration?: number
+  shiftDurationMin?: number
+  shiftDurationMax?: number
+  pulseSpeed?: number
+  cometSpeed?: number
+  cometTail?: number
+  flickerAmount?: number
 }
 
 // Extend Settings interface
