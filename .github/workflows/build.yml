@@ -5,6 +5,9 @@ name: LampOS Build
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
 
   ui_build:
@@ -49,8 +52,8 @@ jobs:
         path: ./software/lamp-ui/dist
     - name: Sync UI filesystem assets
       run: |
-        rm -rf ./software/lamp-os/data/*
-        cp -a ./software/lamp-ui/dist/. ./software/lamp-os/data/
+        mkdir -p ./software/lamp-os/data
+        rsync -a --delete ./software/lamp-ui/dist/ ./software/lamp-os/data/
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
