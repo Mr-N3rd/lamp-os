@@ -53,7 +53,7 @@ jobs:
     - name: Sync UI filesystem assets
       run: |
         mkdir -p ./software/lamp-os/data
-        rsync -a --delete ./software/lamp-ui/dist/ ./software/lamp-os/data/
+        rsync -a ./software/lamp-ui/dist/ ./software/lamp-os/data/
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
