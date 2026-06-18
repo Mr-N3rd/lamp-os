@@ -42,6 +42,8 @@ void SocialBehavior::control() {
          revIter != foundLamps->rend(); ++revIter) {
       if (!revIter->acknowledged) {
         if (socialMode == SocialMode::SHY && !isFriendLamp(*revIter)) {
+          // Leave non-friends unacknowledged so they can still be greeted later
+          // if the user adds them to the friends list before they age out.
           continue;
         }
 
