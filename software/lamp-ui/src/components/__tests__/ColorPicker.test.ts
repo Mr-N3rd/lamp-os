@@ -76,11 +76,12 @@ describe('ColorPicker', () => {
 
     // Change a color value
     vm.colorValues.red = 128
-    // The updateColor method should update the hex input but not emit when dialog is open
+    // The updateColor method should update the hex input and emit a live preview update while dialog is open
     vm.updateColor()
     expect(vm.hexInput).toBe('#800000FF')
-    // No emission should happen while dialog is open
-    expect(wrapper.emitted('update:modelValue')).toBeFalsy()
+    expect(wrapper.emitted('update:modelValue')).toBeTruthy()
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual(['#800000FF'])
+    expect(wrapper.emitted('preview')?.at(-1)).toEqual(['#800000FF'])
   })
 
   it('updates from hex input', async () => {
