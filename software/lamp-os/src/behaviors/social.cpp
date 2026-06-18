@@ -7,6 +7,16 @@
 #include "../util/fade.hpp"
 
 namespace lamp {
+bool SocialBehavior::isFriendLamp(const BluetoothLampRecord& lamp) const {
+  for (const auto& friendName : socialFriends) {
+    if (lamp.name == friendName) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void SocialBehavior::draw() {
   for (int i = 0; i < fb->pixelCount; i++) {
     if (frame < easeFrames) {
@@ -22,8 +32,7 @@ void SocialBehavior::draw() {
 };
 
 void SocialBehavior::control() {
-  // Respect the social.enabled flag — skip all greeting logic when disabled
-  if (!socialEnabled) return;
+  if (socialMode == SocialMode::OFF) return;
 
   foundLamps = bt->getLamps();
 
@@ -32,19 +41,8 @@ void SocialBehavior::control() {
              foundLamps->rbegin();
          revIter != foundLamps->rend(); ++revIter) {
       if (!revIter->acknowledged) {
-        // When friends-only mode is on, skip lamps that aren't in the friends list
-        if (socialFriendsOnly && !socialFriends.empty()) {
-          bool isFriend = false;
-          for (const auto& friendName : socialFriends) {
-            if (revIter->name == friendName) {
-              isFriend = true;
-              break;
-            }
-          }
-          if (!isFriend) {
-            revIter->acknowledged = true;  // mark as seen so we don't re-check
-            continue;
-          }
+        if (socialMode == SocialMode::SHY && !isFriendLamp(*revIter)) {
+          continue;
         }
 
 #ifdef LAMP_DEBUG
@@ -67,8 +65,16 @@ void SocialBehavior::setBluetoothComponent(BluetoothComponent* inBt) {
 };
 
 void SocialBehavior::configure(const SocialSettings& settings) {
-  socialEnabled = settings.enabled;
-  socialFriendsOnly = settings.friendsOnly;
+  if (settings.mode == "off") {
+    socialMode = SocialMode::OFF;
+  } else if (settings.mode == "shy") {
+    socialMode = SocialMode::SHY;
+  } else if (settings.mode == "butterfly") {
+    socialMode = SocialMode::BUTTERFLY;
+  } else {
+    socialMode = SocialMode::GREET;
+  }
+
   socialFriends = settings.friends;
   socialCooldownMs = settings.cooldownMs;
 };

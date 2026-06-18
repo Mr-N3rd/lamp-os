@@ -16,8 +16,8 @@
  * blending to their base color as a greeting animation.
  *
  * The behavior is governed by SocialSettings loaded from config:
- *   - social.enabled    controls whether the greeting fires at all
- *   - social.friendsOnly + social.friends filter which lamps trigger a greeting
+ *   - social.mode       selects the lamp's social interaction style
+ *   - social.friends    filters which lamps can trigger shy-mode greetings
  *   - social.cooldownMs replaces the previous compile-time constant
  *
  * Wire social config in by calling configure() after constructing the behavior.
@@ -27,6 +27,13 @@ class SocialBehavior : public AnimatedBehavior {
   using AnimatedBehavior::AnimatedBehavior;
 
  public:
+  enum class SocialMode {
+    BUTTERFLY,
+    SHY,
+    GREET,
+    OFF,
+  };
+
   // how many frames to ease when greeting and returning to the lamp's
   // personality- the total frame count must be a multiple of the ease frames
   uint32_t easeFrames = 120;
@@ -37,8 +44,7 @@ class SocialBehavior : public AnimatedBehavior {
   bool allowedInHomeMode = false;
 
   // Social config applied via configure()
-  bool socialEnabled = true;
-  bool socialFriendsOnly = false;
+  SocialMode socialMode = SocialMode::GREET;
   std::vector<std::string> socialFriends;
   uint32_t socialCooldownMs = 30000;
 
@@ -54,6 +60,9 @@ class SocialBehavior : public AnimatedBehavior {
    * @param [in] settings - the SocialSettings loaded from config
    */
   void configure(const SocialSettings& settings);
+
+ private:
+  bool isFriendLamp(const BluetoothLampRecord& lamp) const;
 };
 }  // namespace lamp
 #endif

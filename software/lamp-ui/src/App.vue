@@ -11,7 +11,7 @@ import TopNavigation from '@/components/TopNavigation.vue'
 import LamplitLogo from '@/components/LamplitLogo.vue'
 import CritterNameplate from '@/components/CritterNameplate.vue'
 import ExpressionsList from '@/components/expressions/ExpressionsList.vue'
-import type { Settings } from '@/types'
+import type { Settings, SocialSettings, SocialMode } from '@/types'
 
 // Additional type definitions for expressions
 interface Expression {
@@ -42,6 +42,29 @@ const maxLedsBase = 50
 const maxLampNameLength = 12
 const maxFriends = 20
 const defaultSocialCooldownMs = 30000
+const defaultSocialMode: SocialMode = 'greet'
+const socialModeOptions: Array<{ value: SocialMode; label: string; description: string }> = [
+  {
+    value: 'butterfly',
+    label: 'Social Butterfly',
+    description: 'Open social mode for nearby lamps.',
+  },
+  {
+    value: 'shy',
+    label: 'Social Shy',
+    description: 'Only greet lamps already saved in your friends list.',
+  },
+  {
+    value: 'greet',
+    label: 'Social Greet',
+    description: 'Standard acknowledgement behavior for nearby lamps.',
+  },
+  {
+    value: 'off',
+    label: 'Social Off',
+    description: 'Disable social interactions.',
+  },
+]
 
 // state ======================
 
@@ -170,19 +193,52 @@ const getKnockoutBrightness = (ledIndex: number): number => {
   return knockout ? knockout.b : 100
 }
 
+const isSocialMode = (value: unknown): value is SocialMode =>
+  value === 'butterfly' || value === 'shy' || value === 'greet' || value === 'off'
+
+const resolveSocialMode = (social?: SocialSettings): SocialMode => {
+  if (isSocialMode(social?.mode)) {
+    return social.mode
+  }
+
+  const socialEnabled = social?.enabled ?? true
+  const socialFriendsOnly = social?.friendsOnly ?? false
+  if (!socialEnabled) {
+    return 'off'
+  }
+
+  return socialFriendsOnly ? 'shy' : defaultSocialMode
+}
+
+const normalizeSocialSettings = (social?: SocialSettings): SocialSettings => ({
+  mode: resolveSocialMode(social),
+  friends: social?.friends ?? [],
+  cooldownMs: social?.cooldownMs ?? defaultSocialCooldownMs,
+})
+
+const currentSocialMode = computed(() => settings.value.social?.mode ?? defaultSocialMode)
+
+const socialModeSummary = computed(() => {
+  switch (currentSocialMode.value) {
+    case 'butterfly':
+      return 'Butterfly mode keeps your lamp open to nearby lamps.'
+    case 'shy':
+      return 'Shy mode only greets lamps from your friends list.'
+    case 'off':
+      return 'Social interactions are disabled.'
+    default:
+      return 'Greet mode uses the standard nearby-lamp acknowledgement.'
+  }
+})
+
 // Social friends list helpers
 const ensureSocialSettings = () => {
-  if (!settings.value.social) {
-    settings.value.social = {
-      enabled: true,
-      friendsOnly: false,
-      friends: [],
-      cooldownMs: defaultSocialCooldownMs,
-    }
-  }
-  if (!settings.value.social.friends) {
-    settings.value.social.friends = []
-  }
+  settings.value.social = normalizeSocialSettings(settings.value.social)
+}
+
+const updateSocialMode = (mode: SocialMode) => {
+  ensureSocialSettings()
+  settings.value.social!.mode = mode
 }
 
 const addFriend = () => {
@@ -365,8 +421,11 @@ const handleSaveAndRestart = async () => {
 onMounted(async () => {
   const response = await fetch(`${import.meta.env.VITE_SERVER_HTTP}/settings`)
   const data = await response.json()
-  settings.value = data
-  originalSettings.value = JSON.stringify(data)
+  settings.value = {
+    ...data,
+    social: normalizeSocialSettings(data.social),
+  }
+  originalSettings.value = JSON.stringify(settings.value)
   loaded.value = true
   connectWebSocket()
 })
@@ -485,35 +544,39 @@ onUnmounted(() => {
           <section v-if="activeTab === 'social'" class="tab-panel" aria-label="Social settings">
             <div class="expressions-instructions">
               <p>
-                Social mode lets your lamp greet and react to nearby lamps via Bluetooth. Configure
-                who your lamp responds to and how often.
+                Social mode lets your lamp react to nearby lamps over Bluetooth. Choose how open
+                your lamp should be and how often it responds.
               </p>
             </div>
 
             <h1 class="gold">Social Mode</h1>
-            <FormField label="Enable Social Mode" id="socialEnabled">
-              <BooleanInput
-                :model-value="settings.social?.enabled ?? true"
-                @update:model-value="(value) => updateSetting('social.enabled', value)"
-                :disabled="disabled"
-              />
-              <div class="info-text">
-                When enabled, your lamp will briefly greet nearby lamps by blending to their color.
+            <FormField label="Interaction Style" id="socialMode">
+              <div
+                class="social-mode-options"
+                role="radiogroup"
+                aria-label="Social interaction style"
+              >
+                <button
+                  v-for="option in socialModeOptions"
+                  :key="option.value"
+                  type="button"
+                  role="radio"
+                  :aria-checked="currentSocialMode === option.value"
+                  class="social-mode-option"
+                  :class="{ active: currentSocialMode === option.value }"
+                  :disabled="disabled"
+                  @click="updateSocialMode(option.value)"
+                >
+                  <strong>{{ option.label }}</strong>
+                  <span>{{ option.description }}</span>
+                </button>
               </div>
             </FormField>
 
-            <template v-if="settings.social?.enabled ?? true">
+            <template v-if="currentSocialMode !== 'off'">
               <h1 class="yellow">Reaction Settings</h1>
-              <FormField label="Friends Only" id="socialFriendsOnly">
-                <BooleanInput
-                  :model-value="settings.social?.friendsOnly ?? false"
-                  @update:model-value="(value) => updateSetting('social.friendsOnly', value)"
-                  :disabled="disabled"
-                />
-                <div class="info-text">
-                  When enabled, your lamp will only react to lamps listed in your friends list
-                  below.
-                </div>
+              <FormField label="Current Mode" id="socialModeSummary">
+                <div class="info-text">{{ socialModeSummary }}</div>
               </FormField>
 
               <FormField label="Reaction Cooldown (seconds)" id="socialCooldown">
@@ -532,49 +595,53 @@ onUnmounted(() => {
                 </div>
               </FormField>
 
-              <h1 class="lime">Friends List</h1>
-              <div class="social-friends-description">
-                <p>
-                  Add lamp names here. When Friends Only mode is on, your lamp will only react to
-                  lamps whose names appear in this list.
-                </p>
-              </div>
-              <div class="social-friends-list">
-                <div
-                  v-for="(friend, index) in settings.social?.friends ?? []"
-                  :key="index"
-                  class="social-friend-row"
-                >
-                  <FormField :label="`Friend ${index + 1}`" :id="`socialFriend-${index}`">
-                    <div class="social-friend-input-row">
-                      <TextInput
-                        :model-value="friend"
-                        @update:model-value="(value) => updateFriendName(index, value)"
-                        placeholder="Lamp name (e.g. moss)"
-                        :disabled="disabled"
-                        :max-length="maxLampNameLength"
-                        pattern="[a-z0-9]+"
-                        transform="lowercase"
-                      />
-                      <button
-                        class="social-remove-button"
-                        @click="removeFriend(index)"
-                        :disabled="disabled"
-                        aria-label="Remove friend"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  </FormField>
+              <template v-if="currentSocialMode === 'shy'">
+                <h1 class="lime">Friends List</h1>
+                <div class="social-friends-description">
+                  <p>
+                    Add lamp names here. Shy mode only reacts to lamps whose names appear in this
+                    list.
+                  </p>
                 </div>
-                <button
-                  class="social-add-button"
-                  @click="addFriend"
-                  :disabled="disabled || (settings.social?.friends ?? []).length >= maxFriends"
-                >
-                  + Add Friend Lamp
-                </button>
-              </div>
+                <div class="social-friends-list">
+                  <div
+                    v-for="(friend, index) in settings.social?.friends ?? []"
+                    :key="index"
+                    class="social-friend-row"
+                  >
+                    <FormField :label="`Friend ${index + 1}`" :id="`socialFriend-${index}`">
+                      <div class="social-friend-input-row">
+                        <TextInput
+                          :model-value="friend"
+                          @update:model-value="(value) => updateFriendName(index, value)"
+                          placeholder="Lamp name (e.g. moss)"
+                          :disabled="disabled"
+                          :max-length="maxLampNameLength"
+                          pattern="[a-z0-9]+"
+                          transform="lowercase"
+                        />
+                        <button
+                          class="social-remove-button"
+                          type="button"
+                          @click="removeFriend(index)"
+                          :disabled="disabled"
+                          aria-label="Remove friend"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </FormField>
+                  </div>
+                  <button
+                    class="social-add-button"
+                    type="button"
+                    @click="addFriend"
+                    :disabled="disabled || (settings.social?.friends ?? []).length >= maxFriends"
+                  >
+                    + Add Friend Lamp
+                  </button>
+                </div>
+              </template>
             </template>
           </section>
 
@@ -1134,6 +1201,47 @@ textarea {
 }
 
 /* Social Tab Styles */
+.social-mode-options {
+  display: grid;
+  gap: 10px;
+}
+
+.social-mode-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(68, 108, 156, 0.25);
+  border-radius: 8px;
+  background: rgba(68, 108, 156, 0.06);
+  color: var(--brand-dark-grey);
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.social-mode-option strong {
+  color: var(--brand-dark-grey);
+}
+
+.social-mode-option span {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--brand-fog-grey);
+}
+
+.social-mode-option:hover:not(:disabled),
+.social-mode-option.active {
+  border-color: rgba(68, 108, 156, 0.55);
+  background: rgba(68, 108, 156, 0.12);
+}
+
+.social-mode-option:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .social-friends-description {
   margin-bottom: 16px;
   padding: 10px 14px;

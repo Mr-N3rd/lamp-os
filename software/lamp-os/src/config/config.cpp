@@ -121,8 +121,14 @@ Config::Config(Preferences* inPrefs) {
   // Load social settings
   JsonObject socialNode = doc["social"];
   if (!socialNode.isNull()) {
-    social.enabled = socialNode["enabled"] | true;
-    social.friendsOnly = socialNode["friendsOnly"] | false;
+    const char* socialMode = socialNode["mode"] | nullptr;
+    if (socialMode != nullptr) {
+      social.mode = std::string(socialMode);
+    } else {
+      bool socialEnabled = socialNode["enabled"] | true;
+      bool socialFriendsOnly = socialNode["friendsOnly"] | false;
+      social.mode = !socialEnabled ? "off" : (socialFriendsOnly ? "shy" : "greet");
+    }
     social.cooldownMs = socialNode["cooldownMs"] | (uint32_t)30000;
     JsonArray friendsArray = socialNode["friends"];
     if (friendsArray) {
@@ -201,8 +207,7 @@ JsonDocument Config::asJsonDocument() {
 
   // Serialize social settings
   JsonObject socialNode = doc["social"].to<JsonObject>();
-  socialNode["enabled"] = social.enabled;
-  socialNode["friendsOnly"] = social.friendsOnly;
+  socialNode["mode"] = social.mode;
   socialNode["cooldownMs"] = social.cooldownMs;
   JsonArray friendsArray = socialNode["friends"].to<JsonArray>();
   for (const auto& friendName : social.friends) {
