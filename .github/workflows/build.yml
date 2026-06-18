@@ -7,13 +7,50 @@ on:
 
 jobs:
 
+  ui_build:
+    name: Build UI
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'npm'
+        cache-dependency-path: ./software/lamp-ui/package-lock.json
+    - name: Install UI dependencies
+      working-directory: ./software/lamp-ui
+      run: npm ci
+    - name: Lint UI
+      working-directory: ./software/lamp-ui
+      run: npm run lint
+    - name: Test UI
+      working-directory: ./software/lamp-ui
+      run: npm run test:unit -- --run
+    - name: Build UI
+      working-directory: ./software/lamp-ui
+      run: npm run build
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ui-dist
+        path: ./software/lamp-ui/dist
+
   build:
     name: Build Environment
     runs-on: ubuntu-latest
+    needs: ui_build
     strategy:
       fail-fast: false
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: ui-dist
+        path: ./software/lamp-ui/dist
+    - name: Sync UI filesystem assets
+      run: |
+        rm -rf ./software/lamp-os/data/*
+        cp -a ./software/lamp-ui/dist/. ./software/lamp-os/data/
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
