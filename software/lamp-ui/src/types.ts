@@ -24,17 +24,6 @@ interface BaseSettings {
   knockout?: KnockoutPixel[]
 }
 
-/**
- * Social mode settings for lamp-to-lamp interaction.
- *
- * Supported modes:
- *   - butterfly: open social mode
- *   - shy: only react to lamps listed in `friends`
- *   - greet: standard acknowledgement behavior
- *   - off: no social interaction
- *
- * Legacy fields are optional so older saved settings can still be normalized.
- */
 export type SocialMode = 'butterfly' | 'shy' | 'greet' | 'off'
 
 /**
@@ -44,6 +33,8 @@ export type SocialMode = 'butterfly' | 'shy' | 'greet' | 'off'
  *   - mode: social behavior mode
  *   - friends: list of friend lamp names/IDs
  *   - cooldownMs: minimum milliseconds between reactions
+ *
+ * Legacy fields are optional so older saved settings can still be normalized.
  */
 export interface SocialSettings {
   mode?: SocialMode

@@ -575,7 +575,7 @@ onUnmounted(() => {
 
             <template v-if="currentSocialMode !== 'off'">
               <h1 class="yellow">Reaction Settings</h1>
-              <FormField label="Current Mode" id="socialModeSummary">
+              <FormField label="Behavior" id="socialModeSummary">
                 <div class="info-text">{{ socialModeSummary }}</div>
               </FormField>
 
